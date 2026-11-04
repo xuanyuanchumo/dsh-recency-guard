@@ -1,0 +1,59 @@
+{
+  "entries": [
+    {
+      "gate": "G0",
+      "gateName": "评估收敛门",
+      "result": "PASS",
+      "detail": "Evaluation report found in cycle-2 (16 dimension rows) [Q1:PASS,Q5:PASS]",
+      "timestamp": "2026-11-04T05:13:04.918Z",
+      "previousHash": null,
+      "hash": "82101c7bac0ebbfb47b19209422fd6b542a2c5d66a1d3add9d096b342345fb77"
+    },
+    {
+      "gate": "G1",
+      "gateName": "任务收敛门",
+      "result": "FAIL",
+      "detail": "No task entries found (fill the task tables in 任务清单.md) §cycle-2",
+      "timestamp": "2026-11-04T05:13:04.929Z",
+      "previousHash": "82101c7bac0ebbfb47b19209422fd6b542a2c5d66a1d3add9d096b342345fb77",
+      "hash": "f6e9eb1398aa0c5c4b4f2f732a726e760febe1790eac120a94b2bf8e0ae050e1"
+    },
+    {
+      "gate": "G2",
+      "gateName": "测试收敛门",
+      "result": "FAIL",
+      "detail": "Test report summary not recognized: unit-test-report.md has no 通过/失败 rows (expected the §2 汇总 table) §cycle-2",
+      "timestamp": "2026-11-04T05:13:04.936Z",
+      "previousHash": "f6e9eb1398aa0c5c4b4f2f732a726e760febe1790eac120a94b2bf8e0ae050e1",
+      "hash": "012eb6414ba52fa32cbafa289c340e54ea78c2cf5941c2d8af14c22b11ed32ff"
+    },
+    {
+      "gate": "G3",
+      "gateName": "构建收敛门",
+      "result": "PASS",
+      "detail": "Build passed: npm run build §cycle-2 [dist=absent] [Q3:PASS,Q4:PASS]",
+      "timestamp": "2026-11-04T05:13:05.437Z",
+      "previousHash": "012eb6414ba52fa32cbafa289c340e54ea78c2cf5941c2d8af14c22b11ed32ff",
+      "hash": "2b32ebd9e6f824023821a4ef8500c0e90dd0ce1b454ae3688ec08e18cd319703"
+    },
+    {
+      "gate": "G1",
+      "gateName": "任务收敛门",
+      "result": "PASS",
+      "detail": "All 16 tasks completed §cycle-2 [Q7:PASS]",
+      "timestamp": "2026-11-04T05:15:09.864Z",
+      "previousHash": "2b32ebd9e6f824023821a4ef8500c0e90dd0ce1b454ae3688ec08e18cd319703",
+      "hash": "8703934771f8a311f8e6862eb5592c7508d975d0723720630a7739f83ab6c73c"
+    },
+    {
+      "gate": "G2",
+      "gateName": "测试收敛门",
+      "result": "PASS",
+      "detail": "Zero failures, zero errors (测试报告.md) §cycle-2 [Q2:PASS]",
+      "timestamp": "2026-11-04T05:15:09.874Z",
+      "previousHash": "8703934771f8a311f8e6862eb5592c7508d975d0723720630a7739f83ab6c73c",
+      "hash": "b786093bb9b893db1f85349029e069af19ef2f20dfc4d5c9f77f81fe54bcfde1"
+    }
+  ],
+  "chainHead": "b786093bb9b893db1f85349029e069af19ef2f20dfc4d5c9f77f81fe54bcfde1"
+}

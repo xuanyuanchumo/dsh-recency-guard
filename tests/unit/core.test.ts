@@ -1,7 +1,9 @@
 import { mkdtemp, rm } from 'node:fs/promises'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Store } from '../../src/store.js'
+import { appendPatchText } from '../../src/guarded-rows.js'
 import {
   suspectBundles,
   rankByRecency,
@@ -331,6 +333,39 @@ async function main() {
     )
   } finally {
     await rm(partitionRoot, { recursive: true, force: true })
+  }
+
+  // ═══ 守护行安装：空数组文档回归（真机 sb-rg-journey2 实测缺陷）═══
+  console.log('\n== guarded row append on an empty-array patch document ==')
+  {
+    const patchRoot = await mkdtemp(join(tmpdir(), 'rg-patch-'))
+    try {
+      const patchPath = join(patchRoot, 'cordis.patch.yml')
+      // dsh 生成的 profile patch 是「注释 + []」——不是裸 `[]`。
+      const dshShape =
+        '# Your patch layer for this dsh profile, applied after every bundle layer:\n' +
+        '# a top-level YAML array of loader patch entries.\n[]\n'
+      writeFileSync(patchPath, dshShape, 'utf8')
+      appendPatchText(patchPath, '- id: some-plugin\n  name: dsh-some-plugin\n  disabled: !!js "false"\n')
+      const after = readFileSync(patchPath, 'utf8')
+      // 摘除空标记后，注释 + 顶层序列共存是合法 YAML；残留的 `[]` 会把文档
+      // 变成流式空数组与块序列的混合 —— Loader 解析直接抛错（profile 起不来）。
+      check('the bare empty-array marker is removed', !after.split('\n').some((l) => l.trim() === '[]'), after)
+      check('the comments survive (user asset)', after.includes('# Your patch layer'))
+      check('the guarded row is appended at the top level', after.includes('- id: some-plugin'))
+      // 裸 `[]` 文档（无注释）也要正确。
+      writeFileSync(patchPath, '[]\n', 'utf8')
+      appendPatchText(patchPath, '- id: other-plugin\n  name: dsh-other-plugin\n')
+      check('a bare empty array is also handled', !readFileSync(patchPath, 'utf8').split('\n').some((l) => l.trim() === '[]'))
+      // 已有内容的文档不能被改动（追加语义，不重写用户资产）。
+      const existing = '# comment\n- id: first\n  name: dsh-first\n'
+      writeFileSync(patchPath, existing, 'utf8')
+      appendPatchText(patchPath, '- id: second\n  name: dsh-second\n')
+      check('existing rows are preserved', readFileSync(patchPath, 'utf8').includes('- id: first'))
+      check('the new row is appended', readFileSync(patchPath, 'utf8').includes('- id: second'))
+    } finally {
+      await rm(patchRoot, { recursive: true, force: true })
+    }
   }
 
   // ═══ 图谱数据 ═══

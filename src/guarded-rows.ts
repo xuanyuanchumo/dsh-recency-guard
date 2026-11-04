@@ -127,10 +127,20 @@ export function appendPatchText(patchPath: string, text: string): void {
   try {
     current = readFileSync(patchPath, 'utf8')
   } catch {
-    current = '[]\n'
+    current = ''
   }
-  const trimmed = current.trimEnd()
-  const body = trimmed === '[]' ? '' : trimmed
+  // 「空数组文档」不是只有裸 `[]` 一种形态：dsh 生成的 profile patch 是
+  // **注释 + `[]`**（见真机 sb-rg-journey2 的实测）。只对整体 trimEnd()
+  // 做严格等值比较会漏掉这种形态，追加守护行后文件变成
+  // 「注释 + [] + - id: …」——YAML 解析直接报
+  // "end of the stream or a document separator is expected"，profile 起不来。
+  // 因此按**行**摘除裸空数组标记：注释保留（用户资产），空标记移除后
+  // 追加的行成为顶层序列，注释与序列共存是合法 YAML。
+  const body = current
+    .split('\n')
+    .filter((line) => line.trim() !== '[]')
+    .join('\n')
+    .trimEnd()
   const separator = body === '' ? '' : '\n'
   writeFileSync(patchPath, `${body}${separator}${text}\n`, 'utf8')
 }
