@@ -202,6 +202,18 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
     exposed: true,
     exposedAs: 'recency_guard',
   },
+  {
+    id: 'guard.tool.archive',
+    title: '归档重置入口（工具）',
+    summary: '通过 recency_guard 工具触发归档重置与归档清单查询',
+    produces: 'state',
+    carrier: 'tool',
+    consumes: ['guard.govern.reset'],
+    consumedBy: [],
+    stage: 'recovered',
+    exposed: true,
+    exposedAs: 'recency_guard',
+  },
 ] as const
 
 /**

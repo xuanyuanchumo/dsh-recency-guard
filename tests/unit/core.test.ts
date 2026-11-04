@@ -22,7 +22,10 @@ import {
   ewma,
   median,
   crashIntervalStats,
+  cusumChangePoint,
+  computeMetrics,
 } from '../../src/observability.js'
+import { renderOutcome, formatStatus, formatArchive } from '../../src/tool-render.js'
 import {
   normalizeWorkspace,
   projectKey,
@@ -232,6 +235,60 @@ async function main() {
   const intervals = crashIntervalStats([0, 1000, 3000])
   check('crash intervals need two samples', intervals.defined && intervals.value?.medianMs === 1500, intervals)
   check('one sample means no interval', !crashIntervalStats([0]).defined)
+
+  console.log('\n== cusum change-point detection (cycle-3) ==')
+  // 稳定间隔（每 60s 一次崩溃）不应触发变点。
+  const steady = cusumChangePoint([0, 60_000, 120_000, 180_000, 240_000])
+  check('steady intervals raise no change point', !steady.defined, steady)
+  // 前 3 次间隔 60s，之后骤缩到 10s —— 变点应落在第 4 次崩溃附近。
+  const accelerating = cusumChangePoint([0, 60_000, 120_000, 130_000, 140_000, 150_000])
+  check('a density acceleration is detected', accelerating.defined, accelerating)
+  if (accelerating.defined) {
+    check('the change point lands after the acceleration begins', accelerating.value.index >= 3, accelerating.value)
+    check('the change point carries a readable label', accelerating.label.includes('上行'), accelerating.label)
+  }
+  check('fewer than two crashes means no change point', !cusumChangePoint([0]).defined)
+  // computeMetrics 的快照字段连通性：intervals 与 changePoint 必须真实进入快照。
+  // 数据带**持续**加速（3×60s → 4×10s）：CUSUM 语义是「持续变密」才告警，
+  // 单个短间隔只算尖峰（会被 max(0,·) 钳掉），这正是它对漂移敏感的证据。
+  const metricsSnapshot = computeMetrics(
+    [
+      { at: '2026-01-01T00:00:00.000Z', crashed: true },
+      { at: '2026-01-01T00:01:00.000Z', crashed: true },
+      { at: '2026-01-01T00:02:00.000Z', crashed: true },
+      { at: '2026-01-01T00:03:00.000Z', crashed: true },
+      { at: '2026-01-01T00:03:10.000Z', crashed: true },
+      { at: '2026-01-01T00:03:20.000Z', crashed: true },
+      { at: '2026-01-01T00:03:30.000Z', crashed: true },
+      { at: '2026-01-01T00:03:40.000Z', crashed: false },
+    ],
+    0.9,
+    [],
+    Date.parse('2026-01-01T00:04:00.000Z'),
+  )
+  check('the snapshot carries the interval stats', metricsSnapshot.intervals.defined, metricsSnapshot.intervals)
+  check('the snapshot carries the change point', metricsSnapshot.changePoint.defined, metricsSnapshot.changePoint)
+
+  console.log('\n== tool render: human-readable dual form (cycle-3) ==')
+  // renderOutcome：文本形态是给人看的（命令窗口），不是转义的 JSON。
+  const outcome = formatStatus({
+    profile: 'desktop',
+    dshVersion: 'test',
+    enabled: true,
+    crashedLastRun: true,
+    crashSeq: 2,
+    stabilized: false,
+    autoDisabled: [{ name: 'dsh-bad', reason: 'auto-recency', crashSeq: 2, disabledAt: '2026-01-01T00:00:00.000Z' }],
+    suspectRanking: [{ bundle: 'dsh-bad', lastChangeAt: '2026-01-01T00:00:00.000Z', lastKind: 'update' }],
+    experimentalSuspects: ['dsh-bad'],
+  })
+  const text = renderOutcome(outcome)
+  check('render is multi-line and not raw JSON', text.includes('\n') && !text.trimStart().startsWith('{'), text.slice(0, 60))
+  check('render names the suspect', text.includes('dsh-bad'), text)
+  check('the outcome echoes the action', outcome.action === 'status' && outcome.ok === true, outcome.action)
+  check('the data keeps the structured facts', (outcome.data as { crashSeq?: number }).crashSeq === 2, outcome.data)
+  const archiveOutcome = formatArchive({ ok: true, archiveDir: 'X:/archive', count: 3 })
+  check('archive render explains the reset', renderOutcome(archiveOutcome).includes('重新开始'), renderOutcome(archiveOutcome))
 
   console.log('\n== risk ranking ==')
   const risks = rankRisks(

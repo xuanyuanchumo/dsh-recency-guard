@@ -123,7 +123,7 @@ const schema = tool?.parameters ?? {}
 const declaredActions: string[] = schema?.properties?.action?.enum ?? []
 check(
   'the tool declares its actions',
-  ['status', 'history', 'recover', 'restore', 'reenable', 'backups'].every((a) =>
+  ['status', 'history', 'recover', 'restore', 'reenable', 'backups', 'archive', 'archives'].every((a) =>
     declaredActions.includes(a),
   ),
   declaredActions,
@@ -137,7 +137,9 @@ check(
 
 const exec = { signal: new AbortController().signal }
 
-const status = JSON.parse(String(await tool.execute({ action: 'status' }, exec)))
+// v0.4.0 起 execute 返回**规范 JSON 值**（不是字符串）：
+// 结构化事实给模型，人读文本由 output.render 投影（会话命令窗口显示的是它）。
+const status = (await tool.execute({ action: 'status' }, exec)) as any
 check('status reports the profile', status.profile === 'test', status.profile)
 check(
   'status ranks both third-party plugins as suspects',
@@ -159,11 +161,23 @@ check(
   status.experimentalSuspects?.includes('dsh-experimental-thing'),
   status.experimentalSuspects,
 )
+check('status carries the action echo', status.action === 'status', status.action)
+check('status is a business success', status.ok === true, status.ok)
+check('status carries a human summary', typeof status.summary === 'string' && status.summary.length > 0, status.summary)
 
-const history = JSON.parse(String(await tool.execute({ action: 'history', limit: 5 }, exec)))
-check('history returns an array', Array.isArray(history), typeof history)
+// output.render 把同一个规范值渲染成人读文本（双形态同源）。
+const rendered = tool.output.render({ action: 'status' }, status)
+check('render returns one text block', Array.isArray(rendered) && rendered.length === 1, rendered)
+check(
+  'render text is human-readable (not raw JSON)',
+  typeof rendered[0]?.text === 'string' && rendered[0].text.includes('\n') && !rendered[0].text.trimStart().startsWith('{'),
+  rendered[0]?.text?.slice(0, 80),
+)
 
-const recover = JSON.parse(String(await tool.execute({ action: 'recover' }, exec)))
+const history = (await tool.execute({ action: 'history', limit: 5 }, exec)) as any
+check('history returns the event list', Array.isArray(history.events), typeof history.events)
+
+const recover = (await tool.execute({ action: 'recover' }, exec)) as any
 check('recover disables one plugin on the first pass', recover.disabled.length === 1, recover.disabled)
 check(
   'recover disables the most recent suspect',
@@ -172,12 +186,23 @@ check(
 )
 check('recover calls the plugin manager', disabledBundles.includes('dsh-experimental-thing'), disabledBundles)
 
-const reenable = JSON.parse(String(await tool.execute({ action: 'reenable', bundle: 'dsh-third-party' }, exec)))
+const reenable = (await tool.execute({ action: 'reenable', bundle: 'dsh-third-party' }, exec)) as any
 check('reenable reports success', reenable.reenabled === true, reenable)
 check('reenable calls the plugin manager', enabledBundles.includes('dsh-third-party'), enabledBundles)
 
-const backups = JSON.parse(String(await tool.execute({ action: 'backups' }, exec)))
-check('backups returns an array', Array.isArray(backups), typeof backups)
+const backups = (await tool.execute({ action: 'backups' }, exec)) as any
+check('backups returns the list', Array.isArray(backups.backups), typeof backups.backups)
+
+// v0.4.0 新增：归档重置的**工具入口**（此前只有 HTTP 路由，Agent 无法触达）。
+const archivesBefore = (await tool.execute({ action: 'archives' }, exec)) as any
+check('archives returns an array', Array.isArray(archivesBefore.archives), archivesBefore)
+const archived = (await tool.execute({ action: 'archive', reason: 'host-test' }, exec)) as any
+check('archive resets and reports the dir', typeof archived.archiveDir === 'string' && archived.ok === true, archived)
+const archivesAfter = (await tool.execute({ action: 'archives' }, exec)) as any
+check('archive shows up in the archives list', archivesAfter.archives.length === archivesBefore.archives.length + 1, {
+  before: archivesBefore.archives.length,
+  after: archivesAfter.archives.length,
+})
 
 try {
   await tool.execute({ action: 'nope' }, exec)

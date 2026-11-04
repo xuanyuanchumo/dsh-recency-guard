@@ -6,6 +6,7 @@ import {
   clampPan,
   clampScale,
   centerOf,
+  clipToRect,
   fitToView,
   panBy,
   screenToWorld,
@@ -131,6 +132,17 @@ function main() {
   const shapes = ['circle', 'square', 'diamond', 'triangle', 'hexagon'] as const
   check('every shape produces a path', shapes.every((s) => shapePath(s, 10, 20).length > 0))
   check('different shapes produce different paths', new Set(shapes.map((s) => shapePath(s, 10, 20))).size === shapes.length)
+
+  console.log('\n== edge clipping (cycle-3) ==')
+  // 水平边：端点应裁到目标矩形左缘（箭头贴边，不扎进卡片中心）。
+  const h = clipToRect(0, 50, 300, 50, { x: 200, y: 0, w: 100, h: 100 })
+  check('a horizontal edge clips at the target left edge', h.x === 200 && h.y === 50, h)
+  // 对角边：交点落在矩形边界上。
+  const d = clipToRect(0, 0, 400, 400, { x: 200, y: 200, w: 100, h: 100 })
+  check('a diagonal edge clips on the rect boundary', d.x === 200 && d.y === 200, d)
+  // 完全不相交：退回原端点（不发明交点）。
+  const miss = clipToRect(0, 0, 10, 10, { x: 200, y: 200, w: 100, h: 100 })
+  check('a missing intersection returns the original endpoint', miss.x === 10 && miss.y === 10, miss)
 
   console.log('\n== i18n ==')
   const lang = detectClientLang()

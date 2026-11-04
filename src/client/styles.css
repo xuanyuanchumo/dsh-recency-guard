@@ -481,3 +481,75 @@
   fill: var(--dsw-alias-label-secondary);
   font-size: 11px;
 }
+
+/* ---------- cycle-3 增补：事件流 / 归档 / 图例 / 列标题 ---------- */
+
+/* 事件流时间线（rg-events 沿用分区的列表形态，加时间列的对齐）。 */
+.rg-events {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rg-event {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rg-event-time {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-secondary);
+  font-size: var(--dsw-font-xxs-12, 12px);
+}
+
+.rg-event-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-secondary);
+  font-size: var(--dsw-font-xs-13, 13px);
+}
+
+/* 图谱图例（类型过滤 chips）。 */
+.rg-graph-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 4px;
+}
+
+.rg-legend-chip {
+  appearance: none;
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font: inherit;
+  font-size: var(--dsw-font-xxs-12, 12px);
+  cursor: pointer;
+}
+
+.rg-legend-chip-off {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+
+.rg-legend-chip:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
+}
+
+/* 图谱列标题（阶段语义直接写在图上）。 */
+.rg-graph-column-title {
+  fill: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}

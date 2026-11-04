@@ -93,6 +93,11 @@ export async function fetchGraph(): Promise<FetchResult<GraphData>> {
   return { ok: true, data: result.data }
 }
 
+/** 拉取历史归档清单。 */
+export async function fetchArchives(): Promise<FetchResult<unknown>> {
+  return fetchJson(`${API_PREFIX}/archives`)
+}
+
 /** 面板动作。 */
 export type PanelAction = 'archive' | 'reenable' | 'recover'
 

@@ -25,6 +25,8 @@ import type { GraphData } from '../../src/graph-data.ts'
 export interface GuardPanelProps {
   fetchSnapshot: () => Promise<FetchResult<PanelSnapshot>>
   fetchGraph: () => Promise<FetchResult<GraphData>>
+  /** 拉取历史归档（缺席即不显示归档卡片 —— 组件保持独立可用）。 */
+  fetchArchives?: () => Promise<FetchResult<unknown>>
   postAction: (action: PanelAction, payload?: Record<string, unknown>) => Promise<FetchResult<unknown>>
 }
 
@@ -34,12 +36,19 @@ const POLL_INTERVAL = 5000
 export function GuardPanel(props: GuardPanelProps): ReactElement {
   const [snapshot, setSnapshot] = useState<PanelSnapshot | null>(null)
   const [graph, setGraph] = useState<GraphData | null>(null)
+  const [archives, setArchives] = useState<unknown[] | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const mounted = useRef(true)
 
   const load = useCallback(async (): Promise<void> => {
-    const [snapshotResult, graphResult] = await Promise.all([props.fetchSnapshot(), props.fetchGraph()])
+    const [snapshotResult, graphResult, archivesResult] = await Promise.all([
+      props.fetchSnapshot(),
+      props.fetchGraph(),
+      // archives 拉取是可选注入（旧宿主没有该路由）：缺席时给诚实失败，
+      // 面板据此隐藏归档卡片 —— 不假装「归档为空」。
+      props.fetchArchives ? props.fetchArchives() : Promise.resolve({ ok: false as const, reason: 'archives-absent' }),
+    ])
     if (!mounted.current) return
     if (snapshotResult.ok) {
       setSnapshot(snapshotResult.data)
@@ -48,7 +57,11 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
       setFailure(snapshotResult.reason)
     }
     if (graphResult.ok) setGraph(graphResult.data)
-  }, [props.fetchSnapshot, props.fetchGraph])
+    if (archivesResult.ok) {
+      const payload = archivesResult.data as { archives?: unknown[] }
+      setArchives(Array.isArray(payload?.archives) ? payload.archives : [])
+    }
+  }, [props.fetchSnapshot, props.fetchGraph, props.fetchArchives])
 
   useEffect(() => {
     mounted.current = true
@@ -140,6 +153,7 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
         <RisksCard snapshot={snapshot} onReenable={(bundle) => void runAction('reenable', { bundle })} />
         <CapabilityCard snapshot={snapshot} />
         <PartitionsCard snapshot={snapshot} />
+        <EventsCard events={snapshot.recentEvents} />
       </div>
 
       <div className="rg-section">
@@ -150,6 +164,8 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
           <GuardGraph graph={graph} />
         )}
       </div>
+
+      {archives !== null && <ArchivesCard archives={archives} />}
 
       {failure !== null && (
         <p className="rg-error" role="alert">
@@ -332,6 +348,64 @@ function PartitionsCard({ snapshot }: { snapshot: PanelSnapshot }): ReactElement
               <span className="rg-partition-workspace">{partition.workspace}</span>
             </li>
           ))}
+        </ul>
+      )}
+    </article>
+  )
+}
+
+/**
+ * 事件流卡片 —— 「可视化流动」的最小实现。
+ *
+ * journal 是守护的记忆：时间线让人看见「守护做了什么、按什么顺序」，
+ * 而不是只看到最终状态。只显示最近若干条（快照已截尾），最新在上。
+ */
+function EventsCard({ events }: { events: PanelSnapshot['recentEvents'] }): ReactElement {
+  return (
+    <article className="rg-card">
+      <h2 className="rg-card-title">{t('events.title')}</h2>
+      {events.length === 0 ? (
+        <p className="rg-empty">{t('panel.emptyHint')}</p>
+      ) : (
+        <ol className="rg-events">
+          {[...events]
+            .slice(-10)
+            .reverse()
+            .map((event, index) => (
+              <li key={`${event.t}-${index}`} className="rg-event">
+                <time className="rg-event-time">{event.t.slice(11, 19)}</time>
+                <span className={`rg-badge rg-badge-${event.kind === 'crash-detected' ? 'error' : 'neutral'}`}>
+                  {event.kind}
+                </span>
+                <span className="rg-event-detail">{event.bundle ?? event.detail ?? ''}</span>
+              </li>
+            ))}
+        </ol>
+      )}
+    </article>
+  )
+}
+
+/** 归档卡片 —— 归档历史（证据链去向）的一次只读呈现。 */
+function ArchivesCard({ archives }: { archives: unknown[] }): ReactElement {
+  return (
+    <article className="rg-card">
+      <h2 className="rg-card-title">{t('sections.archives')}</h2>
+      {archives.length === 0 ? (
+        <p className="rg-empty">{t('archives.empty')}</p>
+      ) : (
+        <ul className="rg-partitions">
+          {archives.map((entry, index) => {
+            const a = entry as { dir?: string; reason?: string; at?: string; count?: number }
+            return (
+              <li key={`${a.dir ?? index}`} className="rg-partition">
+                <span className="rg-partition-label">{a.dir ?? `#${index + 1}`}</span>
+                <span className="rg-event-detail">
+                  {a.reason ?? ''} · {t('archives.entries', { count: a.count ?? 0 })}
+                </span>
+              </li>
+            )
+          })}
         </ul>
       )}
     </article>

@@ -68,7 +68,11 @@
     "reset": "清除高亮",
     "components": "连通分量",
     "isolated": "孤立节点",
+    "legend": "按类型显示或隐藏",
     "empty": "图谱为空"
+  },
+  "events": {
+    "title": "事件流"
   },
   "partitions": {
     "title": "项目分区",

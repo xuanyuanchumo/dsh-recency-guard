@@ -57,6 +57,13 @@ export interface PanelSnapshot {
   restored: string[]
   /** 自动关闭的插件。 */
   autoDisabled: Array<{ name: string; reason: string; crashSeq: number; disabledAt: string }>
+  /**
+   * 最近事件流（journal 尾部投影）—— 「可视化流动」的数据源。
+   *
+   * 只投影面板要显示的字段，不透传整条 journal 行：
+   * 快照是观测面，字段越少，前端与快照的契约越稳定。
+   */
+  recentEvents: Array<{ t: string; kind: string; bundle?: string; detail?: string }>
 }
 
 /** 观测面需要的输入。 */
@@ -77,6 +84,8 @@ export interface SnapshotInput {
   restored: readonly string[]
   autoDisabled: Array<{ name: string; reason: string; crashSeq: number; disabledAt: string }>
   partitions: PartitionIndex
+  /** 最近事件（journal 尾部，快照按序投影）。 */
+  recentEvents: Array<{ t: string; kind: string; bundle?: string; detail?: string }>
   /** 实际注册出来的对外名称（契约校验用）。 */
   registeredExposedAs: readonly string[]
 }
@@ -139,6 +148,7 @@ export function buildPanelSnapshot(input: SnapshotInput, now = Date.now()): Pane
     })),
     restored: [...input.restored],
     autoDisabled: input.autoDisabled.map((d) => ({ ...d })),
+    recentEvents: input.recentEvents.slice(-24).map((e) => ({ ...e })),
   }
 }
 

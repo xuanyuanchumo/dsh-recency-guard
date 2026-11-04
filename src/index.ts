@@ -28,6 +28,18 @@ import { projectKey, readPartitionIndex, registerPartition, writePartitionIndex 
 import { archiveAndReset, listArchives } from './archive.js'
 import { wireRoutes } from './routes-plugin.js'
 import { ROUTE_PATHS } from './routes.js'
+import {
+  renderOutcome,
+  formatStatus,
+  formatHistory,
+  formatRecover,
+  formatRestore,
+  formatReenable,
+  formatBackups,
+  formatArchive,
+  formatArchives,
+  type ToolOutcome,
+} from './tool-render.js'
 import type { Observation } from './observability.js'
 export const name = 'dsh-recency-guard'
 
@@ -201,35 +213,53 @@ export function apply(ctx: Context, config: Config) {
       description:
         '插件崩溃恢复守护：记录第三方/实验性插件的安装、更新日期与配置备份；崩溃后按“最近更新”自动关闭嫌疑插件（先关最近 1 个，仍崩溃则关最近 2 个），稳定后自动恢复需要的配置。' +
         'action=status 查看崩溃状态、嫌疑排名与自动关闭列表；action=history 查看安装更新日志；action=recover 立即按最近更新执行一次恢复关闭；' +
-        'action=restore 重新启用被自动关闭的非嫌疑插件；action=reenable 手动重新启用某个插件；action=backups 列出配置备份。',
+        'action=restore 重新启用被自动关闭的非嫌疑插件；action=reenable 手动重新启用某个插件；action=backups 列出配置备份；' +
+        'action=archive 归档当前产物并重置（按最新事实重新开始）；action=archives 列出历史归档。',
       parameters: {
         action: {
           type: 'string',
           required: true,
-          enum: ['status', 'history', 'recover', 'restore', 'reenable', 'backups'],
+          enum: ['status', 'history', 'recover', 'restore', 'reenable', 'backups', 'archive', 'archives'],
           description: '要执行的操作。',
         },
         bundle: { type: 'string', description: 'reenable 的目标插件名（包名）。' },
         limit: { type: 'number', description: 'history 返回的事件条数，默认 40。' },
+        reason: { type: 'string', description: 'archive 的归档原因（可选）。' },
       },
-      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+      // 规范输出：模型消费结构化事实；人读文本由 output.render 投影
+      // （会话里的命令窗口显示的就是它，而不是满屏转义的 JSON）。
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+        },
+        render: (_args, value) => [{ type: 'text', text: renderOutcome(value as ToolOutcome) }],
+      },
       async execute(args, exec) {
         exec.signal.throwIfAborted()
         switch (args.action) {
           case 'status':
-            return JSON.stringify(await guard.status(), null, 2)
+            return formatStatus((await guard.status()) as never)
           case 'history':
-            return JSON.stringify(await store.readJournal(args.limit ?? 40), null, 2)
+            return formatHistory(await store.readJournal(args.limit ?? 40) as never)
           case 'recover':
-            return JSON.stringify(await guard.recoverNow(), null, 2)
+            return formatRecover((await guard.recoverNow()) as { disabled: string[]; note: string })
           case 'restore':
-            return JSON.stringify(await guard.restore(), null, 2)
+            return formatRestore((await guard.restore()) as { reenabled: string[]; keptDisabled: string[]; note: string })
           case 'reenable': {
             if (!args.bundle) throw new Error('reenable 需要 bundle 参数（插件包名）。')
-            return JSON.stringify(await guard.reenable(args.bundle), null, 2)
+            return formatReenable((await guard.reenable(args.bundle)) as {
+              bundle: string
+              reenabled: boolean
+              hasConfigBackup: boolean
+            })
           }
           case 'backups':
-            return JSON.stringify(await store.listBackups(), null, 2)
+            return formatBackups(await store.listBackups())
+          case 'archive':
+            return formatArchive((await guard.archiveReset(args.reason?.trim() || '工具触发归档重置')) as never)
+          case 'archives':
+            return formatArchives((await guard.archives()) as never)
           default:
             throw new Error(`未知操作：${String(args.action)}`)
         }
@@ -839,6 +869,11 @@ class Guard {
    */
   async panelSnapshot(): Promise<PanelSnapshot> {
     const state = await this.store.readState()
+    // 事件流快照：journal 尾部直接投影（时间升序），面板据此画「流动」。
+    const recentEvents = this.store
+      .readJournalSync(1000)
+      .slice(-40)
+      .map((e) => ({ t: e.t, kind: e.kind, bundle: e.bundle, detail: e.detail }))
     return buildPanelSnapshot({
       profile: this.profileName,
       projectKey: this.projectKey,
@@ -856,6 +891,7 @@ class Guard {
       })),
       partitions: readPartitionIndex(this.profileDir),
       registeredExposedAs: [...this.actuallyRegistered],
+      recentEvents,
     })
   }
 

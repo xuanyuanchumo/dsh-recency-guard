@@ -2,7 +2,7 @@ import { createElement, type ReactElement } from 'react'
 import { GuardPanel } from './GuardPanel.tsx'
 import { GuardPanelIcon } from './GuardPanelIcon.ts'
 import { registerDictionaries, t } from './i18n.ts'
-import { fetchSnapshot, fetchGraph, postAction } from './api.ts'
+import { fetchSnapshot, fetchGraph, fetchArchives, postAction } from './api.ts'
 import type { PanelSnapshot } from '../../src/snapshot.ts'
 import type { GraphData } from '../../src/graph-data.ts'
 
@@ -130,7 +130,7 @@ export function integratePanel(ctx: unknown): void {
       // 中央面板：根作用域的 keyed 席位，自己的 key。
       const panelRegistration = api.register(
         { name: 'main', key: PANEL_ID, order: 20, label: () => t('panel.title'), locale: NAMESPACE },
-        () => createElement(GuardPanel, { fetchSnapshot, fetchGraph, postAction }),
+        () => createElement(GuardPanel, { fetchSnapshot, fetchGraph, fetchArchives, postAction }),
       )
       // 侧栏图标：id 必须与 main 的 key 一致。
       const iconRegistration = api.register(

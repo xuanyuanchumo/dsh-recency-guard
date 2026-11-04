@@ -103,26 +103,105 @@ export interface MetricsSnapshot {
   meanRecoveryTime: Metric<number>
   detectionRate: Metric<number>
   isolationPurity: Metric<number>
+  /** 崩溃间隔统计（中位间隔 + 变异系数；样本 < 2 时不可判定）。 */
+  intervals: Metric<{ medianMs: number; cv: number }>
+  /** CUSUM 变点检测（崩溃密度何时开始上行；无上行时不可判定）。 */
+  changePoint: Metric<{ index: number; at: string | null }>
   stabilityScore: number
   trend: TrendResult
 }
 
-/** 计算全部指标。 */
+/**
+ * 计算全部指标。
+ *
+ * `crashAt`：崩溃样本的时刻标签（ISO 字符串，与 observations 同序过滤），
+ * 让 CUSUM 的变点能落到「哪一次崩溃」而不仅是数组下标。
+ */
 export function computeMetrics(
   observations: Observation[],
   stabilityScore: number,
   partitions: Array<{ key: string; contaminated: boolean }>,
   now = Date.now(),
 ): MetricsSnapshot {
-  const crashTimes = observations.filter((o) => o.crashed).map((o) => Date.parse(o.at)).filter(Number.isFinite)
+  const crashed = observations.filter((o) => o.crashed)
+  const crashTimes = crashed.map((o) => Date.parse(o.at)).filter(Number.isFinite)
+  const crashLabels = crashed.map((o) => o.at)
   return {
     crashRate: crashRate(observations),
     meanRecoveryTime: meanRecoveryTime(observations),
     detectionRate: detectionRate(observations),
     isolationPurity: isolationPurity(partitions),
+    intervals: crashIntervalStats(crashTimes),
+    changePoint: cusumChangePoint(crashTimes, crashLabels),
     stabilityScore,
     trend: crashTrend(crashTimes, now),
   }
+}
+
+/**
+ * CUSUM 变点检测 —— 回答「崩溃密度是从哪一次开始上行的」。
+ *
+ * 数学模型
+ * --------
+ * 对崩溃间隔序列 g_i（毫秒），以 **P75 分位** q 为「正常水平」：
+ *
+ *   S_i = max(0, S_{i-1} + (q·k − g_i))，k = 0.75
+ *
+ * 为什么基准不用中位数：中位数的定义保证约一半样本低于它 ——
+ * 「间隔低于 0.75×中位数」的样本太少，S 几乎不可能累计到阈值，
+ * 检测器对真实的密度变化**结构性失明**（实测踩坑）。P75 之下只有
+ * 25% 的样本，只有**持续显著变密**才能把 S 推过告警阈 —— 这正是
+ * CUSUM 对「漂移」而非「尖峰」敏感的语义（尖峰用 EWMA/中位数已足够）。
+ *
+ * S_i 超过告警阈 A = 1.5·q 即判定变点。间隔越短 ⇒ 崩溃越密 ⇒ 恰好在
+ * 「变密」处告警；间隔稳定或变稀时增量恒为负，S 被钳在 0。
+ *
+ * 为什么不用二分/回归找变点：间隔序列通常只有 2~10 个样本，
+ * 单次 O(n) 扫描足够，且阈值语义（0.75q / 1.5q）可以直接解释给用户。
+ */
+export function cusumChangePoint(
+  crashTimes: number[],
+  labels: readonly string[] = [],
+  toleranceFactor = 0.75,
+  alarmFactor = 1.5,
+): Metric<{ index: number; at: string | null }> {
+  const sorted = crashTimes.filter(Number.isFinite).sort((a, b) => a - b)
+  if (sorted.length < 2) return undefinedMetric('至少需要两次崩溃才能检测密度变化')
+  const gaps: number[] = []
+  for (let i = 1; i < sorted.length; i += 1) gaps.push(sorted[i] - sorted[i - 1])
+  const baseline = quantile(gaps, 0.75)
+  // 基准为 0（崩溃挤在同一毫秒）时退化为「任意再次崩溃即变点」——极端但诚实。
+  const threshold = baseline * alarmFactor
+  let s = 0
+  for (let i = 0; i < gaps.length; i += 1) {
+    const increment = baseline === 0 ? gaps[i] : baseline * toleranceFactor - gaps[i]
+    s = Math.max(0, s + increment)
+    if (s > threshold) {
+      // 变点 = 变密后的第一次崩溃：gaps[i] 连接第 i+1 与第 i+2 次（1-based），
+      // 密度上行体现在第 i+2 次崩溃上。
+      return definedMetric(
+        { index: i + 2, at: labels[i + 1] ?? null },
+        `崩溃密度自第 ${i + 2} 次崩溃起上行（间隔 ${(gaps[i] / 1000).toFixed(1)}s < 基准 ${(baseline / 1000).toFixed(1)}s）`,
+      )
+    }
+  }
+  return undefinedMetric('未检测到密度上行（崩溃间隔稳定或变稀）')
+}
+
+/**
+ * 线性插值分位数（与 NumPy 的默认 linear 插值一致）。
+ *
+ * 为什么不用「取第 ⌈p·n⌉ 个」的整数索引：小样本（2~10 个间隔）下整数
+ * 索引会跳变，相邻样本的 p75 可能差一倍；插值让阈值随样本平滑变化。
+ */
+export function quantile(sortedValues: number[], p: number): number {
+  if (sortedValues.length === 0) return 0
+  const sorted = [...sortedValues].sort((a, b) => a - b)
+  const pos = (sorted.length - 1) * Math.min(1, Math.max(0, p))
+  const lower = Math.floor(pos)
+  const upper = Math.ceil(pos)
+  if (lower === upper) return sorted[lower]
+  return sorted[lower] + (pos - lower) * (sorted[upper] - sorted[lower])
 }
 
 /**

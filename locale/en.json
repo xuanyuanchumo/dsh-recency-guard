@@ -68,7 +68,11 @@
     "reset": "Clear highlight",
     "components": "Components",
     "isolated": "Isolated nodes",
+    "legend": "Show or hide by type",
     "empty": "The graph is empty"
+  },
+  "events": {
+    "title": "Event stream"
   },
   "partitions": {
     "title": "Project partitions",

@@ -244,6 +244,50 @@ export class SpatialGrid {
 }
 
 /**
+ * 把线段端点裁剪到矩形边界 —— 边的箭头贴在节点卡片边缘而不是扎进卡片中心。
+ *
+ * 数学：把线段参数化为 P(t) = A + t·(B−A)，对节点的四条边界各解一次
+ * 线性方程，取**靠近 B 端**的合法 t（0≤t≤1），没有交点就退回原端点。
+ *
+ * 为什么不用「按中心角旋转」的近似：矩形不是圆，角度法在长边中点处
+ * 会留出肉眼可见的缝隙或穿模；解析求交是 O(1) 且逐像素精确。
+ */
+export function clipToRect(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  rect: { x: number; y: number; w: number; h: number },
+): { x: number; y: number } {
+  const dx = bx - ax
+  const dy = by - ay
+  // 四条边界：x = rect.x、x = rect.x+w、y = rect.y、y = rect.y+h。
+  const candidates: Array<{ t: number }> = []
+  if (dx !== 0) {
+    candidates.push({ t: (rect.x - ax) / dx })
+    candidates.push({ t: (rect.x + rect.w - ax) / dx })
+  }
+  if (dy !== 0) {
+    candidates.push({ t: (rect.y - ay) / dy })
+    candidates.push({ t: (rect.y + rect.h - ay) / dy })
+  }
+  // 合法交点：参数在 [0,1] 且交点确实落在矩形上（浮点容差 1e-6）。
+  // 取**最小** t —— 线段第一次触碰矩形边界的地方（进入点）。
+  // 取最大 t 会得到「离开点」：B 在矩形内部时它就是 B 自己，等于没裁。
+  let best = Infinity
+  for (const { t } of candidates) {
+    if (t < 0 || t > 1) continue
+    const x = ax + t * dx
+    const y = ay + t * dy
+    const inside =
+      x >= rect.x - 1e-6 && x <= rect.x + rect.w + 1e-6 && y >= rect.y - 1e-6 && y <= rect.y + rect.h + 1e-6
+    if (inside && t < best) best = t
+  }
+  if (!Number.isFinite(best)) return { x: bx, y: by }
+  return { x: ax + best * dx, y: ay + best * dy }
+}
+
+/**
  * 邻接追溯 —— 从某个节点出发，沿边找到可达的其它节点。
  *
  * 算法：**BFS**（广度优先）而非 DFS —— BFS 给出的是「最少跳数可达」，
