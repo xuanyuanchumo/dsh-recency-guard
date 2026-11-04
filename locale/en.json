@@ -1,0 +1,85 @@
+{
+  "panel": {
+    "title": "Plugin Guard",
+    "subtitle": "Crash recovery and observability",
+    "loading": "Loading…",
+    "unavailable": "Data surface unavailable",
+    "unavailableHint": "The host does not expose the guard routes (no webServer in this runtime).",
+    "refresh": "Refresh",
+    "archive": "Archive & reset",
+    "archiveConfirm": "Archive the current artifacts and restart from the latest facts?",
+    "recover": "Recover now",
+    "reenable": "Re-enable",
+    "empty": "No data",
+    "emptyHint": "The guard has not recorded any startup facts yet."
+  },
+  "sections": {
+    "state": "Lifecycle",
+    "metrics": "Metrics",
+    "risks": "Suspect ranking",
+    "capabilities": "Capability matrix",
+    "graph": "Capability graph",
+    "partitions": "Project isolation",
+    "archives": "Archives"
+  },
+  "state": {
+    "stage": "Current stage",
+    "stability": "Stability score",
+    "transitions": "Transition history",
+    "noTransitions": "No transitions recorded"
+  },
+  "metrics": {
+    "crashRate": "Crash rate",
+    "meanRecoveryTime": "Mean recovery time",
+    "detectionRate": "Crash detection rate",
+    "isolationPurity": "Isolation purity",
+    "trend": "Crash trend",
+    "undefined": "not determinable"
+  },
+  "trend": {
+    "worsening": "worsening",
+    "improving": "improving",
+    "stable": "stable"
+  },
+  "risks": {
+    "empty": "No suspect plugins",
+    "experimental": "experimental",
+    "suspectHits": "{count} prior suspect hits"
+  },
+  "capabilities": {
+    "total": "Total capabilities",
+    "exposed": "Exposed",
+    "connected": "Connected",
+    "connectivity": "Connectivity",
+    "gaps": "Gaps",
+    "noGaps": "No capability gaps found",
+    "gapBroken": "Broken consumption",
+    "gapOver": "Over-production",
+    "gapIsolated": "Isolated capability",
+    "gapUndeclared": "Registered but undeclared",
+    "gapMissing": "Declared but unregistered"
+  },
+  "graph": {
+    "title": "Capability production and consumption",
+    "hint": "Scroll to zoom, drag to pan, click a node to highlight its connections.",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fit": "Fit",
+    "reset": "Clear highlight",
+    "components": "Components",
+    "isolated": "Isolated nodes",
+    "empty": "The graph is empty"
+  },
+  "partitions": {
+    "title": "Project partitions",
+    "hint": "Each workspace keeps its own ledger; none pollutes another.",
+    "current": "current",
+    "empty": "No partition recorded"
+  },
+  "archives": {
+    "empty": "No archives yet",
+    "archivedAt": "archived at {time}",
+    "reason": "reason",
+    "entries": "{count} artifacts"
+  }
+}

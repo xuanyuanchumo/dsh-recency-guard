@@ -1,0 +1,85 @@
+{
+  "panel": {
+    "title": "插件守护",
+    "subtitle": "崩溃恢复与可观测性",
+    "loading": "加载中…",
+    "unavailable": "数据面不可用",
+    "unavailableHint": "宿主未提供守护路由（无 webServer 的运行环境）。",
+    "refresh": "刷新",
+    "archive": "归档重置",
+    "archiveConfirm": "归档当前产物并按最新事实重跑？",
+    "recover": "立即恢复",
+    "reenable": "重新启用",
+    "empty": "暂无数据",
+    "emptyHint": "守护插件尚未记录任何启动事实。"
+  },
+  "sections": {
+    "state": "生命周期",
+    "metrics": "量化指标",
+    "risks": "嫌疑排名",
+    "capabilities": "能力矩阵",
+    "graph": "能力图谱",
+    "partitions": "项目隔离",
+    "archives": "归档"
+  },
+  "state": {
+    "stage": "当前阶段",
+    "stability": "稳定性评分",
+    "transitions": "迁移历史",
+    "noTransitions": "尚无迁移记录"
+  },
+  "metrics": {
+    "crashRate": "崩溃率",
+    "meanRecoveryTime": "平均恢复耗时",
+    "detectionRate": "崩溃检出率",
+    "isolationPurity": "隔离纯度",
+    "trend": "崩溃趋势",
+    "undefined": "不可判定"
+  },
+  "trend": {
+    "worsening": "恶化中",
+    "improving": "改善中",
+    "stable": "平稳"
+  },
+  "risks": {
+    "empty": "当前没有嫌疑插件",
+    "experimental": "实验性",
+    "suspectHits": "历史嫌疑 {count} 次"
+  },
+  "capabilities": {
+    "total": "能力总数",
+    "exposed": "对外暴露",
+    "connected": "已连通",
+    "connectivity": "连通率",
+    "gaps": "缺口",
+    "noGaps": "没有发现能力缺口",
+    "gapBroken": "消费断链",
+    "gapOver": "过度生产",
+    "gapIsolated": "孤立能力",
+    "gapUndeclared": "已注册但未声明",
+    "gapMissing": "已声明但未注册"
+  },
+  "graph": {
+    "title": "能力生产消费图",
+    "hint": "滚轮缩放，拖拽平移，点击节点高亮其连接。",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "fit": "适配",
+    "reset": "清除高亮",
+    "components": "连通分量",
+    "isolated": "孤立节点",
+    "empty": "图谱为空"
+  },
+  "partitions": {
+    "title": "项目分区",
+    "hint": "每个工作区独立记账，互不干扰。",
+    "current": "当前",
+    "empty": "尚无分区记录"
+  },
+  "archives": {
+    "empty": "尚无归档",
+    "archivedAt": "归档于 {time}",
+    "reason": "原因",
+    "entries": "{count} 项产物"
+  }
+}

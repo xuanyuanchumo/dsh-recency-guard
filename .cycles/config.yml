@@ -1,0 +1,109 @@
+project:
+  name: "dsh-recency-guard"
+  tech_stack: ["typescript", "react"]
+  framework: "claude"
+
+macro_cycle:
+  enabled_phases: [plan, design, build, test, deploy, maintain]
+  # 复杂度统计口径：只算**我们自己写的源码**。
+  # 不排除的话，band-detector 会把 esbuild 产物（lib/）与从 DSH 安装解出的
+  # 第三方包（runtime/）一起计分 —— 那是用别人的代码罚我们的分。
+  complexity_exclude:
+    - "lib/**"
+    - "runtime/**"
+    - "node_modules/**"
+    - ".tmp/**"
+    - ".cycles/**"
+    - "tests/**"
+  # L4 全自主：AI 全流程自主执行（含 Release），检查点自动审计化。
+  # 熔断条件由宿主侧 anic_autonomy_downgrade 裁决（先修复后降级）。
+  autonomy_level: L4
+  complexity_budget: 100
+
+build:
+  build_cmd: "npm run build"
+  typecheck_cmd: "npx tsc --noEmit"
+  # 本插件没有独立 lint 工具链；类型检查 + 契约测试承担静态质量门。
+  # 留空会被记 FAIL（无法评估 ≠ 通过），故指向真实可执行的检查。
+  lint_cmd: "npm run lint"
+  test_cmd: "npm test"
+  coverage_cmd: "npm run test:coverage"
+  e2e_cmd: "npm run test:tool"
+  hygiene_cmd: "npm run typecheck"
+
+layers:
+  # 纯逻辑层：能力模型 / 生命周期状态机 / 隔离 / 可观测性数学模型。
+  - name: "Core"
+    test_pattern: "tests/unit/**/*.test.ts"
+    coverage_target: 90
+  # Host 层：插件入口、守护流程、服务与事件。
+  - name: "Host"
+    test_pattern: "tests/host/**/*.test.ts"
+    coverage_target: 85
+  # Client 层：管理面板与图谱（纯函数部分）。
+  - name: "Client"
+    test_pattern: "tests/client/**/*.test.ts"
+    coverage_target: 80
+  # 契约层：能力索引 ↔ 注册处 双向比对（100% —— 漏一条就是真缺口）。
+  - name: "Contract"
+    test_pattern: "tests/contract/**/*.test.ts"
+    coverage_target: 100
+
+evaluation:
+  E1:
+    name: "意图对齐"
+    checklist_ref: ".cycles/intent/intent.md"
+  E2:
+    name: "规格符合"
+    checklist_ref: ".cycles/intent/spec.md"
+  E3:
+    name: "测试覆盖"
+    checklist_ref: ""
+  E4:
+    name: "代码质量"
+    checklist_ref: ""
+  E5:
+    name: "性能基线"
+    checklist_ref: ""
+  E6:
+    name: "安全检查"
+    checklist_ref: ""
+  E7:
+    name: "文档同步"
+    checklist_ref: "README.md"
+  E8:
+    name: "回归完整性"
+    checklist_ref: ""
+
+gates:
+  G0:
+    name: "评估基线就绪"
+    require_quality: true
+  G1:
+    name: "任务清单清零"
+  G2:
+    name: "测试报告零错误"
+    require_quality: true
+  G3:
+    name: "构建零失败"
+    require_quality: true
+
+human_gates:
+  intent_acceptance:
+    role: "产品负责人"
+  spec_approval:
+    role: "架构师"
+  plan_approval:
+    role: "技术负责人"
+  pr_review:
+    role: "评审员"
+  release_authorization:
+    role: "发布负责人"
+
+control_bands:
+  crash_rate:
+    warning: 0.02
+    alarm: 0.05
+  stability_score:
+    warning: 0.6
+    alarm: 0.3
