@@ -219,24 +219,28 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
   )
 
   /**
-   * 滚轮必须用**非 passive** 监听器原生挂载。
+   * 滚轮：**普通滚轮滚动页面，Ctrl/⌘ + 滚轮缩放图谱。**
    *
    * 为什么不用 React 的 `onWheel`：React 17+ 把 wheel 挂在 root 上且是
-   * **passive** 的，于是 `event.preventDefault()` 被浏览器忽略（控制台会报
+   * **passive** 的，`event.preventDefault()` 被浏览器忽略（控制台报
    * "Unable to preventDefault inside passive event listener invocation"）。
-   * 后果是用户缩放图谱时**页面跟着一起滚**——图被滚出视野，交互直接残废。
-   * 实测证据（沙箱 sb-rg-c5）：合成 wheel 后视口 scale 0.5245→0.6032 正常，
-   * 但同时抛出该 console error。
    *
-   * 正确做法：在容器元素上 `{ passive: false }` 挂原生监听，并用 ref 桥接
-   * 最新的 handler，避免因 viewport 变化反复解绑/重绑。
+   * 为什么普通滚轮不再缩放：面板内容很长（实测约 4000px），而宿主槽位只有
+   * 一屏高。滚轮一旦被图谱吞掉，用户把指针移到图上就**再也滚不到下方数据**——
+   * 这是比"少一个手势"严重得多的可用性缺陷。图谱的放大/缩小/适应在工具栏
+   * 一直是按钮形态（rg-graph-zoom），所以缩放并没有失去入口，只是主手势让位。
+   * Ctrl/⌘ + 滚轮既符合地图/画布类界面的通行约定，也顺便压掉了浏览器缩放。
    */
   const wheelHandlerRef = useRef(onWheel)
   wheelHandlerRef.current = onWheel
   useEffect(() => {
     const host = wrapRef.current
     if (host === null) return undefined
-    const listener = (event: WheelEvent): void => wheelHandlerRef.current(event)
+    const listener = (event: WheelEvent): void => {
+      if (!event.ctrlKey && !event.metaKey) return
+      event.preventDefault()
+      wheelHandlerRef.current(event)
+    }
     host.addEventListener('wheel', listener, { passive: false })
     return () => host.removeEventListener('wheel', listener)
   }, [])

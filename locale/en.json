@@ -116,7 +116,7 @@
   },
   "graph": {
     "title": "Capability production and consumption",
-    "hint": "scroll to zoom · drag to pan · drag a node to rearrange · click to highlight · double-click to centre · Esc to exit",
+    "hint": "Ctrl/⌘+scroll to zoom · drag to pan · drag a node to rearrange · click to highlight · double-click to centre · Esc to exit",
     "zoomGroup": "Zoom",
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",

@@ -33,6 +33,29 @@
   font-family: var(--dsw-font-family);
   font-size: var(--dsw-font-s-14, 14px);
   line-height: var(--dsw-font-s-14-line-height, 22px);
+
+  /**
+   * 面板必须**自己**是滚动容器。
+   *
+   * 为什么不能指望宿主：实测（沙箱 sb-rg-c5）宿主槽位是这样一串
+   *   .centerCol { overflow-y: hidden }        ← 祖先把溢出裁掉
+   *   .mainPanel { height: 714px; overflow: visible }
+   *   .rg-panel  { height: 3965px }            ← 内容自然高度，超出后直接被裁
+   * 文档本身不滚（docScrollH == clientH == 714），因此**下方数据页永远看不到**。
+   *
+   * 三个属性缺一不可：
+   * - `height: 100%` + `min-height: 0`：撑满宿主给的确定高度，且允许收缩到可滚动；
+   *   只写 overflow 而不限制高度，flex 子项仍会按内容撑开，滚不起来。
+   * - `overflow-y: auto`：面板自己滚。
+   * - `overscroll-behavior: contain`：滚到尽头不把滚动传给宿主，否则会把整页/侧栏
+   *   带着一起滚，视觉上像"面板在乱跳"。
+   */
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 
 /* 窄形态（侧栏 / 分屏）：收紧边距与间距，把纵向空间让给内容。 */

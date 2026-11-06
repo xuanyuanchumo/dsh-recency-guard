@@ -125,16 +125,58 @@ provider），修复后 8/8 通过。
 // 在页面上下文执行
 const g = document.querySelector('svg g[transform]')
 const before = g.getAttribute('transform')
-dispatchWheel(-240)                       // 用户缩放
+ctrlWheel(-240)                           // Ctrl/⌘ + 滚轮 才缩放（v0.7.1 起）
 const afterWheel = g.getAttribute('transform')   // 必须变化
 await sleep(7000)                         // 覆盖至少一个轮询周期
 // 断言：g.getAttribute('transform') === afterWheel
 ```
 
-判据：`wheelChangedZoom === true` 且 `userZoomSurvivedPolling === true`。
+判据：`ctrlWheelChangedZoom === true` 且 `zoomSurvivedPolling === true`。
 实测：`scale 0.5245 → 0.6032`，7 秒轮询期间 **零变化**。
 
-### 4.4 控制台判据
+> 用 Playwright 的 `page.mouse.wheel` 配 `keyboard.down('Control')` 产生**可信**滚轮事件；
+> 合成的 `WheelEvent` 不会触发浏览器默认滚动，测不出"普通滚轮能滚动"。
+
+### 4.4 面板必须自己滚动（v0.7.1 实测缺陷）
+
+**症状**：面板下半部分（指标、能力清单、归档）看不到，页面怎么滚都不动。
+
+**根因**（实测链路）：
+
+```text
+.centerCol   { overflow-y: hidden }        ← 祖先把溢出裁掉
+.mainPanel   { height: 714px; overflow: visible }
+.rg-panel    { height: 3965px }            ← 内容自然高度，超出部分被裁
+document     { scrollHeight == clientHeight == 714 }   ← 整页不滚
+```
+
+**判据**：
+
+```js
+const p = document.querySelector('.rg-panel')
+p.scrollHeight > p.clientHeight + 1        // 必须为 true
+p.scrollTop = p.scrollHeight               // 必须滚得动
+Math.abs(p.scrollTop + p.clientHeight - p.scrollHeight) <= 2   // 必须到底
+```
+
+并且滚到底后能看到**最后一个区块**（归档）。实测：`clientH=714 / scrollH=4076`，
+`scrollTop` 到 `3361`，底部出现「归档」与归档清单。
+
+**修复要点**：`height:100%` + `min-height:0` + `overflow-y:auto` + `overscroll-behavior:contain`
+四件套缺一不可（只写 overflow 不限高，flex 子项仍按内容撑开，滚不起来）。
+
+### 4.5 滚轮语义判据（v0.7.1）
+
+| 操作 | 期望 | 实测 |
+|---|---|---|
+| 指针在图谱上，**普通滚轮** | 面板滚动，缩放不变 | `scrollTop 3057→3362`，transform 不变 |
+| 指针在图谱上，**Ctrl/⌘ + 滚轮** | 缩放变化，面板不滚 | `scale 0.5245→0.6032`，scrollTop 不变 |
+| 数据轮询期间 | 滚动位置与缩放都不被重置 | 7 秒内 `scrollTop` 与 transform 均稳定 |
+
+滚轮不再默认缩放，是因为面板很高而宿主槽位只有一屏：滚轮被图谱吞掉后，
+指针停在图上就**再也滚不到下方数据**。缩放入口保留在工具栏三个按钮上。
+
+### 4.6 控制台判据
 
 看**本次导航之后**的错误（`all: false`），不是整个页面生命周期：
 

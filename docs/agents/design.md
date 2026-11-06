@@ -11,6 +11,27 @@
 | `ctx.configEditor` 改走 `tryReadService` | 未 inject 直接读会抛错 → 整个插件不激活（沙箱实测） |
 | 工具规范值 `data` 摊平回顶层 | v0.7 重构 display 时漏掉，宿主层测试以 `status.profile === undefined` 报出 |
 | 图谱滚轮改原生非 passive 监听 | React 的 `onWheel` 是 passive，`preventDefault` 无效 → 缩放连带滚页面 |
+| 面板自己滚动（v0.7.1） | 宿主槽位 `overflow:hidden` 且整页不滚，面板内容 3965px 被裁到 714px，下半部分永远看不到 |
+| 滚轮改为 Ctrl/⌘+滚轮缩放（v0.7.1） | 普通滚轮被图谱吞掉后，指针停在图上就滚不到下方数据 —— 可用性优先于手势，缩放入口保留在工具栏按钮 |
+
+## 0.1 面板滚动契约（v0.7.1）
+
+`.rg-panel` 必须**自己**是滚动容器，不能指望宿主：
+
+```text
+.centerCol  { overflow-y: hidden }        ← 祖先裁掉溢出
+.mainPanel  { height: 714px; overflow: visible }
+.rg-panel   { height: 100%; min-height: 0; overflow-y: auto; overscroll-behavior: contain }
+document    { scrollHeight == clientHeight }   ← 整页永远不滚
+```
+
+四件套缺一不可：只写 `overflow-y` 而不限制高度时，flex 子项仍按内容撑开高度
+（实测 `height: 3965px`），滚不起来。`overscroll-behavior: contain` 防止滚到
+尽头把宿主/侧栏带着一起滚。
+
+与之配套的滚轮分工：**普通滚轮滚动面板，Ctrl/⌘ + 滚轮缩放图谱**
+（`page.mouse.wheel` 实测：普通滚轮 `scrollTop 3057→3362` 且 transform 不变；
+Ctrl+滚轮 scale `0.5245→0.6032` 且 scrollTop 不变）。
 
 ## 1. 模块地图（依赖方向：自上而下）
 
