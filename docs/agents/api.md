@@ -1,5 +1,16 @@
 # 对外面 API（dsh-recency-guard v0.7）
 
+## 0.0a v0.8 契约变更一句话清单
+
+| 变更 | 影响 | 兼容性 |
+|---|---|---|
+| `status.suspectRanking` 不再截断到 10，新增 `suspectTotal` | 消费方拿到全量排名 | 兼容（字段只增不减） |
+| `backups` action 新增 `timelines` 数组（bundle/count/latestVersion/latestAt） | 消费方可展示时间线 | 兼容（可选字段） |
+| Config 新增 `versionedBackups` / `backupRetain` / `backupRoot` | 备份策略可配 | 兼容（均有默认值） |
+| journal 新增 kind `official-observe` | 官方实验插件观测事件 | 兼容（未知 kind 本就被容忍） |
+| 新增 `observation-<name>.json` 观测快照文件 | 独立于 snapshot.json 的第二真相空间 | 新文件，无冲突 |
+| 新增宿主事件订阅 `plugin-manager/changed`（500ms 防抖） | 变更即时入账；宿主缺席时静默降级 | 兼容 |
+
 ## 0.0 v0.7 契约变更一句话清单
 
 | 变更 | 影响 | 兼容性 |

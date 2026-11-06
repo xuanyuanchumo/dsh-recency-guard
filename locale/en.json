@@ -72,7 +72,8 @@
     "empty": "No suspect plugins",
     "experimental": "experimental",
     "suspectHits": "{count} prior suspect hits",
-    "count": "{count} total"
+    "count": "{count} total",
+    "showMore": "Show {count} more"
   },
   "decisions": {
     "empty": "No crash decision recorded yet",

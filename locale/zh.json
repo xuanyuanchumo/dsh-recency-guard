@@ -72,7 +72,8 @@
     "empty": "当前没有嫌疑插件",
     "experimental": "实验性",
     "suspectHits": "历史嫌疑 {count} 次",
-    "count": "共 {count} 个"
+    "count": "共 {count} 个",
+    "showMore": "展开其余 {count} 个"
   },
   "decisions": {
     "empty": "尚无崩溃决策记录",

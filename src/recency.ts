@@ -48,6 +48,24 @@ const OFFICIAL_SCOPES = ['@deepseek-ai/']
 /** Name fragments that mark a bundle as "experimental" even outside a namespace. */
 const EXPERIMENTAL_HINTS = ['experimental', '-exp', 'beta', 'canary', 'nightly', '-rc', 'alpha']
 
+/**
+ * 官方**实验性**插件（v0.8.1 新增观测面）。
+ *
+ * 为什么单独分类：
+ * - 它们是官方包（@deepseek-ai/*），与宿主同源，不该被「自动关闭」——
+ *   关掉官方组件等于把宿主自己卸了半边，风险远大于收益；
+ * - 但它们是 `dsh-experimental-*`：官方明示的实验场，**崩溃概率与安装/
+ *   更新频率都高于稳定包**，恰恰是最需要观测的对象 ——
+ *   用户原话「需要获取备份 DSH 的官方实验性插件的信息与状态」。
+ *
+ * 判据刻意保守：必须同时满足官方 scope + experimental 命名。`@deepseek-ai/dsh-web`
+ * 这类稳定包不算；`dsh-experimental-thing`（无 scope）由
+ * `isExperimentalName` 的 hints 兜住，但那是普通实验插件，不进本通道。
+ */
+export function isOfficialExperimental(name: string): boolean {
+  return isOfficial(name) && isExperimentalName(name)
+}
+
 export function isOfficial(name: string): boolean {
   return OFFICIAL_SCOPES.some((s) => name.startsWith(s))
 }

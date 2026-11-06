@@ -1,6 +1,6 @@
-import { mkdir, readFile, readdir, stat } from 'node:fs/promises'
+import { mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises'
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
 
 /**
@@ -12,6 +12,7 @@ import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
  *   state.json     – crash-recovery state (crash counter, auto-disabled set, boot marker)
  *   decision.json  – the bundles the guarded patch rows must keep off for this boot
  *   backups/<bundle>.json – config snapshot taken before a disable
+ *   backups/versions/<bundle>/<version>@<ts>.json – versioned config timeline (v0.8)
  */
 
 export const STATE_DIRNAME = '.recency-guard'
@@ -38,6 +39,7 @@ export type JournalKind =
   | 'recover'
   | 'restore'
   | 'config-backup'
+  | 'official-observe'
   | 'note'
 
 /** An event as written to the journal. `t` is stamped by the store. */
@@ -118,14 +120,14 @@ export class Store {
    * @param profileDir profile 目录
    * @param partitionKey 分区键；缺省时用 `default`（单项目 profile）。
    */
-  constructor(profileDir: string, partitionKey = 'default') {
+  constructor(profileDir: string, partitionKey = 'default', backupRootOverride?: string) {
     this.rootDir = join(profileDir, STATE_DIRNAME)
     this.dir = join(this.rootDir, 'projects', partitionKey)
     this.journalPath = join(this.dir, 'journal.jsonl')
     this.snapshotPath = join(this.dir, 'snapshot.json')
     this.statePath = join(this.dir, 'state.json')
     this.decisionPath = join(this.dir, 'decision.json')
-    this.backupsDir = join(this.dir, 'backups')
+    this.backupsDir = resolveBackupsDir(backupRootOverride, this.dir, partitionKey)
   }
 
   async init(): Promise<void> {
@@ -193,6 +195,42 @@ export class Store {
       return JSON.parse(await readFile(this.snapshotPath, 'utf8'))
     } catch {
       return {}
+    }
+  }
+
+  /**
+   * 观测快照（v0.8.1）—— 独立于主版本快照的「上次观测态」存取。
+   *
+   * 为什么不复用 readSnapshot/writeSnapshot：主快照是 `Record<string, string>`
+   * （bundle → version），观测态的值是对象（version + enabled），类型形状
+   * 不同；混写会让 install/update 的 diff 读到脏键。独立文件 `observations.json`
+   * —— 两个真相源物理隔离，比键前缀约定更不可能互相污染。
+   */
+  private observationPath(name: string): string {
+    return join(this.dir, `observation-${sanitize(name)}.json`)
+  }
+
+  async readObservationSnapshot(name: string): Promise<Map<string, { version?: string; enabled: boolean }>> {
+    try {
+      const file = this.observationPath(name)
+      if (!existsSync(file)) return new Map()
+      const parsed = JSON.parse(await readFile(file, 'utf8')) as Record<string, { version?: string; enabled: boolean }>
+      const out = new Map<string, { version?: string; enabled: boolean }>()
+      for (const [bundle, info] of Object.entries(parsed)) {
+        if (typeof bundle !== 'string' || info === null || typeof info !== 'object') continue
+        out.set(bundle, { version: info.version, enabled: info.enabled !== false })
+      }
+      return out
+    } catch {
+      return new Map()
+    }
+  }
+
+  async writeObservationSnapshot(name: string, state: Map<string, { version?: string; enabled: boolean }>): Promise<void> {
+    try {
+      await writeFileAtomic(this.observationPath(name), JSON.stringify(Object.fromEntries(state), null, 2), { mode: 0o644 })
+    } catch {
+      /* best effort */
     }
   }
 
@@ -343,6 +381,113 @@ export class Store {
     return file
   }
 
+  /**
+   * 带版本的时间戳备份（v0.8.0 备份增强）。
+   *
+   * ## 与 writeBackup 的分工
+   *
+   * writeBackup 只留**最近一份**（文件名 = 插件名），服务「重新启用时恢复配置」；
+   * 本方法留**时间线**（文件名 = 插件名 + 版本 + 时刻），服务「插件更新前后的
+   * 状态对账」—— 用户原话是「记录插件更新的前后状态」。一个插件被连升三个
+   * 版本时，writeBackup 只剩最后一版，而本方法三版都在，且能看出版本间的
+   * 配置差异（用户升级后行为变了，先对比备份再排查，少走弯路）。
+   *
+   * ## 保留策略
+   *
+   * 每个插件最多留 `retain` 份（默认 5），超出时**删最旧**。为什么按插件
+   * 计数而不是全目录计数：用户关心的是「单个插件能回溯多远」，全目录上限
+   * 会让装了 30 个插件的 profile 把每个插件的备份挤到只剩 1 份。
+   *
+   * 失败绝不抛出：备份是 best-effort（与 writeBackup 同一纪律），
+   * 更新检测的主流程不能因为备份写不进去而中断。
+   */
+  async writeVersionedBackup(
+    bundle: string,
+    version: string,
+    config: unknown,
+    options: { retain?: number } = {},
+  ): Promise<string | null> {
+    try {
+      const dir = join(this.backupsDir, 'versions', sanitize(bundle))
+      await mkdir(dir, { recursive: true })
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      const file = join(dir, `${sanitize(version) || 'unknown'}@${stamp}.json`)
+      await writeFileAtomic(
+        file,
+        JSON.stringify({ bundle, version, savedAt: new Date().toISOString(), config }, null, 2),
+        { mode: 0o644 },
+      )
+      await this.pruneVersionedBackups(bundle, options.retain ?? 5)
+      return file
+    } catch {
+      return null
+    }
+  }
+
+  /** 一个插件的时间线备份清单（旧 → 新），供工具与面板对账。 */
+  async listVersionedBackups(bundle: string): Promise<Array<{ file: string; version: string; savedAt: string }>> {
+    const dir = join(this.backupsDir, 'versions', sanitize(bundle))
+    if (!existsSync(dir)) return []
+    let files: string[]
+    try {
+      files = await readdir(dir)
+    } catch {
+      return []
+    }
+    const rows: Array<{ file: string; version: string; savedAt: string }> = []
+    for (const f of files.filter((x) => x.endsWith('.json')).sort()) {
+      try {
+        const parsed = JSON.parse(await readFile(join(dir, f), 'utf8')) as { version?: string; savedAt?: string }
+        rows.push({
+          // 完整路径：调用方（prune、工具层）不再自己拼路径，避免两处路径规则漂移。
+          file: join(dir, f),
+          version: typeof parsed.version === 'string' ? parsed.version : 'unknown',
+          savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : '',
+        })
+      } catch {
+        /* 损坏行不计入清单，但不删 —— 用户可能要手工抢救 */
+      }
+    }
+    return rows
+  }
+
+  /** 按插件清点全部时间线备份（工具 backups 用）。 */
+  async listVersionedBackupBundles(): Promise<Array<{ bundle: string; count: number; latestVersion?: string; latestAt?: string }>> {
+    const root = join(this.backupsDir, 'versions')
+    if (!existsSync(root)) return []
+    let names: string[]
+    try {
+      names = await readdir(root)
+    } catch {
+      return []
+    }
+    const out: Array<{ bundle: string; count: number; latestVersion?: string; latestAt?: string }> = []
+    for (const name of names.sort()) {
+      const rows = await this.listVersionedBackups(name)
+      if (rows.length === 0) continue
+      const latest = rows[rows.length - 1]
+      out.push({ bundle: name, count: rows.length, latestVersion: latest?.version, latestAt: latest?.savedAt })
+    }
+    return out
+  }
+
+  /** 每插件保留最近 `retain` 份，删最旧。best-effort：删不掉就留着。 */
+  private async pruneVersionedBackups(bundle: string, retain: number): Promise<void> {
+    try {
+      const rows = await this.listVersionedBackups(bundle)
+      if (rows.length <= retain) return
+      for (const row of rows.slice(0, rows.length - retain)) {
+        try {
+          await unlink(row.file)
+        } catch {
+          /* ignore */
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   async readBackup(bundle: string): Promise<{ bundle: string; savedAt: string; config: unknown } | null> {
     const file = join(this.backupsDir, `${sanitize(bundle)}.json`)
     if (!existsSync(file)) return null
@@ -394,6 +539,27 @@ function parseJournalLines(raw: string, limit: number): JournalRecord[] {
 
 function sanitize(name: string): string {
   return name.replace(/[^A-Za-z0-9._@/-]/g, '_')
+}
+
+/**
+ * 解析备份根目录。
+ *
+ * 优先级：显式 override（环境变量）> 面板配置 > profile 内默认。
+ * 自定义目录下仍按 **分区键** 分层（`<root>/<partitionKey>`）：集中存放
+ * 不能破坏分区隔离 —— 两个项目的备份混在一个目录里，回滚时拿错就是事故。
+ * 非法值（空白字符串除外）静默回退到默认：备份位置错了不如用默认位置。
+ */
+function resolveBackupsDir(override: string | undefined, partitionDir: string, partitionKey: string): string {
+  const custom = (override ?? '').trim()
+  if (custom === '') return join(partitionDir, 'backups')
+  try {
+    const resolved = resolve(custom)
+    if (!isAbsolute(custom)) return join(partitionDir, 'backups')
+    void resolved
+    return join(resolved, partitionKey)
+  } catch {
+    return join(partitionDir, 'backups')
+  }
 }
 
 /**

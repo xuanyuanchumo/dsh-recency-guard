@@ -812,6 +812,12 @@
   gap: 10px;
 }
 
+/* 「展开其余 N 个」按钮：左对齐的链接形态，与卡片内的其它操作区分。 */
+.rg-risks-expand {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
 .rg-risk {
   display: flex;
   flex-direction: column;

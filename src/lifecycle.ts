@@ -107,6 +107,7 @@ export type LifecycleStepName =
   | 'restore' // 稳定后的配置恢复
   | 'archive' // 归档搬走 + 留档
   | 'rerun' // 以最新项目事实重跑（新循环基线）
+  | 'watch-events' // 订阅宿主 plugin-manager/changed（事件驱动加速器）
   | 'shutdown' // 退出清理
 
 /** 一次步骤的执行区间。 */

@@ -36,3 +36,8 @@
 - **图谱 fit 不能在每次数据轮询时重跑**：必须 ref 守卫只 fit 一次，否则用户缩放被重置。
 - **一个包的守护行只装第一行**（代表行），装多行会在 Loader 重复 id 抛错。
 - **评估器把 test-reports 目录不存在判 FAIL**：每轮循环要落盘 test-reports/*.md，别只跑测试不写报告。
+
+- **数据层不做显示截断**：工具 status 曾 slice(0,10) 只报 10 个嫌疑，渲染层又 limit 5 —— 「报 N 只列 5」。截断是渲染策略：数据给全量，显示层显式省略计数（面板给展开按钮）。
+- **官方实验插件（@deepseek-ai/dsh-experimental-*）只观测不关闭**：isOfficialExperimental = 官方 scope + experimental 命名；进 journal(official-observe) 与时间线备份，绝不进嫌疑面（关官方组件等于卸宿主半边）。
+- **事件加速器，启动兜底**：ctx.on('plugin-manager/changed') 覆盖 GUI/工具安装（CLI/手工编辑不发事件）；变更检测永远保留启动时同步 diff —— 事件是加速器不是唯一真相（compat-guardian 纯轮询 + recency 启动 diff 双源实证）。
+- **不做高频轮询**：变更检测只跑启动时 + 事件触发（防抖 500ms）；mtime 扫描是启动路径最贵动作，绝不进定时器（compat-guardian 每 30s 全量爬 node_modules 是反例）。

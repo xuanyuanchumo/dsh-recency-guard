@@ -12,6 +12,7 @@ import {
   pickSuspects,
   diffVersions,
   isOfficial,
+  isOfficialExperimental,
   isExperimentalName,
   describeError,
 } from './recency.js'
@@ -60,6 +61,25 @@ export interface Config {
   maxAutoDisable: number
   /** Auto re-enable the needed (non-suspect) bundles after the profile boots clean. */
   autoRestore: boolean
+  /**
+   * 插件更新时是否写「带版本的时间线备份」（v0.8 备份增强）。
+   *
+   * 默认开：备份是 best-effort，写失败只降级不报错；关闭则回到只保留
+   * 「最近一份」的旧行为。
+   */
+  versionedBackups: boolean
+  /** 每个插件保留几份时间线备份（超出删最旧）。 */
+  backupRetain: number
+  /**
+   * 备份的自定义目录。
+   *
+   * 空 = 用默认位置（`<profile>/.recency-guard/projects/<分区>/backups`，
+   * 随分区隔离）；填绝对路径 = 备份集中到用户指定的目录（分区隔离由
+   * 子目录名保证：`<root>/<partitionKey>`）。环境变量
+   * `RECENCY_GUARD_BACKUP_ROOT` 优先于本配置 —— 运维脚本比面板配置
+   * 更接近机器真相。
+   */
+  backupRoot: string
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -67,6 +87,9 @@ export const Config: Schema<Config> = Schema.object({
   includeExperimental: Schema.boolean().default(true).description('把 experimental/beta 命名的组合包也算作嫌疑。'),
   maxAutoDisable: Schema.number().default(2).description('单次恢复最多自动关闭的嫌疑插件数（崩溃次数递增，封顶此值）。'),
   autoRestore: Schema.boolean().default(true).description('稳定启动后自动重新启用非嫌疑插件，恢复需要的配置。'),
+  versionedBackups: Schema.boolean().default(true).description('插件更新时写带版本的时间线备份（可回溯更新前后的配置）。'),
+  backupRetain: Schema.number().default(5).description('每个插件保留的时间线备份份数（超出删最旧）。'),
+  backupRoot: Schema.string().default('').description('备份自定义目录（留空用 profile 内默认位置，随分区隔离）。'),
 })
 
 /** The subset of `ctx.pluginManager` this plugin uses. */
@@ -123,7 +146,10 @@ export function apply(ctx: Context, config: Config) {
   //
   // profileContext 里的项目事实是 `cwd`（launcher 记录的进程工作目录）。
   const workspace = services.profileContext.cwd ?? profile.dir
-  const store = new Store(profile.dir, projectKey(workspace))
+  // 备份根优先级：环境变量（运维脚本）> 面板配置 > profile 内默认。
+  const backupRoot =
+    process.env.RECENCY_GUARD_BACKUP_ROOT || (typeof config.backupRoot === 'string' ? config.backupRoot : '')
+  const store = new Store(profile.dir, projectKey(workspace), backupRoot)
   const guard = new Guard(
     ctx,
     store,
@@ -202,11 +228,27 @@ export function apply(ctx: Context, config: Config) {
     () => {
       // Boot is fire-and-forget: the plugin must not block the host's startup.
       void guard.boot()
+      // 事件驱动加速器（v0.8.1）：宿主的 pluginManager 在每次变更操作
+      // （GUI/工具路径的 install/update/enable/disable，含失败）后 emit
+      // `plugin-manager/changed`（runtime/dsh-plugin-manager/lib/index.js:2398）。
+      // 收到事件就重跑一次变更检测 —— 插件装完/升完**不用等下一次重启**
+      // 就进时间线与嫌疑面。
+      //
+      // 已知盲区（子代理对宿主源码的实证）：CLI `dsh plugin add` 与手工
+      // 编辑 patch 不经过 manager，不发此事件 —— 那些路径仍由「每次启动
+      // 的同步 diff」兜底。事件是加速器，不是唯一真相。
+      //
+      // 失败防御：宿主事件面不可用时（旧版/裁剪版宿主）静默降级为纯启动
+      // 检测 —— tryReadService 同款纪律，可选能力缺席不拖垮守护。
+      const disposeEvents = guard.watchPluginChanges()
       // The disposer MUST return the promise: cordis awaits an async disposer,
       // so the crash marker is cleared before the process exits.
-      return () => guard.shutdown()
+      return () => {
+        disposeEvents()
+        return guard.shutdown()
+      }
     },
-    'recency-guard: boot + clean-shutdown marker',
+    'recency-guard: boot + change-events + clean-shutdown marker',
   )
 
   // The startup record must be written SYNCHRONOUSLY: the very crash this
@@ -291,7 +333,7 @@ export function apply(ctx: Context, config: Config) {
             })
           }
           case 'backups':
-            return formatBackups(await store.listBackups())
+            return formatBackups(await store.listBackups(), await store.listVersionedBackupBundles())
           case 'archive':
             return formatArchive((await guard.archiveReset(args.reason?.trim() || '工具触发归档重置')) as never)
           case 'archives':
@@ -543,6 +585,83 @@ class Guard {
     }
     await this.store.append(events)
     await this.store.writeSnapshot(current)
+    // 更新发生时抓一份「更新前」的配置快照，进时间线备份。
+    // 放在 append 之后：先保证事件链完整，备份是锦上添花（best-effort，
+    // 失败不影响变更记录 —— 那才是崩溃归因的主证据）。
+    if (update.length > 0 && this.config.versionedBackups) {
+      for (const u of update) {
+        try {
+          const snap = this.snapshotConfig(u.name)
+          if (snap !== undefined) {
+            await this.store.writeVersionedBackup(u.name, u.from, snap, { retain: this.config.backupRetain })
+          }
+        } catch (err) {
+          this.ctx.logger.warn(`[recency-guard] 写 ${u.name} 的时间线备份失败：${describeError(err)}`)
+        }
+      }
+    }
+  }
+
+  /**
+   * 官方实验性插件观测（v0.8.1）—— 只记录，不关闭。
+   *
+   * 用户需求：「获取备份 DSH 的官方实验性插件的信息与状态」。
+   *
+   * 设计取舍：
+   * - **不进嫌疑面**：它们是官方包，自动关闭官方组件的风险远大于收益
+   *   （`isOfficialExperimental` 的判据保证普通实验插件仍进嫌疑面）；
+   * - **但全量记录**：清单（名称/版本/启用态/官方标记）每次启动 diff 后
+   *   追加到 journal（kind: 'official-observe'），时间线备份同步写入 ——
+   *   实验插件崩溃时的「当时装了哪些实验组件、什么版本」就是归因输入；
+   * - **diff 后只记变更**：每次启动都全量记一条会污染 journal（1000 行
+   *   封顶很快被冲掉）；只有集合变化或版本变化时才记。
+   *
+   * 复杂度 O(b log b)（b = 官方实验插件数，通常 < 20），启动路径一次。
+   */
+  private async observeOfficialExperimental(): Promise<void> {
+    const bundles = await this.pm.listBundles()
+    const current = new Map<string, { version?: string; enabled: boolean }>()
+    for (const b of bundles) {
+      if (!isOfficialExperimental(b.name)) continue
+      current.set(b.name, { version: b.version, enabled: b.enabled !== false })
+    }
+    // 上一次的观测快照：复用 snapshot 机制但用独立键前缀，避免与
+    // 第三方插件的 install/update diff 互相污染。
+    const prevRaw = await this.store.readObservationSnapshot('official-experimental')
+    let changed = false
+    if (prevRaw.size !== current.size) changed = true
+    else {
+      for (const [name, info] of current) {
+        const prev = prevRaw.get(name)
+        if (prev === undefined || prev.version !== info.version || prev.enabled !== info.enabled) {
+          changed = true
+          break
+        }
+      }
+    }
+    if (!changed) return
+    const events: JournalEvent[] = [...current.entries()].map(([bundle, info]) => ({
+      kind: 'official-observe' as const,
+      bundle,
+      version: info.version,
+      detail: info.enabled ? 'enabled' : 'disabled',
+    }))
+    await this.store.append(events)
+    await this.store.writeObservationSnapshot('official-experimental', current)
+    // 状态备份：整个实验组件清单落成时间线备份（用户可回溯「崩溃时实验组件长什么样」）。
+    if (this.config.versionedBackups) {
+      try {
+        const stateSnapshot = [...current.entries()].map(([bundle, info]) => ({ bundle, ...info }))
+        await this.store.writeVersionedBackup(
+          '@official-experimental/state',
+          `set-${stateSnapshot.length}`,
+          stateSnapshot,
+          { retain: this.config.backupRetain },
+        )
+      } catch (err) {
+        this.ctx.logger.warn(`[recency-guard] 写官方实验插件状态备份失败：${describeError(err)}`)
+      }
+    }
   }
 
   /** Journal-derived recency map: most recent install-or-update per bundle. */
@@ -834,6 +953,14 @@ class Guard {
       this.ctx.logger.warn(`[recency-guard] 记录插件变更失败：${describeError(err)}`)
     }
 
+    // 官方实验插件观测（只记录不关闭）：与 recordChanges 同级 try/catch ——
+    // 观测通道失效不能影响变更记录与恢复主流程。
+    try {
+      await this.observeOfficialExperimental()
+    } catch (err) {
+      this.ctx.logger.warn(`[recency-guard] 官方实验插件观测失败：${describeError(err)}`)
+    }
+
     if (recovering && !crashedLastRun) {
       // The profile booted with the suspect(s) disabled and SURVIVED the boot,
       // so the crash is over. Restore everything except the prime suspect,
@@ -1084,6 +1211,57 @@ class Guard {
   }
 
   /**
+   * 事件驱动加速器（v0.8.1）：订阅宿主的 `plugin-manager/changed`。
+   *
+   * ## 回答「轮询会不会影响性能」
+   *
+   * 本插件**没有轮询**：面板数据是前端每 5s 拉 HTTP 路由（读内存快照，
+   * 不扫磁盘），宿主侧的变更检测只在**启动时**跑一次。真正贵的是扫
+   * node_modules 的 mtime（O(声明插件数) 次 stat）—— compat-guardian
+   * 每 30s 全量爬一遍的做法实测不可取（真机取证报告：高频 realpath
+   * 逐目录爬取是它最大的成本项），本插件不采纳。
+   *
+   * 事件驱动的价值：用户在 GUI 里装/升插件的瞬间（不等重启）就能进
+   * 时间线与嫌疑面 —— 这接近「安装/更新前触发」的诉求：事件在变更
+   * **完成后**发（含 failed），我们立刻 diff + 备份新版本，下次崩溃时
+   * 证据已经在盘上。
+   *
+   * 防抖：事件可能在一次操作里连发（install → enable），用 500ms 尾缘
+   * 防抖合并；防抖后的检测本身带快照 diff，重复跑也是幂等的。
+   * 定时器在 disposer 里清理；宿主事件面缺席（返回 undefined）时
+   * 静默降级为纯启动检测 —— 可选能力缺席不是错误。
+   *
+   * @returns 取消订阅的 disposer（同步，幂等）。
+   */
+  watchPluginChanges(): () => void {
+    try {
+      const onFn = (this.ctx as unknown as { on?: (name: string, listener: (payload: unknown) => void) => unknown }).on
+      if (typeof onFn !== 'function') return () => {}
+      let pending = false
+      const listener = (): void => {
+        if (pending) return
+        pending = true
+        setTimeout(() => {
+          pending = false
+          void this.recordChanges().catch((err) => {
+            this.ctx.logger?.warn?.(`[recency-guard] 事件触发的变更检测失败：${describeError(err)}`)
+          })
+        }, 500)
+        // 注意：Node 的 setTimeout 返回 Timeout，进程退出时不阻寒 ——
+        // 无需 unref（这里在宿主进程内，宿主有自己的生命周期）。
+      }
+      const disposer = onFn.call(this.ctx, 'plugin-manager/changed', listener)
+      this.recordStep('watch-events', true, '已订阅 plugin-manager/changed')
+      return typeof disposer === 'function'
+        ? (disposer as () => void)
+        : () => {}
+    } catch {
+      // 事件面缺席（旧版宿主/裁剪版）：静默降级，启动时 diff 兑底。
+      return () => {}
+    }
+  }
+
+  /**
    * 观测记录 —— 从日志推导的启动观测序列。
    *
    * 数据来源：journal 里的 'note'（每次启动）与 'crash-detected'（崩溃）。
@@ -1318,7 +1496,11 @@ class Guard {
       stabilized: state.stabilized,
       restored: state.restored,
       decisionFile: DECISION_RELATIVE_PATH,
-      suspectRanking: ranked.slice(0, 10),
+      // v0.8.1：不再在数据层裁剪到 10 个。rankedSuspects 本身就是全量排序
+      // （n ≤ 100，全量排序 O(n log n)），slice 只是把「插件多」变成
+      // 「看不到」。显示层的截断（带省略计数）是渲染策略，不该伪装成数据。
+      suspectRanking: ranked,
+      suspectTotal: ranked.length,
       experimentalSuspects: ranked.filter((r) => isExperimentalName(r.bundle)).map((r) => r.bundle),
       // 生命周期步骤流：不只报「现在什么状态」，还报「做过哪些步、哪步失败过」。
       lifecycle: {

@@ -235,29 +235,44 @@ export function RisksBody({
   onReenable: (bundle: string) => void
 }): ReactElement {
   if (snapshot.risks.length === 0) return <p className="rg-empty">{t('risks.empty')}</p>
+  // v0.8.1：默认展开 15 行 + 显式「还有 N 个」展开按钮。
+  // 此前静默 slice(0, 8)：装了 20 个插件的 profile 在面板上只看得见 8 个，
+  // 且没有任何提示 —— 「排名显示不全」的实测根源就在这里。
+  // 用局部 useState 而不是卡片折叠：展开的是列表，不是整张卡。
+  const INITIAL_VISIBLE = 15
+  const [showAllRisks, setShowAllRisks] = useState(false)
+  const visibleRisks = showAllRisks ? snapshot.risks : snapshot.risks.slice(0, INITIAL_VISIBLE)
+  const hiddenCount = snapshot.risks.length - visibleRisks.length
   return (
-    <ul className="rg-risks">
-      {snapshot.risks.slice(0, 8).map((risk) => (
-        <li key={risk.bundle} className="rg-risk">
-          <div className="rg-risk-main">
-            <span className="rg-risk-name" title={risk.bundle}>
-              {risk.bundle}
+    <>
+      <ul className="rg-risks">
+        {visibleRisks.map((risk) => (
+          <li key={risk.bundle} className="rg-risk">
+            <div className="rg-risk-main">
+              <span className="rg-risk-name" title={risk.bundle}>
+                {risk.bundle}
+              </span>
+              {risk.experimental && <span className="rg-chip">{t('risks.experimental')}</span>}
+              <span className="rg-risk-score">{risk.risk.toFixed(2)}</span>
+            </div>
+            <span className="rg-bar rg-bar-wide" aria-hidden>
+              <span className="rg-bar-fill" style={{ width: `${Math.round(risk.risk * 100)}%` }} />
             </span>
-            {risk.experimental && <span className="rg-chip">{t('risks.experimental')}</span>}
-            <span className="rg-risk-score">{risk.risk.toFixed(2)}</span>
-          </div>
-          <span className="rg-bar rg-bar-wide" aria-hidden>
-            <span className="rg-bar-fill" style={{ width: `${Math.round(risk.risk * 100)}%` }} />
-          </span>
-          <span className="rg-risk-detail">{risk.label}</span>
-          <div className="rg-risk-actions">
-            <button type="button" className="rg-button rg-button-small" onClick={() => onReenable(risk.bundle)}>
-              {t('panel.reenable')}
-            </button>
-          </div>
-        </li>
-      ))}
-    </ul>
+            <span className="rg-risk-detail">{risk.label}</span>
+            <div className="rg-risk-actions">
+              <button type="button" className="rg-button rg-button-small" onClick={() => onReenable(risk.bundle)}>
+                {t('panel.reenable')}
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {hiddenCount > 0 && (
+        <button type="button" className="rg-link rg-risks-expand" onClick={() => setShowAllRisks(true)}>
+          {t('risks.showMore', { count: hiddenCount })}
+        </button>
+      )}
+    </>
   )
 }
 

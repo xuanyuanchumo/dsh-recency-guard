@@ -61,8 +61,56 @@
       "from": "RUNNING",
       "to": "DONE",
       "at": "2026-11-04T18:29:56.224Z"
+    },
+    {
+      "trigger": "run",
+      "from": "DONE",
+      "to": "RUNNING",
+      "at": "2026-11-06T15:33:22.933Z"
+    },
+    {
+      "trigger": "blocked",
+      "from": "RUNNING",
+      "to": "BLOCKED",
+      "at": "2026-11-06T15:33:22.933Z"
+    },
+    {
+      "trigger": "reset",
+      "from": "BLOCKED",
+      "to": "IDLE",
+      "at": "2026-11-06T15:33:28.807Z"
+    },
+    {
+      "trigger": "run",
+      "from": "IDLE",
+      "to": "RUNNING",
+      "at": "2026-11-06T15:33:35.944Z"
+    },
+    {
+      "trigger": "blocked",
+      "from": "RUNNING",
+      "to": "BLOCKED",
+      "at": "2026-11-06T15:33:35.944Z"
+    },
+    {
+      "trigger": "reset",
+      "from": "BLOCKED",
+      "to": "IDLE",
+      "at": "2026-11-06T15:33:42.158Z"
+    },
+    {
+      "trigger": "run",
+      "from": "IDLE",
+      "to": "RUNNING",
+      "at": "2026-11-06T15:36:02.176Z"
+    },
+    {
+      "trigger": "success",
+      "from": "RUNNING",
+      "to": "DONE",
+      "at": "2026-11-06T15:36:02.176Z"
     }
   ],
-  "updatedAt": "2026-11-04T18:29:56.224Z",
+  "updatedAt": "2026-11-06T15:36:02.176Z",
   "ledgerHead": null
 }

@@ -322,15 +322,18 @@ export function formatStatus(s: StatusLike): ToolOutcome {
     })
   }
   sections.push({
+    // v0.8.1：显示层截断改为显式声明 —— 标题报全量，尾行报省略数，
+    // limit 折叠到 15（命令窗口可承受，不再是「报 10 只列 5」的静默缺失）。
+    // 完整数据在 data.suspectRanking，模型与面板不再被文本通道限制。
     title: `嫌疑排名（最近更新优先，共 ${s.suspectRanking.length} 个）`,
     items: s.suspectRanking.map((r, index) => `${index + 1}. ${r.bundle} · ${r.lastKind} @ ${displayTime(r.lastChangeAt)}`),
-    limit: 5,
+    limit: 15,
     empty: '当前没有第三方/实验性嫌疑插件',
   })
   sections.push({
     title: `实验性命名（共 ${s.experimentalSuspects.length} 个）`,
     items: s.experimentalSuspects,
-    limit: 6,
+    limit: 12,
     empty: '没有 experimental/beta 命名的插件',
   })
 
@@ -446,26 +449,47 @@ export function formatReenable(r: { bundle: string; reenabled: boolean; hasConfi
   )
 }
 
-/** backups：配置备份清单。 */
-export function formatBackups(list: JsonSafe[]): ToolOutcome {
+/** backups：配置备份清单（最近一份 + 每插件时间线）。 */
+export function formatBackups(list: JsonSafe[], timelines?: JsonSafe[]): ToolOutcome {
   const items = list.map((b) => {
     const entry = b as { bundle?: string; writtenAt?: string }
     return `${entry.bundle ?? '?'} · ${displayTime(entry.writtenAt)}`
   })
+  const sections: SectionInput[] = [
+    {
+      title: '备份清单（最近一份）',
+      items,
+      limit: 12,
+      empty: '没有配置备份 —— 从未自动关闭过插件，或备份已被清理',
+    },
+  ]
+  // 时间线备份（v0.8 备份增强）：按插件列出保留了几版、最新版本是什么。
+  // 缺席（旧宿主/未启用）时不渲染这个区，而不是渲染一个假空态 ——
+  // 「没启用」与「启用了但没备份」是两件事。
+  if (Array.isArray(timelines)) {
+    const timelineItems = timelines.map((t) => {
+      const row = t as { bundle?: string; count?: number; latestVersion?: string; latestAt?: string }
+      const latest = row.latestVersion ? `最新 ${row.latestVersion}` : '版本未知'
+      const at = row.latestAt ? displayTime(row.latestAt) : ''
+      return `${row.bundle ?? '?'} · ${row.count ?? 0} 份 · ${latest}${at ? ` · ${at}` : ''}`
+    })
+    sections.push({
+      title: '更新时间线（每插件保留多版）',
+      items: timelineItems,
+      limit: 12,
+      empty: '没有时间线备份 —— 尚未有插件更新，或 versionedBackups 未开启',
+    })
+  }
+  // JsonSafe 的 number 收窄：JsonSafe 联合类型里 number 与 string 同在，
+  // 直接当 number 用会被类型系统拦下（实测 TS2365/TS18047）。
+  const total = (timelines ?? []).reduce((n: number, t) => n + (Number((t as { count?: number }).count) || 0), 0)
   return ok(
     'backups',
-    `共 ${list.length} 份配置备份`,
-    {
-      sections: [
-        {
-          title: '备份清单',
-          items,
-          limit: 12,
-          empty: '没有配置备份 —— 从未自动关闭过插件，或备份已被清理',
-        },
-      ],
-    },
-    { backups: list },
+    timelines
+      ? `共 ${list.length} 份最近备份 · ${timelines.length} 个插件的时间线（${total} 份）`
+      : `共 ${list.length} 份配置备份`,
+    { sections },
+    { backups: list, ...(timelines ? { timelines } : {}) },
   )
 }
 
