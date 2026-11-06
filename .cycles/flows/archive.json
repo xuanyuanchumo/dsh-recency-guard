@@ -1,0 +1,68 @@
+{
+  "flowId": "archive",
+  "current": "DONE",
+  "history": [
+    {
+      "trigger": "run",
+      "from": "IDLE",
+      "to": "RUNNING",
+      "at": "2026-11-04T15:05:20.027Z"
+    },
+    {
+      "trigger": "success",
+      "from": "RUNNING",
+      "to": "DONE",
+      "at": "2026-11-04T15:05:20.027Z"
+    },
+    {
+      "trigger": "run",
+      "from": "DONE",
+      "to": "RUNNING",
+      "at": "2026-11-04T15:08:49.921Z"
+    },
+    {
+      "trigger": "success",
+      "from": "RUNNING",
+      "to": "DONE",
+      "at": "2026-11-04T15:08:49.921Z"
+    },
+    {
+      "trigger": "run",
+      "from": "DONE",
+      "to": "RUNNING",
+      "at": "2026-11-04T15:08:56.137Z"
+    },
+    {
+      "trigger": "blocked",
+      "from": "RUNNING",
+      "to": "BLOCKED",
+      "at": "2026-11-04T15:08:56.137Z"
+    },
+    {
+      "trigger": "run",
+      "from": "BLOCKED",
+      "to": "RUNNING",
+      "at": "2026-11-04T18:29:17.872Z"
+    },
+    {
+      "trigger": "blocked",
+      "from": "RUNNING",
+      "to": "BLOCKED",
+      "at": "2026-11-04T18:29:17.872Z"
+    },
+    {
+      "trigger": "run",
+      "from": "BLOCKED",
+      "to": "RUNNING",
+      "at": "2026-11-04T18:29:56.224Z"
+    },
+    {
+      "trigger": "success",
+      "from": "RUNNING",
+      "to": "DONE",
+      "at": "2026-11-04T18:29:56.224Z"
+    }
+  ],
+  "updatedAt": "2026-11-04T18:29:56.224Z",
+  "ledgerHead": null
+}

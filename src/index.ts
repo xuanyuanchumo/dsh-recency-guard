@@ -21,13 +21,21 @@ import { DECISION_RELATIVE_PATH, writePointer } from './decision.js'
 import { installGuardedRows, GUARD_PACKAGE_NAME } from './guarded-rows.js'
 import { deriveObservations, deriveRiskInputs } from './observations.js'
 import { installExitSentinel, readSentinel, clearSentinel } from './sentinel.js'
-import { StageMachine } from './lifecycle.js'
+import { StageMachine, type LifecycleStepName } from './lifecycle.js'
 import { buildCapabilityGraph, verifyCapabilityContract } from './capability-specs.js'
+import { currentRegistrationSurface, verifySurfaceAlignment } from './capability-specs.js'
+import { TOOL_SURFACE } from './capability.js'
 import { buildPanelSnapshot, buildGraphDataFor, type PanelSnapshot } from './snapshot.js'
-import { projectKey, readPartitionIndex, registerPartition, writePartitionIndex } from './isolation.js'
-import { archiveAndReset, listArchives } from './archive.js'
+import {
+  isolationView,
+  partitionArtifacts,
+  projectKey,
+  readPartitionIndex,
+  registerPartition,
+  writePartitionIndex,
+} from './isolation.js'
+import { archiveAndReset, listArchives, readArchiveManifest } from './archive.js'
 import { wireRoutes } from './routes-plugin.js'
-import { ROUTE_PATHS } from './routes.js'
 import {
   renderOutcome,
   formatStatus,
@@ -89,18 +97,25 @@ interface ConfigEditorLike {
   }>
 }
 
-export const inject = ['tools', 'pluginManager', 'profileContext', 'configEditor']
+/**
+ * 硬依赖的宿主服务。
+ *
+ * `configEditor` **不在**这里：它只在「关闭前备份配置」这一条 best-effort
+ * 路径上用到（package.json 里它是 optional peer），把它列成硬依赖会让没有
+ * config-editor 的 profile 整条 fiber pending —— 守护、工具、状态机一起失效。
+ * 这与 `webServer` 是同一类缺陷（dsh-anic cycle-74 P0），只是它是可选服务，
+ * 因此用 `ctx.inject(['configEditor'], cb)` 挂子 fiber：它缺席只影响备份。
+ */
+export const inject = ['tools', 'pluginManager', 'profileContext']
 
 export function apply(ctx: Context, config: Config) {
   // The plugin-manager and config-editor services are declared by the harness
   // through `inject`; the base cordis Context type does not know them.
   const services = ctx as unknown as {
     pluginManager: PluginManagerLike
-    configEditor: ConfigEditorLike
     profileContext: { name: string; dir: string; patchPath: string; cwd?: string }
   }
   const pm = services.pluginManager
-  const ce = services.configEditor
   const profile = services.profileContext
   // 分区的锚点是**项目目录**，不是 profile 目录 ——
   // 同一个 profile 可以在多个项目里工作，用 profile 目录做键会让它们
@@ -113,7 +128,11 @@ export function apply(ctx: Context, config: Config) {
     ctx,
     store,
     pm,
-    ce,
+    // configEditor 是**可选**服务，且没写进 inject —— 直接读 `services.configEditor`
+    // 会让 Cordis 的追踪代理抛 "cannot get property ... without inject"，
+    // 而那个异常发生在 `apply` 里就等于整个插件没激活（沙箱 sb-rg-c5 实测）。
+    // 用 tryReadService：缺席就传 undefined，由子 fiber 后续接上。
+    tryReadService(ctx, 'configEditor') as ConfigEditorLike | undefined,
     config,
     profile.dir,
     profile.patchPath,
@@ -121,6 +140,15 @@ export function apply(ctx: Context, config: Config) {
     projectKey(workspace),
     workspace,
   )
+  guard.beginStep('loader')
+
+  // configEditor 走**选择性注入**：缺席时只有这个子 fiber 是 pending，
+  // 主插件照常工作（备份降级为「无备份」，不是「插件不加载」）。
+  attachOptionalService(ctx, 'configEditor', (source) => guard.attachConfigEditor(source))
+  if (tryReadService(ctx, 'configEditor') !== undefined) {
+    // 服务已在场上（同步可读）：立即接上，别等子 fiber 的第一轮调度。
+    guard.attachConfigEditor(ctx)
+  }
 
   // The pre-boot guard needs no registration: the guarded patch rows read the
   // decision file directly through their `disabled` expression.
@@ -137,8 +165,13 @@ export function apply(ctx: Context, config: Config) {
   // in the desktop bundle, and listing it as a hard dependency of this plugin
   // would leave the whole fiber pending in headless — taking the tools and
   // the state machine down with it (dsh-anic cycle-74 P0).
-  // 路由的对外名称同样在**注册处**登记。
-  for (const path of Object.values(ROUTE_PATHS)) guard.noteRegistered(path)
+  //
+  // 登记的是**注册表里的名称**（`ROUTE_SURFACE` / `TOOL_SURFACE`），不是
+  // 手写常量：注册面是从真实注册代码消费的那张表投影出来的，清单与它比对
+  // 才有意义（自己核对自己永远为真）。
+  const surface = currentRegistrationSurface()
+  guard.noteRegistered(surface.toolName)
+  for (const route of surface.routes) guard.noteRegistered(route.exposedName)
 
   ctx.effect(
     () => {
@@ -152,6 +185,10 @@ export function apply(ctx: Context, config: Config) {
         archives: () => guard.archives(),
         reenable: (bundle) => guard.reenable(bundle),
         recover: () => guard.recoverNow(),
+        isolation: async () => guard.isolationView(),
+        lifecycle: async () => guard.lifecycleView(),
+        // 路由**真的**注册成功时回报（含 webServer 缺席时的沉默 —— 那也是事实）。
+        onRegister: (name) => guard.noteRegistered(name),
       })
       // The disposer must be a function (not undefined): cordis treats an
       // undefined return as "no effect", which is fine — but the TYPE has to
@@ -182,7 +219,7 @@ export function apply(ctx: Context, config: Config) {
   // 不一致只记日志（契约缺口要被看见并修，不该拖垮守护流程）。
   ctx.effect(
     () => {
-      guard.verifyContract()
+      guard.verifyContract(injectedServiceNames(ctx))
       // 自检没有需要释放的资源；返回 no-op disposer 以满足 cordis 的 Effect 形状。
       return () => {}
     },
@@ -204,12 +241,11 @@ export function apply(ctx: Context, config: Config) {
     if (config.enabled) guard.publishDecisionOnCrash(exitCode)
   })
 
-  // 工具的对外名称在**注册处**登记（契约自检的输入）。
-  guard.noteRegistered('recency_guard')
-
   ctx.tools.register(
     defineTool({
-      name: 'recency_guard',
+      // 工具名与 action 枚举来自**注册表**（`TOOL_SURFACE`）：注册处不写字面量，
+      // 因此「清单声明的名称」与「实际注册的名称」不可能各自漂移。
+      name: TOOL_SURFACE.name,
       description:
         '插件崩溃恢复守护：记录第三方/实验性插件的安装、更新日期与配置备份；崩溃后按“最近更新”自动关闭嫌疑插件（先关最近 1 个，仍崩溃则关最近 2 个），稳定后自动恢复需要的配置。' +
         'action=status 查看崩溃状态、嫌疑排名与自动关闭列表；action=history 查看安装更新日志；action=recover 立即按最近更新执行一次恢复关闭；' +
@@ -219,7 +255,7 @@ export function apply(ctx: Context, config: Config) {
         action: {
           type: 'string',
           required: true,
-          enum: ['status', 'history', 'recover', 'restore', 'reenable', 'backups', 'archive', 'archives'],
+          enum: [...TOOL_SURFACE.actions],
           description: '要执行的操作。',
         },
         bundle: { type: 'string', description: 'reenable 的目标插件名（包名）。' },
@@ -266,6 +302,60 @@ export function apply(ctx: Context, config: Config) {
       },
     }),
   )
+
+  // Loader 四件套走完：这一轮的「加载」步骤到此闭合（含耗时）。
+  guard.endStep('loader', true, 'Loader 四件套就绪（name/inject/Config/apply）')
+}
+
+/**
+ * 读一个宿主服务 **而不让它把插件拖死**。
+ *
+ * 为什么不能直接 `ctx.foo`：Cordis 的可追踪代理在**没有 inject 声明**时读未知
+ * 服务会抛 `cannot get property "foo" without inject`。这个异常出现在 `apply`
+ * 里就等于「整个插件没激活」—— 沙箱实测（sb-rg-c5）正是这样：
+ *
+ *     dsh: warning: 1 entry did not activate
+ *     recency-guard (dsh-recency-guard): Error: cannot get property "configEditor" without inject
+ *
+ * 一个**可选**依赖不该有这种权力。所以读它必须包在 try 里：读不到就是「不在场」。
+ */
+function tryReadService(ctx: Context, name: string): unknown {
+  try {
+    return (ctx as unknown as Record<string, unknown>)[name]
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 读出现场真实存在的宿主服务名 —— 契约自检的 inject 面输入。
+ *
+ * 为什么不用 `inject` 常量：常量只说明「声明了什么」，而契约要核对的是
+ * 「实际能拿到什么」。以 `ctx` 上可读到的服务为准，声明与现实的差距才会
+ * 现形（漏 inject 的能力会在自检里报 host-service-not-injected）。
+ */
+function injectedServiceNames(ctx: Context): string[] {
+  const names = ['tools', 'pluginManager', 'profileContext', 'webServer', 'configEditor']
+  return names.filter((name) => typeof tryReadService(ctx, name) !== 'undefined')
+}
+
+/**
+ * 挂一个**可选**宿主服务（官方 `ctx.inject(deps, cb)` 简写形式）。
+ *
+ * 为什么需要它：可选服务写进 `inject` 数组会让整条 fiber 等它，缺席即插件
+ * 全废；用子 fiber 则「服务不在场」只影响依赖它的那一条能力（这里是配置备份）。
+ * 宿主没有 `ctx.inject`（stub / 旧代）时静默回落：能力降级，插件照常加载。
+ */
+function attachOptionalService(ctx: Context, service: string, attach: (source: unknown) => void): void {
+  const injectFn = (ctx as unknown as { inject?: (deps: string[], cb: (child: unknown) => void) => unknown }).inject
+  if (typeof injectFn !== 'function') return
+  try {
+    injectFn.call(ctx, [service], (child: unknown) => {
+      attach(child)
+    })
+  } catch {
+    /* 回落：可选服务缺席不是错误 */
+  }
 }
 
 class Guard {
@@ -300,11 +390,19 @@ class Guard {
   /** 当前项目（工作区）的规范化路径。 */
   private readonly workspace: string
 
+  /**
+   * 配置编辑服务 —— **可选**。
+   *
+   * 它只服务「关闭前备份配置」这一条 best-effort 路径；服务缺席时备份能力
+   * 降级为「没有备份」，而不是整条 fiber 挂起（`ctx.inject` 子 fiber 的结果）。
+   */
+  private configEditor?: ConfigEditorLike
+
   constructor(
     private readonly ctx: Context,
     private readonly store: Store,
     private readonly pm: PluginManagerLike,
-    private readonly ce: ConfigEditorLike,
+    configEditor: ConfigEditorLike | undefined,
     private readonly config: Config,
     profileDir: string,
     patchPath: string,
@@ -317,6 +415,109 @@ class Guard {
     this.profileName = profileName
     this.projectKey = projectKey
     this.workspace = workspace
+    this.attachConfigEditor(configEditor)
+  }
+
+  /**
+   * 接上一个配置编辑服务来源（`ctx` 或 `ctx.inject` 给的子 context）。
+   *
+   * 形状校验必须在**接入时**做：拿不到 `configuration()` 的来源等于没有服务，
+   * 早失败比在崩溃路径上才发现「备份函数不存在」便宜得多。
+   */
+  attachConfigEditor(source: unknown): boolean {
+    const candidate = (source as { configEditor?: unknown } | undefined)?.configEditor
+    if (candidate && typeof (candidate as ConfigEditorLike).configuration === 'function') {
+      this.configEditor = candidate as ConfigEditorLike
+      return true
+    }
+    return false
+  }
+
+  /** 配置编辑服务是否可用（诚实报告，不假装有）。 */
+  get configEditorAvailable(): boolean {
+    return this.configEditor !== undefined
+  }
+
+  // ---------- 生命周期步骤（进入 / 退出 / 耗时 / 失败原因）----------
+
+  /** 进入一个生命周期步骤。 */
+  beginStep(name: LifecycleStepName): void {
+    this.machine.beginStep(name)
+  }
+
+  /** 退出一个生命周期步骤。 */
+  endStep(name: LifecycleStepName, ok = true, reason?: string): void {
+    this.machine.endStep(name, ok, reason)
+  }
+
+  /** 一步到位的步骤记录（同步路径用）。 */
+  recordStep(name: LifecycleStepName, ok: boolean, reason?: string, durationMs = 0): void {
+    this.machine.recordStep(name, ok, reason, durationMs)
+  }
+
+  /**
+   * 生命周期视图 —— 面板与路由消费的「步骤流 + 迁移史 + 被拒迁移」。
+   *
+   * 三样东西放在一起才是可诊断的：只看当前阶段回答不了「为什么没恢复」，
+   * 只看迁移史看不出「哪一步卡了多久」。
+   */
+  lifecycleView(): {
+    stage: string
+    stabilityScore: number
+    transitions: readonly unknown[]
+    steps: readonly unknown[]
+    openSteps: readonly string[]
+    rejected: readonly unknown[]
+  } {
+    return {
+      stage: this.machine.stage,
+      stabilityScore: this.machine.stabilityScore(),
+      transitions: this.machine.transitions,
+      steps: this.machine.steps,
+      openSteps: this.machine.openSteps(),
+      rejected: this.machine.rejectedTransitions,
+    }
+  }
+
+  /**
+   * 隔离视图 —— 当前分区 + 本 profile 下其它工作区的**引用**（不含它们的状态）。
+   *
+   * `others` 只给出键/标签/工作区路径：面板据此回答「还有谁在用这个 profile」，
+   * 但绝不把对方的状态读进来 —— 隔离在数据结构上就成立，不靠调用方自觉。
+   * 同时给出对方分区的产物路径清单，作为「互不可见」可断言的对照面。
+   */
+  isolationView(): {
+    profile: string
+    workspace: string
+    projectKey: string
+    current: unknown
+    others: Array<Record<string, unknown>>
+    isolated: boolean
+    exclusive: boolean
+    artifacts: string[]
+    foreignArtifacts: Array<{ key: string; label: string; paths: string[] }>
+  } {
+    const view = isolationView(this.profileDir, this.workspace)
+    return {
+      profile: this.profileName,
+      workspace: this.workspace,
+      projectKey: this.projectKey,
+      current: view.current,
+      others: view.others.map((p) => ({
+        key: p.key,
+        label: p.label,
+        workspace: p.workspace,
+        lastSeenAt: p.lastSeenAt,
+      })),
+      isolated: view.isolated,
+      exclusive: view.exclusive,
+      artifacts: partitionArtifacts(this.profileDir, this.projectKey),
+      foreignArtifacts: view.others.map((p) => ({
+        key: p.key,
+        label: p.label,
+        paths: partitionArtifacts(this.profileDir, p.key),
+      })),
+    }
   }
 
   // ---------- bundle facts ----------
@@ -463,6 +664,12 @@ class Guard {
       // Install the guarded rows BEFORE anything can crash, so the next boot
       // can keep a suspect plugin from loading at all. Synchronous by design.
       const installed = installGuardedRows(this.profileDir, this.patchPath)
+      // 步骤留痕走**同步**：这里是崩溃路径的入口，await 之后进程可能已经死了。
+      this.recordStep(
+        'install-guarded-rows',
+        installed.blocked === undefined,
+        installed.blocked ?? `新增 ${installed.added.length} 行 / 跳过 ${installed.skipped.length} 行`,
+      )
       if (installed.added.length > 0) {
         this.store.appendSync({
           kind: 'note',
@@ -488,8 +695,14 @@ class Guard {
         this.store.appendSync({ kind: 'update', bundle: u.name, version: u.to, prevVersion: u.from })
       }
       this.store.writeSnapshotSync(current)
-    } catch {
+      this.recordStep(
+        'startup-record',
+        true,
+        `崩溃哨兵 ${sentinel ? `退出码 ${sentinel.exitCode}` : '无'}；安装 ${install.length} / 更新 ${update.length}`,
+      )
+    } catch (error) {
       /* best effort: the journal must never break the host's startup */
+      this.recordStep('startup-record', false, describeError(error))
     }
   }
 
@@ -515,7 +728,6 @@ class Guard {
       const ranked = this.rankedSuspectsSync()
       const n = Math.min(Math.max(1, seq), Math.max(1, this.config.maxAutoDisable))
       const targets = pickSuspects(ranked, n)
-
       this.store.appendSync({
         kind: 'crash-detected',
         detail: `第 ${seq} 次崩溃（退出码 ${exitCode}）`,
@@ -548,7 +760,13 @@ class Guard {
           crashSeq: seq,
         })),
       })
+      // 崩溃路径是**同步**的：进入/退出由一条闭合区间表达（这里没时间做两段式，
+      // 进程随时会死，留一条永远闭合不了的区间反而是假数据）。
+      this.recordStep('crash-decision', true, `第 ${seq} 次崩溃 → 关闭 ${targets.map((t) => t.bundle).join(', ') || '无'}`)
     } catch (error) {
+      // 崩溃路径失败必须留痕（步骤 + stderr 双通道）：决策没发出去意味着
+      // 下次启动还会重演同一次崩溃，这是最需要被看见的失败。
+      this.recordStep('crash-decision', false, describeError(error))
       // The crash is already recorded by the sentinel; report why the decision
       // could not be published, because a silent failure here means the crash
       // will repeat on the next boot.
@@ -571,6 +789,20 @@ class Guard {
    * for this: the host disposes fibers on a crash too.
    */
   async boot(): Promise<void> {
+    this.beginStep('boot')
+    try {
+      await this.bootInner()
+      this.endStep('boot', true, '启动流程完成')
+    } catch (error) {
+      // 失败必须带原因留痕：只有「阶段停在 monitoring」的话，没人知道
+      // 是崩溃检测失败、变更记录失败还是恢复失败。
+      this.endStep('boot', false, describeError(error))
+      throw error
+    }
+  }
+
+  /** Boot 的实现体（外层负责步骤计时与失败原因留痕）。 */
+  private async bootInner(): Promise<void> {
     await this.store.init()
     const state = await this.store.readState()
     const sentinel = readSentinel(this.store.partitionPath)
@@ -601,8 +833,6 @@ class Guard {
     } catch (err) {
       this.ctx.logger.warn(`[recency-guard] 记录插件变更失败：${describeError(err)}`)
     }
-
-
 
     if (recovering && !crashedLastRun) {
       // The profile booted with the suspect(s) disabled and SURVIVED the boot,
@@ -729,7 +959,10 @@ class Guard {
 
   /** Snapshot a bundle's merged config (inherited + override) from the config editor. */
   private snapshotConfig(bundle: string): unknown {
-    const rows = this.ce.configuration()
+    // 服务缺席（可选依赖）⇒ 没有备份，而不是抛异常：备份是 best-effort，
+    // 关闭嫌疑插件的业务动作不该因为拿不到配置就中断。
+    if (!this.configEditor) return undefined
+    const rows = this.configEditor.configuration()
     const match = rows.filter((r) => r.entry?.name === bundle)
     if (match.length === 0) return undefined
     return match.map((r) => ({ entry: r.entry, inherited: r.inherited, override: r.override }))
@@ -741,6 +974,19 @@ class Guard {
    * from the backup taken before the disable.
    */
   async restore(): Promise<unknown> {
+    this.beginStep('restore')
+    try {
+      const result = await this.restoreInner()
+      this.endStep('restore', true, `恢复 ${(result as { reenabled?: string[] })?.reenabled?.length ?? 0} 个`)
+      return result
+    } catch (error) {
+      this.endStep('restore', false, describeError(error))
+      throw error
+    }
+  }
+
+  /** Restore 的实现体（外层负责步骤计时与失败原因留痕）。 */
+  private async restoreInner(): Promise<unknown> {
     const state = await this.store.readState()
     const auto = state.autoDisabled
     this.machine.transition('stabilizing', '崩溃后成功启动，准备恢复配置')
@@ -830,8 +1076,10 @@ class Guard {
   async shutdown(): Promise<void> {
     try {
       await this.store.updateState((s) => ({ ...s, bootMarker: null }))
-    } catch {
+      this.recordStep('shutdown', true, '退出清理完成')
+    } catch (error) {
       /* best-effort: a crashed run simply leaves the marker for the next boot */
+      this.recordStep('shutdown', false, describeError(error))
     }
   }
 
@@ -903,10 +1151,10 @@ class Guard {
   /**
    * 实际注册出去的对外名称。
    *
-   * 由**注册处**收集（不是手写常量表）：工具名在 `ctx.tools.register` 处登记，
-   * 路由路径在 `registerRoutes` 处登记。启动时用 `verifyCapabilityContract`
-   * 与能力清单**双向**比对 —— 清单有而没注册（漏登）、注册了而清单没提（虚登）
-   * 都会被自动发现并响亮记录。
+   * 由**注册处**收集（不是手写常量表）：工具名来自注册表 `TOOL_SURFACE`
+   * （`ctx.tools.register` 用的就是它），路由名由 `registerRoutes` 在**真的**
+   * 注册成功时回调登记。启动时用 `verifyContract` 与能力清单**双向**比对 ——
+   * 清单有而没注册（漏登）、注册了而清单没提（虚登）都会被自动发现并记录。
    */
   private readonly actuallyRegistered = new Set<string>()
 
@@ -916,49 +1164,150 @@ class Guard {
   }
 
   /**
-   * 启动时的契约自检。
+   * 启动时的契约自检（**双向**）。
+   *
+   * 两道门：
+   * 1. `verifySurfaceAlignment`：清单 ↔ 注册表（工具名/action、路由、宿主服务依赖）
+   *    双向比对 —— 这是**结构**层面的门，不依赖运行时是否真的注册成功；
+   * 2. `verifyCapabilityContract`：清单声明的对外名称 ↔ 现场实际注册出来的名称 ——
+   *    这是**事实**层面的门（webServer 缺席时路由不注册，这里也不该谎报）。
    *
    * 只记日志不抛异常 —— 契约缺口是要被**看见并修**的，不是要让守护流程挂掉。
    */
-  verifyContract(): { missing: string[]; extra: string[]; ok: boolean } {
-    const result = verifyCapabilityContract(buildCapabilityGraph(), this.actuallyRegistered)
-    if (!result.ok) {
-      const missing = result.missing.length > 0 ? `清单声明但未注册：${result.missing.join(', ')}` : ''
-      const extra = result.extra.length > 0 ? `已注册但清单未声明：${result.extra.join(', ')}` : ''
+  verifyContract(injectedServices: Iterable<string> = []): {
+    ok: boolean
+    gaps: Array<{ kind: string; subject: string; detail: string }>
+    missing: string[]
+    extra: string[]
+  } {
+    const graph = buildCapabilityGraph()
+    const alignment = verifySurfaceAlignment(graph, currentRegistrationSurface(), injectedServices)
+    const runtime = verifyCapabilityContract(graph, this.actuallyRegistered)
+    if (!alignment.ok) {
+      this.ctx.logger.warn(
+        `[recency-guard] 能力注册面不一致（${alignment.gaps.length} 处）—— ${alignment.gaps
+          .slice(0, 8)
+          .map((g) => `${g.kind}:${g.subject}`)
+          .join(', ')}`,
+      )
+    }
+    if (!runtime.ok) {
+      const missing = runtime.missing.length > 0 ? `清单声明但未注册：${runtime.missing.join(', ')}` : ''
+      const extra = runtime.extra.length > 0 ? `已注册但清单未声明：${runtime.extra.join(', ')}` : ''
       this.ctx.logger.warn(`[recency-guard] 能力契约不一致 —— ${missing}${missing && extra ? '；' : ''}${extra}`)
     }
-    return result
+    return {
+      ok: alignment.ok && runtime.ok,
+      gaps: alignment.gaps,
+      missing: runtime.missing,
+      extra: runtime.extra,
+    }
   }
 
   /**
-   * 归档重置 —— 归档当前产物并以最新事实从头开始。
+   * 归档重置 —— 归档当前产物，然后**以最新项目事实重跑**。
    *
-   * 归档不删除证据（manifest 记录归档了什么），但**不继承**旧结论：
-   * 崩溃计数归零、决策清空，下一次启动按当前 node_modules 重新推导嫌疑。
+   * 归档不删除证据（manifest 记录归档了什么，含搬不动的条目），但**不继承**
+   * 旧结论：崩溃计数归零、决策清空、状态机强制复位，随后立刻按当前
+   * node_modules / profile 清单重新推导一轮事实。
+   *
+   * 为什么复位必须强制（`machine.reset` 而不是 `transition`）：上一轮可能停在
+   * `crashed`，而白名单里没有 `crashed → idle` 的路 —— 用 `transition` 会静默
+   * 失败，界面继续显示「崩溃」，旧结论换个方式继续生效。
    */
   async archiveReset(reason: string): Promise<unknown> {
-    const result = archiveAndReset(this.store.partitionPath, this.workspace, reason)
-    // 重置后状态机回到空闲 —— 旧结论不再生效。
-    this.machine.transition('idle', `归档重置：${reason}`)
-    await this.store.append({ kind: 'note', detail: `归档重置（${reason}），归档目录 ${result.archiveDir}` })
-    return {
-      ok: true,
-      archiveDir: result.archiveDir,
-      count: result.count,
-      manifest: result.manifest,
+    this.beginStep('archive')
+    try {
+      const result = archiveAndReset(this.store.partitionPath, this.workspace, reason)
+      this.machine.reset(`归档重置：${reason}`)
+      await this.store.append({
+        kind: 'note',
+        detail: `归档重置（${reason}），归档目录 ${result.archiveDir}${
+          result.skipped.length > 0 ? `，留在原地：${result.skipped.join(', ')}` : ''
+        }`,
+      })
+      this.endStep('archive', true, `搬走 ${result.count} 项`)
+      // 无等待地继续重跑：归档的语义是「重新开始执行」，不是「归完就停」。
+      const basis = await this.rerunWithCurrentFacts(`归档后按最新事实重跑（${reason}）`)
+      return {
+        ok: true,
+        archiveDir: result.archiveDir,
+        count: result.count,
+        skipped: result.skipped,
+        manifest: result.manifest,
+        basis,
+      }
+    } catch (error) {
+      this.endStep('archive', false, describeError(error))
+      throw error
     }
   }
 
-  /** 列出归档。 */
+  /**
+   * 以**最新项目事实**重跑一轮基线（自举 / 举他的共同入口）。
+   *
+   * 重跑只认当前事实：从 profile 的 package.json + node_modules 重新读出
+   * 已安装插件与版本，写进新快照，并落一条基线事件。历史产物不参与 ——
+   * 它们已经被归档到 `archive/<时间戳>/`（需要对照时**显式**读取清单）。
+   */
+  async rerunWithCurrentFacts(reason: string): Promise<{
+    at: string
+    workspace: string
+    projectKey: string
+    bundles: Array<{ name: string; version?: string }>
+    journalEvents: number
+    archived: number
+  }> {
+    this.beginStep('rerun')
+    try {
+      const current = bundleVersionsSync(this.profileDir)
+      const bundles = Object.entries(current)
+        .map(([name, version]) => ({ name, version }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+      // 新快照 = 当前事实；旧快照已随归档搬走（不继承）。
+      this.store.writeSnapshotSync(current)
+      writePointer(this.profileDir, this.projectKey, this.store.partitionPath)
+      this.store.appendSync({
+        kind: 'note',
+        detail: `新循环基线（${reason}）：${bundles.length} 个已安装插件，工作区 ${this.workspace}`,
+      })
+      const journalEvents = this.store.readJournalSync(1000).length
+      const archived = listArchives(this.store.partitionPath).length
+      const basis = {
+        at: new Date().toISOString(),
+        workspace: this.workspace,
+        projectKey: this.projectKey,
+        bundles,
+        journalEvents,
+        archived,
+      }
+      this.endStep('rerun', true, `基线：${bundles.length} 个插件 · ${archived} 份归档`)
+      return basis
+    } catch (error) {
+      this.endStep('rerun', false, describeError(error))
+      throw error
+    }
+  }
+
+  /** 列出归档（带 manifest 摘要 —— 举他对照时的事实基线）。 */
   async archives(): Promise<unknown> {
-    return { archives: listArchives(this.store.partitionPath) }
+    return {
+      archives: listArchives(this.store.partitionPath).map((a) => ({
+        ...a,
+        summary: readArchiveManifest(a.dir)?.summary,
+      })),
+    }
   }
 
   async status(): Promise<unknown> {
     const state = await this.store.readState()
     const ranked = await this.rankedSuspects()
+    const lifecycle = this.lifecycleView()
     return {
       profile: this.profileName,
+      // cycle-4 T03：命令窗口的隔离归因 —— 这次守护是哪个项目的事实。
+      workspace: this.workspace,
+      projectKey: this.projectKey,
       dshVersion: safeVersion(),
       enabled: this.config.enabled,
       crashedLastRun: state.crashedRun === true,
@@ -971,6 +1320,17 @@ class Guard {
       decisionFile: DECISION_RELATIVE_PATH,
       suspectRanking: ranked.slice(0, 10),
       experimentalSuspects: ranked.filter((r) => isExperimentalName(r.bundle)).map((r) => r.bundle),
+      // 生命周期步骤流：不只报「现在什么状态」，还报「做过哪些步、哪步失败过」。
+      lifecycle: {
+        stage: lifecycle.stage,
+        stabilityScore: lifecycle.stabilityScore,
+        steps: lifecycle.steps.slice(-12),
+        openSteps: lifecycle.openSteps,
+        rejectedTransitions: lifecycle.rejected.slice(-5),
+        lastTransition: lifecycle.transitions[lifecycle.transitions.length - 1] ?? null,
+      },
+      // 可选服务可用性：诚实报告（false = 备份能力降级，不是错误）。
+      configEditorAvailable: this.configEditorAvailable,
     }
   }
 }

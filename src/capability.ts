@@ -35,6 +35,7 @@ export type FactKind =
   | 'metric' // 量化指标事实
   | 'state' // 生命周期状态事实
   | 'graph' // 图谱节点/边事实
+  | 'archive' // 归档留档事实（清单 + 搬走记录）
 
 /** 事实的载体类型。 */
 export type FactCarrier =
@@ -68,8 +69,32 @@ export interface CapabilityRecord {
   stage: string
   /** 是否为对外暴露的能力（工具 / 远程方法）。 */
   exposed: boolean
-  /** 暴露时的名称（工具名 / 远程方法名）。 */
+  /**
+   * 暴露时的主名称（工具名 / 客户端面名 / 服务名）。
+   *
+   * 一个能力可以有多条暴露路径（例如「手动恢复」既走工具 action，也走
+   * HTTP 动作路由），因此主名称之外还有 `exposedAlsoAs` —— 二者并集才是
+   * 该能力声明的**全部对外名称**。契约测试按并集与注册面双向比对。
+   */
   exposedAs?: string
+  /** 次要对外名称（路由/别称）；与 `exposedAs` 并集参与契约比对。 */
+  exposedAlsoAs?: readonly string[]
+  /**
+   * 该能力经工具暴露时的 action 列表。
+   *
+   * 工具是**一个**注册名（`TOOL_SURFACE.name`）承载多个业务动作的载体，
+   * 因此「注册面 ⊃ 清单」在工具侧必须细化到 action：声明了不存在的
+   * action、或注册了没人声明的 action，都是真实缺口。
+   */
+  exposedActions?: readonly string[]
+  /**
+   * 该能力依赖的**宿主服务名**（inject 面）。
+   *
+   * 声明依赖而不是从 inject 数组猜：契约测试做双向核对 ——
+   * 声明的服务必须真的在 inject 面上（否则能力写的是空气依赖），
+   * inject 面上的服务也必须被至少一个能力声明（否则是无人解释的注入）。
+   */
+  hostServices?: readonly string[]
 }
 
 /**
@@ -163,6 +188,12 @@ export class CapabilityGraph {
           overproduced.push({ kind: 'over-production', capability: record.id, detail: downstream })
         }
       }
+      // 生产无人消费：非暴露能力若没有任何消费方，它的产出永远不会被读到 ——
+      // 「产出浪费」的实质形态。归入 overproduced（同一语义家族）而不是新开
+      // 一类，避免面板/图谱的既有缺口投影漏掉它。
+      if (!record.exposed && record.consumedBy.length === 0) {
+        overproduced.push({ kind: 'over-production', capability: record.id, detail: '产出无人消费' })
+      }
       if (record.consumes.length === 0 && record.consumedBy.length === 0) {
         isolated.push({ kind: 'isolated', capability: record.id, detail: record.title })
       }
@@ -200,4 +231,64 @@ export interface CapabilityAnalysis {
   isolated: CapabilityGap[]
   /** 连通率 ∈ [0,1]。 */
   connectivity: number
+}
+
+/**
+ * 工具对外面注册表 —— **暴露名称的唯一定义处**。
+ *
+ * 为什么放在这里而不是 `capability-specs.ts`
+ * ----------------------------------------
+ * `capability-specs.ts` 是**投影**（清单），它不能同时是注册真值，否则
+ * 「清单与注册不一致」这句话就没有意义了（自己核对自己永远一致）。
+ * 注册真值必须在**注册处**：`apply()` 用 `TOOL_SURFACE.name` / `.actions`
+ * 调 `defineTool`，因此这份表面**先于注册存在**，是注册的输入而不是副本。
+ *
+ * 契约测试据此做双向比对：
+ *   - 注册 ⊃ 清单：`TOOL_SURFACE.actions` 里每个 action 都必须被某个能力声明；
+ *   - 清单 ⊃ 注册：每个声明走工具的能力，其 `exposedActions` 必须在该表内。
+ */
+export const TOOL_SURFACE = {
+  name: 'recency_guard',
+  /**
+   * 工具的 action 枚举。顺序即模型看到的选择顺序（status 在前：最常用）。
+   * `as const` 保留字面量类型，注册处展开成数组喂给 schema。
+   */
+  actions: ['status', 'history', 'recover', 'restore', 'reenable', 'backups', 'archive', 'archives'],
+} as const
+
+/** 工具 action 的字面量类型。 */
+export type ToolAction = (typeof TOOL_SURFACE.actions)[number]
+
+/**
+ * 一个能力声明的**全部对外名称**（主名称 ∪ 次要名称）。
+ *
+ * 单独抽出来是因为「注册面 ⊃ 清单」与「清单 ⊃ 注册」两侧都必须用同一个
+ * 并集口径比对；任何一侧漏掉 `exposedAlsoAs` 都会让多暴露路径的能力
+ * 被误报成缺口。
+ */
+export function exposedNamesOf(record: CapabilityRecord): string[] {
+  const names: string[] = []
+  if (typeof record.exposedAs === 'string' && record.exposedAs !== '') names.push(record.exposedAs)
+  for (const extra of record.exposedAlsoAs ?? []) {
+    if (extra !== '' && !names.includes(extra)) names.push(extra)
+  }
+  return names
+}
+
+/** 图里所有能力声明的对外名称集合。 */
+export function declaredExposedNames(graph: CapabilityGraph): Set<string> {
+  const out = new Set<string>()
+  for (const record of graph.all()) {
+    for (const name of exposedNamesOf(record)) out.add(name)
+  }
+  return out
+}
+
+/** 图里所有能力声明的宿主服务依赖（inject 面）。 */
+export function declaredHostServices(graph: CapabilityGraph): Set<string> {
+  const out = new Set<string>()
+  for (const record of graph.all()) {
+    for (const service of record.hostServices ?? []) out.add(service)
+  }
+  return out
 }

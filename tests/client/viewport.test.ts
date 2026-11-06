@@ -6,9 +6,16 @@ import {
   clampPan,
   clampScale,
   centerOf,
+  centerOn,
   clipToRect,
+  curveControl,
+  curveEdgePath,
   fitToView,
+  matchNodes,
+  midpointOfQuadratic,
   panBy,
+  parallelCurvature,
+  parallelIndexes,
   screenToWorld,
   traceFrom,
   worldToScreen,
@@ -16,7 +23,9 @@ import {
   zoomBy,
   type Rect,
 } from '../../src/client/viewport.ts'
-import { shapePath } from '../../src/client/GuardGraph.tsx'
+// 图谱的纯数学已从 GuardGraph.tsx 抽到 graph-model.ts（组件拆分的产物）：
+// 测试要跟着**定义**走，而不是跟着某个消费它的组件走 —— 组件还会继续搬。
+import { shapePath } from '../../src/client/graph-model.ts'
 import { detectClientLang, t, setLocaleFromHost } from '../../src/client/i18n.ts'
 import { isSnapshot, isGraph } from '../../src/client/api.ts'
 
@@ -144,6 +153,118 @@ function main() {
   const miss = clipToRect(0, 0, 10, 10, { x: 200, y: 200, w: 100, h: 100 })
   check('a missing intersection returns the original endpoint', miss.x === 10 && miss.y === 10, miss)
 
+  console.log('\n== curved edges (cycle v2) ==')
+  // 零曲率 = 直线（与旧行为一致，老数据不变形）。
+  check('zero curvature produces a straight line', curveEdgePath(0, 0, 100, 0, 0) === 'M 0 0 L 100 0', curveEdgePath(0, 0, 100, 0, 0))
+  // 曲率沿法线方向推开控制点：水平边的控制点应在正上方或正下方。
+  const c1 = curveControl(0, 0, 100, 0, 20)
+  check('a positive curvature bows the control point off the line', c1.x === 50 && Math.abs(c1.y) === 20, c1)
+  const c2 = curveControl(0, 0, 100, 0, -20)
+  check('a negative curvature bows the other way', c1.y === -c2.y, { c1, c2 })
+  // 端点重合：控制点退化为中点（不除零）。
+  const c3 = curveControl(50, 50, 50, 50, 20)
+  check('coincident endpoints degrade to the midpoint', c3.x === 50 && c3.y === 50, c3)
+  // 路径指令：曲线用 Q，直线用 L。
+  check('a curved path uses the Q command', curveEdgePath(0, 0, 100, 0, 20).includes('Q'), curveEdgePath(0, 0, 100, 0, 20))
+  // 贝塞尔中点闭式公式：t=0.5 时 0.25A + 0.5C + 0.25B。
+  const mid = midpointOfQuadratic(0, 0, 50, 20, 100, 0)
+  check('the quadratic midpoint matches the closed form', mid.x === 50 && Math.abs(mid.y - 10) < 1e-9, mid)
+
+  console.log('\n== parallel edge curvatures (cycle v2) ==')
+  const pEdges = [
+    { from: 'a', to: 'b' },
+    { from: 'b', to: 'a' },
+    { from: 'a', to: 'b' },
+  ]
+  const pIdx = parallelIndexes(pEdges)
+  check('parallel indexes count prior siblings', pIdx[0] === 0 && pIdx[1] === 1 && pIdx[2] === 2, pIdx)
+  // 互逆边视为同一端点对：a→b 与 b→a 是第 0、1 条同伙边。
+  check('reciprocal edges share the endpoint pair', pIdx[1] === 1, pIdx)
+  check('the first parallel edge stays straight', parallelCurvature(0) === 0)
+  const pos = parallelCurvature(1)
+  const neg = parallelCurvature(2)
+  check('odd siblings bow one way and even siblings the other', pos > 0 && neg < 0 && Math.abs(pos) === Math.abs(neg), { pos, neg })
+  check('magnitude grows with the sibling index', Math.abs(parallelCurvature(3)) > Math.abs(parallelCurvature(1)))
+  const lone = parallelIndexes([{ from: 'x', to: 'y' }])
+  check('a lone edge has no curvature', parallelCurvature(lone[0] ?? 0) === 0)
+
+  console.log('\n== search matching (cycle v2) ==')
+  const searchable = [
+    { id: 'guard.present.panel', label: '管理面板', ref: 'guard.present.panel' },
+    { id: 'guard.tool.panel', label: '面板入口', ref: 'guard.tool.panel' },
+    { id: 'guard.observe.metrics', label: '量化指标', ref: 'guard.observe.metrics' },
+  ]
+  check('an empty query matches nothing', matchNodes(searchable, '').length === 0)
+  check('a whitespace query matches nothing', matchNodes(searchable, '   ').length === 0)
+  // 精确 id 命中优先于标签子串。
+  const exact = matchNodes(searchable, 'guard.present.panel')
+  check('an exact id match ranks first', exact[0]?.id === 'guard.present.panel', exact.map((n) => n.id))
+  const prefix = matchNodes(searchable, 'guard.tool')
+  check('a prefix match beats a substring match', prefix[0]?.id === 'guard.tool.panel', prefix.map((n) => n.id))
+  const byLabel = matchNodes(searchable, '面板')
+  check('a label substring matches both panels', byLabel.length === 2, byLabel.map((n) => n.id))
+  check('the limit caps the result count', matchNodes(searchable, 'guard', 2).length === 2)
+
+  console.log('\n== centring on a node (cycle v2) ==')
+  const centeredOn = centerOn({ scale: 1, tx: 0, ty: 0 }, { width: 800, height: 600 }, { x: 100, y: 50 })
+  check(
+    'centring puts the world point at the viewport centre',
+    worldToScreen(centeredOn, { x: 100, y: 50 }).x === 400 && worldToScreen(centeredOn, { x: 100, y: 50 }).y === 300,
+    centeredOn,
+  )
+  const zoomedCenter = centerOn({ scale: 1, tx: 0, ty: 0 }, { width: 800, height: 600 }, { x: 100, y: 50 }, 2)
+  check('centring can retarget the scale', zoomedCenter.scale === 2, zoomedCenter)
+  check(
+    'the anchor stays centred after retargeting',
+    worldToScreen(zoomedCenter, { x: 100, y: 50 }).x === 400,
+    worldToScreen(zoomedCenter, { x: 100, y: 50 }),
+  )
+
+  console.log('\n== graph neighbor derivation (cycle-4 T04) ==')
+  // 邻居派生与 GuardGraph 内的 useMemo 同一逻辑（可见边 + 可见节点过滤，
+  // 自环不算邻居）：上游 = 指向我的边；下游 = 我指出的边；端点不可见时不算邻居。
+  const neighborEdges = [
+    { from: 'guard.observe.metrics', to: 'guard.present.panel' },
+    { from: 'guard.decide.risk', to: 'guard.present.panel' },
+    { from: 'guard.present.panel', to: 'guard.present.panel' }, // 自环：不算邻居
+    { from: 'ghost.unknown', to: 'guard.present.panel' }, // 端点不在节点表里
+  ]
+  const neighborNodes = [
+    { id: 'guard.observe.metrics' },
+    { id: 'guard.decide.risk' },
+    { id: 'guard.present.panel' },
+    // 真正孤立（无任何边触及）的节点：必须在节点表里，否则「无边节点」
+    // 断言对不存在的东西恒真——空洞为真不是证据（cycle-4 修复）。
+    { id: 'guard.tool.lonely' },
+  ]
+  const nodeIds = new Set(neighborNodes.map((n) => n.id))
+  const focus = 'guard.present.panel'
+  const upstream = [
+    ...new Set(
+      neighborEdges.filter((e) => e.to === focus && e.from !== focus && nodeIds.has(e.from)).map((e) => e.from),
+    ),
+  ]
+  const downstream = [
+    ...new Set(
+      neighborEdges.filter((e) => e.from === focus && e.to !== focus && nodeIds.has(e.to)).map((e) => e.to),
+    ),
+  ]
+  check('upstream neighbours are the edges pointing at the focus', upstream.length === 2, upstream)
+  check('a ghost endpoint is not a neighbour', !upstream.includes('ghost.unknown'))
+  check('a self-loop does not make the node its own neighbour', !upstream.includes(focus) && !downstream.includes(focus), { upstream, downstream })
+  check('downstream neighbours follow outgoing edges', downstream.length === 0, downstream)
+  check('a node with no edges has no neighbours',
+    (() => {
+      // 真正孤立（无任何边触及）的节点：上游与下游都为空。
+      const lonelyId = 'guard.tool.lonely'
+      // 先钉「它在表里」，否则空集断言对幽灵 id 恒真。
+      if (!nodeIds.has(lonelyId)) return false
+      const lonelyIn = neighborEdges.filter((e) => e.to === lonelyId && e.from !== lonelyId && nodeIds.has(e.from)).map((e) => e.from)
+      const lonelyOut = neighborEdges.filter((e) => e.from === lonelyId && e.to !== lonelyId && nodeIds.has(e.to)).map((e) => e.to)
+      return lonelyIn.length === 0 && lonelyOut.length === 0
+    })(),
+  )
+
   console.log('\n== i18n ==')
   const lang = detectClientLang()
   check('the detected language is a known one', lang === 'zh' || lang === 'en', lang)
@@ -153,6 +274,14 @@ function main() {
   check('a missing key falls back to the key itself', missing === 'does.not.exist', missing)
   check('interpolation substitutes the placeholder', t('archives.entries', { count: 7 }).includes('7'), t('archives.entries', { count: 7 }))
   check('the host locale sync is callable', (() => { setLocaleFromHost('en'); return true })())
+  // cycle v2 新键：图例（kind.*）与 KPI 文案走字典，缺失时回退键本身（看得见）。
+  check('the graph kind legend keys are translated', t('graph.kind.capability') !== 'graph.kind.capability', t('graph.kind.capability'))
+  check('the search placeholder is translated', t('graph.search') !== 'graph.search', t('graph.search'))
+  check('the CUSUM metric label is translated', t('metrics.changePoint') !== 'metrics.changePoint', t('metrics.changePoint'))
+  // cycle-4 新键：邻居导航、崩溃压力、归档摘要、分区路径。
+  check('the neighbor group keys are translated', t('graph.neighborsUp') !== 'graph.neighborsUp' && t('graph.neighborsDown') !== 'graph.neighborsDown', { up: t('graph.neighborsUp'), down: t('graph.neighborsDown') })
+  check('the crash pressure label is translated', t('metrics.crashPressure') !== 'metrics.crashPressure', t('metrics.crashPressure'))
+  check('the archive summary keys are translated', t('archives.summaryCrashes', { count: 3 }).includes('3'), t('archives.summaryCrashes', { count: 3 }))
 
   console.log('\n== response shape validation ==')
   check('a snapshot shape is accepted', isSnapshot({ at: '2026-01-01', stage: 'monitoring' }))

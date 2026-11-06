@@ -102,17 +102,34 @@ export function integratePanel(ctx: unknown): void {
   }
   if (typeof window !== 'undefined') window.__RECENCY_GUARD__ = telemetry
 
-  if (!hasSlotsApi((ctx as { slots?: unknown })?.slots)) {
-    telemetry.skipped = 'slots-absent'
+  // 【cordis ctx 代理红线】未提供的服务属性，**读取本身就会抛**（不是返回
+  // undefined）—— 0.5.0 沙箱实测，这一处未保护访问让 entry fiber FAILED。
+  // 因此 slots/locale 的存在性检测必须整段 try/catch，缺席即诚实降级。
+  let slotsApi: SlotsApi | null = null
+  let localeApi: LocaleApi | null = null
+  try {
+    const slots = (ctx as { slots?: unknown }).slots
+    if (hasSlotsApi(slots)) slotsApi = slots as SlotsApi
+  } catch {
+    telemetry.skipped = 'slots-unavailable'
+  }
+  try {
+    const locale = (ctx as { locale?: unknown }).locale
+    if (locale && typeof (locale as LocaleApi).register === 'function') localeApi = locale as LocaleApi
+  } catch {
+    /* locale 服务缺席 ⇒ 用内置字典 */
+  }
+
+  if (slotsApi === null) {
+    telemetry.skipped = telemetry.skipped ?? 'slots-absent'
     return
   }
-  const api = (ctx as { slots: unknown }).slots as SlotsApi
+  const api = slotsApi
 
   // 文案字典（缺席 locale 服务时退回内置字典）。
-  const locale = (ctx as { locale?: LocaleApi }).locale
-  if (locale && typeof locale.register === 'function') {
+  if (localeApi) {
     try {
-      const dispose = locale.register(NAMESPACE, registerDictionaries())
+      const dispose = localeApi.register(NAMESPACE, registerDictionaries())
       ;(ctx as { effect?: (fn: () => unknown, label?: string) => unknown }).effect?.(
         () => dispose,
         'recency-guard: dictionaries',
@@ -122,54 +139,106 @@ export function integratePanel(ctx: unknown): void {
     }
   }
 
-  let registrationDisposer: (() => void) | null = null
-
-  const doRegister = (): void => {
-    if (telemetry.registered) return
+  /**
+   * 注册一次面板席位（幂等）。
+   *
+   * 契约对照（0.5.0 沙箱实测 + 官方 dsh-client-ui-plugin-manager 逐行核验）：
+   * `ctx.slots.inject(slot, callback)` 的 callback 是**生成器函数** —— 宿主
+   * 逐条 `yield` 注册项并在卸载时执行剩余 yield 的 disposer。传普通函数在
+   * 宿主调用 `.next()` 时抛错，整个 entry 以 failed 收场（面板全灭）。
+   *
+   * 幂等用**同步标志**（attempted）而不是 registered：宿主会为每个 inject 声明
+   * 各调一次回调（main 与 sidebar.panellist 各一次），且注册是同步完成的 ——
+   * 若等 register 成功后才置位，两次回调交错时会把同一个 key 注册两遍
+   * （keyed slot 直接抛 duplicate）。attempted 在生成器第一次被拉起时就置位。
+   */
+  let attempted = false
+  const registerOnce = function* (): Generator<unknown, void, void> {
+    if (attempted) return
+    attempted = true
+    // register 的异常必须就地捕获并写 telemetry：生成器里抛错会沿 cordis
+    // effect 协议把整个 entry fiber 打成 FAILED（面板全灭）—— 而注册失败
+    // 只是「面板缺席」，不该拖垮宿主会话（0.5.0 沙箱实测：一次 register
+    // 契约不匹配让 entry failed，且前端只显示 "failed" 无细节）。
     try {
-      // 中央面板：根作用域的 keyed 席位，自己的 key。
       const panelRegistration = api.register(
         { name: 'main', key: PANEL_ID, order: 20, label: () => t('panel.title'), locale: NAMESPACE },
         () => createElement(GuardPanel, { fetchSnapshot, fetchGraph, fetchArchives, postAction }),
       )
+      if (typeof panelRegistration === 'function') yield panelRegistration
       // 侧栏图标：id 必须与 main 的 key 一致。
       const iconRegistration = api.register(
         { name: 'sidebar.panellist', id: PANEL_ID, order: 20, label: () => t('panel.title'), locale: NAMESPACE },
         () => createElement(GuardPanelIcon),
       )
-      const disposers = [panelRegistration, iconRegistration].filter(
-        (d): d is () => void => typeof d === 'function',
-      )
-      registrationDisposer = () => {
-        for (const dispose of disposers.reverse()) {
-          try {
-            dispose()
-          } catch {
-            /* 注销失败不影响其它注册 */
-          }
-        }
-      }
+      if (typeof iconRegistration === 'function') yield iconRegistration
       telemetry.registered = true
     } catch (error) {
-      // 重复 id 会走到这里（而不是静默覆盖）—— 这是唯一的错误通道。
+      telemetry.error = error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  const registerOncePlain = (): void => {
+    // 回退形态：老宿主的 slots.inject 只接受普通函数 —— 消费生成器直到耗尽。
+    try {
+      for (const _step of registerOnce()) {
+        /* 逐条消费 yield 的 disposer；宿主托管不了就丢弃（会话生命周期兜底） */
+        void _step
+      }
+    } catch (error) {
       telemetry.error = error instanceof Error ? error.message : String(error)
     }
   }
 
   telemetry.unregister = (): void => {
-    if (registrationDisposer === null) return
-    registrationDisposer()
-    registrationDisposer = null
+    if (!telemetry.registered) return
+    // 生成器形态下注册项的 disposer 由宿主托管；这里只复位遥测。
     telemetry.registered = false
+    attempted = false
   }
   telemetry.reregister = (): void => {
-    if (!telemetry.registered) doRegister()
+    if (!telemetry.registered) registerOncePlain()
   }
 
   // 席位由宿主其它插件声明 ⇒ 注册必须放在 inject 回调里。
+  // 两种 slot 的回调形态不同（对照官方 plugin-manager）：
+  // - "main" 是 keyed 席位 ⇒ 生成器（yield 每条注册的 disposer）；
+  // - "sidebar.panellist" 是 list 席位 ⇒ **普通函数**直接返回 register 的 disposer。
+  //
+  // panellist 的声明表由 sidebar 包**渲染时**写入（renderSlot），且宿主在声明
+  // epoch 变化时会**反复调用**本回调 —— 所以这里每次被调都要尝试注册：
+  // 「not declared」意味着 sidebar 还没渲染（声明表未就绪），等下一次 epoch
+  // 变化即可；「duplicate key」意味着已经注册过，静默吞掉（幂等）。
+  // attempted 只防同一 epoch 内的重复调用；声明驱动的重注册是宿主契约。
+  let panelDisposer: (() => void) | null = null
+  const registerSidebar = (): (() => void) | undefined => {
+    try {
+      const iconRegistration = api.register(
+        { name: 'sidebar.panellist', id: PANEL_ID, order: 20, label: () => t('panel.title'), locale: NAMESPACE },
+        () => createElement(GuardPanelIcon),
+      )
+      telemetry.registered = true
+      telemetry.error = null
+      panelDisposer = typeof iconRegistration === 'function' ? iconRegistration : null
+      return panelDisposer ?? undefined
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // 已注册过（epoch 重放）⇒ 幂等成功；未声明（sidebar 未渲染）⇒ 等下次回调。
+      if (message.includes('already has an entry')) {
+        telemetry.registered = true
+        telemetry.error = null
+        return undefined
+      }
+      if (!message.includes('not declared')) telemetry.error = message
+      return undefined
+    }
+  }
   try {
-    api.inject('main', doRegister)
-    api.inject('sidebar.panellist', doRegister)
+    api.inject('main', registerOnce)
+    api.inject('sidebar.panellist', () => {
+      if (panelDisposer !== null) return undefined
+      return registerSidebar()
+    })
   } catch (error) {
     telemetry.error = error instanceof Error ? error.message : String(error)
   }

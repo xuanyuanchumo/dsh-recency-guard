@@ -1,0 +1,20 @@
+{
+  "flowId": "gate-check",
+  "current": "PASSED",
+  "history": [
+    {
+      "trigger": "run",
+      "from": "IDLE",
+      "to": "RUNNING",
+      "at": "2026-11-04T18:26:06.077Z"
+    },
+    {
+      "trigger": "all-pass",
+      "from": "RUNNING",
+      "to": "PASSED",
+      "at": "2026-11-04T18:26:06.077Z"
+    }
+  ],
+  "updatedAt": "2026-11-04T18:26:06.077Z",
+  "ledgerHead": null
+}

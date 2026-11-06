@@ -1,0 +1,30 @@
+[
+  {
+    "at": "2026-11-04T18:27:44.704Z",
+    "actor": "anic_reload_self",
+    "reason": "强制重载：dist 已更新为 v0.5.0（client CJS 包装 + 面板修复），桌面宿主 404 说明当前加载的还是旧半区，需要 hmr reconcile 拉起新 dist",
+    "status": "reloaded",
+    "fromRevision": "33cdda5662c04ef7",
+    "toRevision": "33cdda5662c04ef7",
+    "staleAtRequest": false,
+    "warnings": [],
+    "pending": [],
+    "restartReason": null,
+    "error": null,
+    "finalizedAt": "2026-11-04T18:27:50.281Z"
+  },
+  {
+    "at": "2026-11-05T17:16:21.594Z",
+    "actor": "anic_reload_self",
+    "reason": "dsh-recency-guard v0.6.0 已在沙箱完成全旅程验证（G0-G3 全 PASS），桌面端 profile 经 junction 直连源码 dist，请求宿主重载插件使 0.6.0 面板与工具生效",
+    "status": "reloaded",
+    "fromRevision": "3c0bb0b7b6f11dcb",
+    "toRevision": "30d6e0a38d7d997b",
+    "staleAtRequest": true,
+    "warnings": [],
+    "pending": [],
+    "restartReason": null,
+    "error": null,
+    "finalizedAt": "2026-11-05T17:16:22.537Z"
+  }
+]

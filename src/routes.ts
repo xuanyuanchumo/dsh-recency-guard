@@ -47,6 +47,17 @@ export interface RouteContext {
   reenable: (bundle: string) => Promise<unknown>
   /** 手动触发一次恢复。 */
   recover: () => Promise<unknown>
+  /** 项目隔离视图（分区列表 + 当前分区）。 */
+  isolation: () => Promise<unknown>
+  /** 生命周期步骤与迁移（进入/退出/耗时/失败原因）。 */
+  lifecycle: () => Promise<unknown>
+  /**
+   * 注册回调 —— 路由**真的**注册成功时按能力名回报。
+   *
+   * 存在的理由：契约自检要的是「实际注册面」，而不是「我们以为会注册什么」。
+   * 回调让注册处自己说话（含 webServer 缺席时的沉默，那也是事实）。
+   */
+  onRegister?: (exposedName: string) => void
 }
 
 /** 路由前缀。 */
@@ -62,11 +73,50 @@ export const ROUTE_PREFIX = '/recency-guard/api'
 export const ROUTE_PATHS = {
   snapshot: '/recency-guard/api/snapshot',
   graph: '/recency-guard/api/graph',
+  isolation: '/recency-guard/api/isolation',
+  lifecycle: '/recency-guard/api/lifecycle',
   archives: '/recency-guard/api/archives',
   archive: '/recency-guard/api/action/archive',
   reenable: '/recency-guard/api/action/reenable',
   recover: '/recency-guard/api/action/recover',
 } as const
+
+/** 路由名（`ROUTE_PATHS` 的键）。 */
+export type RouteName = keyof typeof ROUTE_PATHS
+
+/**
+ * 路由注册表 —— **注册真值**（不是投影）。
+ *
+ * `registerRoutes` 就是遍历这张表注册的，因此「实际注册了哪些路由」不需要
+ * 靠人读代码回答；契约测试也能拿它跟能力清单双向比对（清单声明了路由面但
+ * 表里没有 ⇒ 虚登；表里有而清单没声明 ⇒ 漏登）。
+ *
+ * `capability` 是承载该路由的能力 **id**（不是暴露名）：一个能力可以有多个
+ * 对外名称（工具 action + 动作路由），用 id 关联才能表达这种多面性。
+ */
+export interface RouteSurfaceEntry {
+  /** 承载的能力 id（见 capability-specs.ts）。 */
+  capability: string
+  /** 路由名（`ROUTE_PATHS` / handler 表的键）。 */
+  name: RouteName
+  /** 对外名称（清单里该能力的 `exposedAs` / `exposedAlsoAs` 之一）。 */
+  exposedName: string
+  /** 精确路径（字面量）。 */
+  path: string
+  /** HTTP 方法（读面 GET / 动作面 POST）。 */
+  method: 'GET' | 'POST'
+}
+
+export const ROUTE_SURFACE: readonly RouteSurfaceEntry[] = [
+  { capability: 'guard.present.panel', name: 'snapshot', exposedName: 'recency-guard.panel', path: ROUTE_PATHS.snapshot, method: 'GET' },
+  { capability: 'guard.present.graph', name: 'graph', exposedName: 'recency-guard.graph', path: ROUTE_PATHS.graph, method: 'GET' },
+  { capability: 'guard.govern.isolation', name: 'isolation', exposedName: 'recency-guard.isolation', path: ROUTE_PATHS.isolation, method: 'GET' },
+  { capability: 'guard.observe.lifecycle', name: 'lifecycle', exposedName: 'recency-guard.lifecycle', path: ROUTE_PATHS.lifecycle, method: 'GET' },
+  { capability: 'guard.govern.archive', name: 'archives', exposedName: 'recency-guard.archives', path: ROUTE_PATHS.archives, method: 'GET' },
+  { capability: 'guard.govern.reset', name: 'archive', exposedName: 'recency-guard.reset', path: ROUTE_PATHS.archive, method: 'POST' },
+  { capability: 'guard.recover.reenable', name: 'reenable', exposedName: 'recency-guard.reenable', path: ROUTE_PATHS.reenable, method: 'POST' },
+  { capability: 'guard.recover.manual', name: 'recover', exposedName: 'recency-guard.recover', path: ROUTE_PATHS.recover, method: 'POST' },
+] as const
 
 /**
  * 一个 Web 路由的最小形状。
@@ -134,66 +184,33 @@ async function readBody(req: NodeRequest): Promise<Record<string, unknown> | nul
   }
 }
 
-/**
- * 注册全部路由。
- *
- * @returns 注销函数（dispose 时调用）
- */
-export function registerRoutes(ctx: RouteContext, webServer: WebServerLike): () => void {
-  const disposers: Array<() => void> = []
+/** 一个 handler：接收请求与响应。 */
+type RouteHandler = (req: NodeRequest, res: NodeResponse) => void | Promise<void>
 
-  const add = (route: WebRouteLike): void => {
+/**
+ * 各路由的 handler。
+ *
+ * 键必须覆盖 `ROUTE_SURFACE` 的每个 `name`（契约测试核对）—— handler 表与
+ * 路由表分开，是为了让「注册了但没有 handler」在测试里响亮失败，而不是在
+ * 运行时变成 404。
+ */
+function handlerTable(ctx: RouteContext): Record<RouteName, RouteHandler> {
+  /** 读面：拿不到数据时请假（`available:false`），不假装没问题。 */
+  const read = (load: () => Promise<unknown>): RouteHandler => async (_req, res) => {
     try {
-      disposers.push(webServer.register(route))
+      sendJson(res, await load())
     } catch (error) {
-      // 路由注册失败不应拖垮插件主体（宿主可能没有 webServer，
-      // 或路径已被占用）。失败必须**响亮**：写进日志而不是静默。
-      console.error(`[recency-guard] 路由注册失败 ${route.path}:`, error)
+      sendJson(res, { available: false, reason: describe(error) }, 500)
     }
   }
 
-  // —— 读面 ——
-  add({
-    kind: 'exact',
-    path: ROUTE_PATHS.snapshot,
-    handler: async (_req, res) => {
-      try {
-        sendJson(res, await ctx.snapshot())
-      } catch (error) {
-        sendJson(res, { available: false, reason: describe(error) }, 500)
-      }
-    },
-  })
-
-  add({
-    kind: 'exact',
-    path: ROUTE_PATHS.graph,
-    handler: async (_req, res) => {
-      try {
-        sendJson(res, await ctx.graph())
-      } catch (error) {
-        sendJson(res, { available: false, reason: describe(error) }, 500)
-      }
-    },
-  })
-
-  add({
-    kind: 'exact',
-    path: ROUTE_PATHS.archives,
-    handler: async (_req, res) => {
-      try {
-        sendJson(res, await ctx.archives())
-      } catch (error) {
-        sendJson(res, { available: false, reason: describe(error) }, 500)
-      }
-    },
-  })
-
-  // —— 动作面（改变宿主行为，路径显式带动作名）——
-  add({
-    kind: 'exact',
-    path: ROUTE_PATHS.archive,
-    handler: async (req, res) => {
+  return {
+    snapshot: read(() => ctx.snapshot()),
+    graph: read(() => ctx.graph()),
+    isolation: read(() => ctx.isolation()),
+    lifecycle: read(() => ctx.lifecycle()),
+    archives: read(() => ctx.archives()),
+    archive: async (req, res) => {
       try {
         const body = await readBody(req)
         const reason = typeof body?.reason === 'string' && body.reason.trim() !== '' ? body.reason : '手动归档重置'
@@ -202,12 +219,7 @@ export function registerRoutes(ctx: RouteContext, webServer: WebServerLike): () 
         sendJson(res, { ok: false, reason: describe(error) }, 500)
       }
     },
-  })
-
-  add({
-    kind: 'exact',
-    path: ROUTE_PATHS.reenable,
-    handler: async (req, res) => {
+    reenable: async (req, res) => {
       try {
         const body = await readBody(req)
         const bundle = typeof body?.bundle === 'string' ? body.bundle : ''
@@ -220,19 +232,55 @@ export function registerRoutes(ctx: RouteContext, webServer: WebServerLike): () 
         sendJson(res, { ok: false, reason: describe(error) }, 500)
       }
     },
-  })
-
-  add({
-    kind: 'exact',
-    path: ROUTE_PATHS.recover,
-    handler: async (_req, res) => {
+    recover: async (_req, res) => {
       try {
         sendJson(res, await ctx.recover())
       } catch (error) {
         sendJson(res, { ok: false, reason: describe(error) }, 500)
       }
     },
-  })
+  }
+}
+
+/**
+ * 注册全部路由。
+ *
+ * **遍历 `ROUTE_SURFACE`**：注册面因此是数据（一张表）而不是散落的调用，
+ * 「表里有、代码没注册」这种漏注册在结构上无法发生；反过来「代码注册了、
+ * 表里没有」也不可能，因为注册只发生在这一处循环里。
+ *
+ * @returns 注销函数（dispose 时调用）
+ */
+export function registerRoutes(ctx: RouteContext, webServer: WebServerLike): () => void {
+  const disposers: Array<() => void> = []
+  const handlers = handlerTable(ctx)
+
+  const add = (route: WebRouteLike): void => {
+    try {
+      disposers.push(webServer.register(route))
+    } catch (error) {
+      // 路由注册失败不应拖垮插件主体（宿主可能没有 webServer，
+      // 或路径已被占用）。失败必须**响亮**：写进日志而不是静默。
+      console.error(`[recency-guard] 路由注册失败 ${route.path}:`, error)
+    }
+  }
+
+  for (const entry of ROUTE_SURFACE) {
+    const handler = handlers[entry.name]
+    if (typeof handler !== 'function') {
+      // 路由表与 handler 表不一致：宁可少注册一条并响亮报错，
+      // 也不要注册一个到不了实现的路径（那只会变成 404 或 500）。
+      console.error(`[recency-guard] 路由 ${entry.name} 没有 handler，跳过注册`)
+      continue
+    }
+    add({ kind: 'exact', path: entry.path, handler })
+    // 注册成功才回报（回调本身出错不影响注册结果）。
+    try {
+      ctx.onRegister?.(entry.exposedName)
+    } catch {
+      /* 观测回调失败不拖垮注册 */
+    }
+  }
 
   return () => {
     for (const dispose of disposers.splice(0).reverse()) {

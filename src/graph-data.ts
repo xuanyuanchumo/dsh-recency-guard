@@ -196,28 +196,21 @@ export function layoutGraph(graph: { nodes: GraphNode[]; edges: GraphEdge[]; col
   const columnOf = new Map<string, number>()
   for (const column of graph.columns) columnOf.set(column.label, column.index)
 
-  // 按节点 kind 分列：能力节点归入其阶段列，其余进入「附加」列（末尾）。
+  // 按节点 kind 分列：只有能力节点归入其阶段列，其余（指标/插件/缺口/阶段）
+  // 统一进入末尾的「附加」列。此前写成四个 else-if 分支各赋同一个值 ——
+  // 等价但读起来像有区别，下一个维护者会以为漏了分支而「补全」它。
   const auxiliaryColumn = graph.columns.length
   const groups = new Map<number, GraphNode[]>()
   for (const node of graph.nodes) {
-    let column = auxiliaryColumn
-    if (node.kind === 'capability') {
-      const stage = node.ref ? stageOfCapability(node.ref) : undefined
-      column = stage !== undefined ? (columnOf.get(STAGE_LABELS[stage]) ?? auxiliaryColumn) : auxiliaryColumn
-    } else if (node.kind === 'bundle') {
-      column = auxiliaryColumn
-    } else if (node.kind === 'metric') {
-      column = auxiliaryColumn
-    } else if (node.kind === 'gap') {
-      column = auxiliaryColumn
-    } else if (node.kind === 'stage') {
-      column = auxiliaryColumn
-    }
+    const stage = node.kind === 'capability' && node.ref ? stageOfCapability(node.ref) : undefined
+    const column = stage === undefined ? auxiliaryColumn : (columnOf.get(STAGE_LABELS[stage]) ?? auxiliaryColumn)
     const list = groups.get(column) ?? []
     list.push(node)
     groups.set(column, list)
   }
 
+  // 就地写入坐标：调用方拿到的是同一批节点对象（client 依赖这一身份），
+  // 因此这里不复制节点 —— 复制会让「先布局再画」出现两份真相。
   for (const [column, list] of groups) {
     list.sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id))
     list.forEach((node, index) => {
@@ -322,11 +315,12 @@ export function connectedComponents(nodes: readonly GraphNode[], edges: readonly
     const root = find(node.id)
     sizes.set(root, (sizes.get(root) ?? 0) + 1)
   }
-  const isolated = nodes.filter((n) => {
-    const hasOut = edges.some((e) => e.from === n.id)
-    const hasIn = edges.some((e) => e.to === n.id)
-    return !hasOut && !hasIn
-  }).map((n) => n.id)
+  // 孤立判定用邻接索引（O(V + E)）。此前对每个节点做 `edges.some(...)`，
+  // 是 O(V·E) 的实测债 —— 节点数一涨，面板每次轮询都要重算全图。
+  const { outgoing, incoming } = buildAdjacency(edges)
+  const isolated = nodes
+    .filter((n) => (outgoing.get(n.id)?.length ?? 0) === 0 && (incoming.get(n.id)?.length ?? 0) === 0)
+    .map((n) => n.id)
   return {
     count: sizes.size,
     largest: sizes.size === 0 ? 0 : Math.max(...sizes.values()),

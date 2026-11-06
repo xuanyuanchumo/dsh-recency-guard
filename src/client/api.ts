@@ -77,25 +77,39 @@ async function fetchJson(url: string, init?: RequestInit): Promise<FetchResult<u
   }
 }
 
-/** 拉取面板快照。 */
-export async function fetchSnapshot(): Promise<FetchResult<PanelSnapshot>> {
-  const result = await fetchJson(`${API_PREFIX}/snapshot`)
+/**
+ * 拼装查询串。
+ *
+ * 为什么把分区键放在查询参数而不是路径段：路由路径必须是宿主 `routes.ts`
+ * 里的**字面量**（契约测试核对），路径段会破坏这条核对；查询参数在
+ * 不改变路由契约的前提下携带「请求哪个分区」。宿主若忽略未知参数，
+ * 调用方必须核对返回的 `projectKey`（见 GuardPanel 的 mismatch 提示）——
+ * 静默返回当前分区是最危险的假绿。
+ */
+function withPartition(url: string, partition?: string): string {
+  if (partition === undefined || partition === '') return url
+  return `${url}?partition=${encodeURIComponent(partition)}`
+}
+
+/** 拉取面板快照（可指定分区；宿主不支持时返回当前分区，由调用方核对）。 */
+export async function fetchSnapshot(partition?: string): Promise<FetchResult<PanelSnapshot>> {
+  const result = await fetchJson(withPartition(`${API_PREFIX}/snapshot`, partition))
   if (!result.ok) return result
   if (!isSnapshot(result.data)) return { ok: false, reason: '快照形状不合法' }
   return { ok: true, data: result.data }
 }
 
-/** 拉取图谱数据。 */
-export async function fetchGraph(): Promise<FetchResult<GraphData>> {
-  const result = await fetchJson(`${API_PREFIX}/graph`)
+/** 拉取图谱数据（可指定分区）。 */
+export async function fetchGraph(partition?: string): Promise<FetchResult<GraphData>> {
+  const result = await fetchJson(withPartition(`${API_PREFIX}/graph`, partition))
   if (!result.ok) return result
   if (!isGraph(result.data)) return { ok: false, reason: '图谱形状不合法' }
   return { ok: true, data: result.data }
 }
 
-/** 拉取历史归档清单。 */
-export async function fetchArchives(): Promise<FetchResult<unknown>> {
-  return fetchJson(`${API_PREFIX}/archives`)
+/** 拉取历史归档清单（可指定分区）。 */
+export async function fetchArchives(partition?: string): Promise<FetchResult<unknown>> {
+  return fetchJson(withPartition(`${API_PREFIX}/archives`, partition))
 }
 
 /** 面板动作。 */

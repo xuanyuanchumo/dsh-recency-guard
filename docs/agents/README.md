@@ -13,9 +13,10 @@ dsh-recency-guard 是 DeepSeek Harness 的**插件崩溃恢复守护**：记录�
 
 | 文档 | 内容 | 何时读 |
 |---|---|---|
-| [design.md](./design.md) | 架构与设计：模块地图、数据流、状态机、数学模型 | 改核心逻辑前 |
-| [api.md](./api.md) | 对外面：工具 action、HTTP 路由、面板数据契约 | 接入/消费本插件时 |
-| [conventions.md](./conventions.md) | 工程规范：注释、验证链、测试分层、发布流程 | 写任何代码前 |
+| [design.md](./design.md) | 架构与设计：模块地图、数据流、状态机、数学模型、守护行写入管线、备份增强设计、宿主能力接入 | 改核心逻辑前 |
+| [api.md](./api.md) | 对外面：工具 action、工具输出契约（execute vs render）、HTTP 路由、面板数据契约、v0.7 契约变更 | 接入/消费本插件时 |
+| [conventions.md](./conventions.md) | 工程规范：注释、验证链、测试分层、已知陷阱、宿主服务读取纪律、交互事件纪律、YAML 写入纪律、沙箱流程 | 写任何代码前 |
+| [verification.md](./verification.md) | 验证手册：静态/沙箱/路由/用户旅程/对抗四层，全部可复现判据 | 声称"能用/能防崩溃"之前必读 |
 
 ## 3. 快速上手（命令）
 

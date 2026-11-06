@@ -16,6 +16,17 @@ import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
 
 export const STATE_DIRNAME = '.recency-guard'
 
+/**
+ * journal 行数上限（超过后丢弃最旧的行）。
+ *
+ * 为什么要封顶而不是无限追加：journal 是 append-only 的崩溃证据链，
+ * 但「无限增长」在长跑 profile 上会把读盘成本（每次 append 都要整读整写）
+ * 与快照投影一起拖垮。1000 行足够覆盖最近若干天的安装/崩溃事件历史；
+ * 丢弃是**静默**的，因此读到的样本永远要当成「窗口内样本」而非全量
+ * —— 这正是统计层用 `sampleSize` 白盒标注样本量的原因。
+ */
+export const JOURNAL_MAX_LINES = 1000
+
 export type JournalKind =
   | 'install'
   | 'update'
@@ -128,16 +139,23 @@ export class Store {
 
   // ---------- journal ----------
 
+  /**
+   * Append journal events asynchronously.
+   *
+   * 复杂度：O(n) 读 + O(n) 写（n = 既有行数 ≤ JOURNAL_MAX_LINES），
+   * 不是真正的 O(1) 追加 —— 原子写要整文件替换，读改写无法避免。
+   * 已知竞态：同一 profile 的两个进程同时 append 会有一条被覆盖。
+   * 当前调用方全在启动/备份路径（单进程），因此未加文件锁；
+   * 若将来在并发路径上追加，必须换成 `withFileLock` 或真 O(1) 追加（appendFile）。
+   */
   async append(events: JournalEvent | JournalEvent[]): Promise<void> {
     const list = Array.isArray(events) ? events : [events]
     if (list.length === 0) return
     const stamped: JournalRecord[] = list.map((e) => ({ ...e, t: new Date().toISOString() }))
     const prev = existsSync(this.journalPath) ? await readFile(this.journalPath, 'utf8') : ''
-    const lines = prev ? prev.split('\n').filter(Boolean) : []
+    const lines = journalLines(prev)
     for (const e of stamped) lines.push(JSON.stringify(e))
-    // Cap the journal so it never grows unbounded.
-    const trimmed = lines.slice(-1000)
-    await writeFileAtomic(this.journalPath, `${trimmed.join('\n')}\n`, { mode: 0o644 })
+    await writeFileAtomic(this.journalPath, serializeJournal(lines), { mode: 0o644 })
   }
 
   /**
@@ -154,10 +172,9 @@ export class Store {
       if (!existsSync(this.dir)) mkdirSync(this.dir, { recursive: true })
       const record: JournalRecord = { ...event, t: new Date().toISOString() }
       const prev = existsSync(this.journalPath) ? readFileSync(this.journalPath, 'utf8') : ''
-      const lines = prev ? prev.split('\n').filter(Boolean) : []
+      const lines = journalLines(prev)
       lines.push(JSON.stringify(record))
-      const trimmed = lines.slice(-1000)
-      writeFileSync(this.journalPath, `${trimmed.join('\n')}\n`, 'utf8')
+      writeFileSync(this.journalPath, serializeJournal(lines), 'utf8')
     } catch {
       /* best effort: the journal must never break the host's startup */
     }
@@ -165,17 +182,7 @@ export class Store {
 
   async readJournal(limit = 100): Promise<JournalRecord[]> {
     if (!existsSync(this.journalPath)) return []
-    const raw = await readFile(this.journalPath, 'utf8')
-    const lines = raw.split('\n').filter(Boolean)
-    const out: JournalRecord[] = []
-    for (const line of lines.slice(-limit)) {
-      try {
-        out.push(JSON.parse(line))
-      } catch {
-        /* skip a torn tail line from a crash mid-write */
-      }
-    }
-    return out
+    return parseJournalLines(await readFile(this.journalPath, 'utf8'), limit)
   }
 
   // ---------- snapshot (version tracking) ----------
@@ -207,16 +214,7 @@ export class Store {
   readJournalSync(limit = 100): JournalRecord[] {
     try {
       if (!existsSync(this.journalPath)) return []
-      const lines = readFileSync(this.journalPath, 'utf8').split('\n').filter(Boolean)
-      const out: JournalRecord[] = []
-      for (const line of lines.slice(-limit)) {
-        try {
-          out.push(JSON.parse(line))
-        } catch {
-          /* skip a torn tail line */
-        }
-      }
-      return out
+      return parseJournalLines(readFileSync(this.journalPath, 'utf8'), limit)
     } catch {
       return []
     }
@@ -360,6 +358,38 @@ export class Store {
     const files = await readdir(this.backupsDir)
     return files.filter((f) => f.endsWith('.json')).map((f) => f.replace(/\.json$/, ''))
   }
+}
+
+/** 切分 journal 行（丢掉空行）。 */
+function journalLines(raw: string): string[] {
+  return raw ? raw.split('\n').filter(Boolean) : []
+}
+
+/** 序列化 journal：先封顶（保留最后 JOURNAL_MAX_LINES 行）再拼回。 */
+function serializeJournal(lines: readonly string[]): string {
+  return `${lines.slice(-JOURNAL_MAX_LINES).join('\n')}\n`
+}
+
+/**
+ * 解析 journal 行，容忍崩溃时写坏的尾部半行。
+ *
+ * 为什么容忍而不是报错：崩溃路径上的写可能被进程死亡截断，让一行残缺的
+ * JSON 使整份 journal 不可读，等于把守护者自己的证据链也弄丢了。
+ * `limit <= 0` 返回空数组（「读 0 行」就是一行都不读；旧实现里
+ * `slice(-0)` 会返回全部行，是个静默的语义反转）。
+ */
+function parseJournalLines(raw: string, limit: number): JournalRecord[] {
+  const lines = journalLines(raw)
+  const take = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), lines.length) : 0
+  const out: JournalRecord[] = []
+  for (const line of lines.slice(lines.length - take)) {
+    try {
+      out.push(JSON.parse(line))
+    } catch {
+      /* skip a torn tail line from a crash mid-write */
+    }
+  }
+  return out
 }
 
 function sanitize(name: string): string {

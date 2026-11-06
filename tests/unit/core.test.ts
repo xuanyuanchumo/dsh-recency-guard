@@ -10,7 +10,7 @@ import {
   pickSuspects,
   diffVersions,
 } from '../../src/recency.js'
-import { CapabilityGraph } from '../../src/capability.js'
+import { CapabilityGraph, declaredExposedNames } from '../../src/capability.js'
 import { buildCapabilityGraph, verifyCapabilityContract, CAPABILITY_SPECS } from '../../src/capability-specs.js'
 import { StageMachine, canTransition, riskScore, crashTrend, ALL_STAGES } from '../../src/lifecycle.js'
 import {
@@ -24,8 +24,9 @@ import {
   crashIntervalStats,
   cusumChangePoint,
   computeMetrics,
+  crashPressure,
 } from '../../src/observability.js'
-import { renderOutcome, formatStatus, formatArchive } from '../../src/tool-render.js'
+import { renderOutcome, formatStatus, formatArchive, formatArchives } from '../../src/tool-render.js'
 import {
   normalizeWorkspace,
   projectKey,
@@ -142,21 +143,18 @@ async function main() {
   check('the missing name is named', partial.missing.includes('recency-guard.graph'), partial.missing)
   // 多注册了一个（实际有但清单完全没提）⇒ extra。
   const extra = verifyCapabilityContract(graph, [
-    ...graph.exposed().map((r) => r.exposedAs).filter((v): v is string => v !== undefined),
+    ...declaredExposedNames(graph),
     'some-undeclared-thing',
   ])
   check('an undeclared registration is reported', extra.extra.includes('some-undeclared-thing'), extra.extra)
   // 完全注册时（不多不少）契约成立。
-  const complete = verifyCapabilityContract(
-    graph,
-    graph.exposed().map((r) => r.exposedAs).filter((v): v is string => v !== undefined),
-  )
+  // 口径必须是「主名称 ∪ 次要名称」（exposedNamesOf / declaredExposedNames）：
+  // 只用 exposedAs 会漏掉路由别称（recency-guard.reenable 等），把本来齐全的
+  // 注册面误报成缺口 —— 这正是本测试曾经红过的原因。
+  const complete = verifyCapabilityContract(graph, [...declaredExposedNames(graph)])
   check('a fully registered surface satisfies the contract', complete.ok, complete)
   check('a surface with an extra name is not satisfied', extra.ok === false, extra)
-  const full = verifyCapabilityContract(
-    graph,
-    graph.exposed().map((r) => r.exposedAs).filter((v): v is string => v !== undefined),
-  )
+  const full = verifyCapabilityContract(graph, [...declaredExposedNames(graph)])
   check('the full registration set satisfies the contract', full.ok, full)
 
   // ═══ 生命周期状态机 ═══
@@ -248,9 +246,40 @@ async function main() {
     check('the change point carries a readable label', accelerating.label.includes('上行'), accelerating.label)
   }
   check('fewer than two crashes means no change point', !cusumChangePoint([0]).defined)
+
+  console.log('\n== crash pressure (EWMA into the snapshot, cycle-4) ==')
+  // 诚实边界：无观测 = 不可判定（null），不是 0 —— 与 crashRate 同一条红线。
+  const noPressure = crashPressure([])
+  check('no observations means an undefined pressure', !noPressure.defined && noPressure.value === null, noPressure)
+  // 全平稳序列：0 是**真值**（有数据且每次启动都没崩），与 null 语义不同。
+  const calm = crashPressure([
+    { at: '2026-01-01T00:00:00.000Z', crashed: false },
+    { at: '2026-01-01T00:01:00.000Z', crashed: false },
+    { at: '2026-01-01T00:02:00.000Z', crashed: false },
+  ])
+  check('a crash-free series is a DEFINED zero', calm.defined && calm.value === 0, calm)
+  // 时间局部性：同样 1/3 的崩溃率，崩溃**集中在最近**的压力必须更高
+  // —— 这正是 crashRate 给不出的信息（EWMA 的存在理由）。
+  const recent = crashPressure([
+    { at: '2026-01-01T00:00:00.000Z', crashed: false },
+    { at: '2026-01-01T00:01:00.000Z', crashed: false },
+    { at: '2026-01-01T00:02:00.000Z', crashed: true },
+  ])
+  const ancient = crashPressure([
+    { at: '2026-01-01T00:00:00.000Z', crashed: true },
+    { at: '2026-01-01T00:01:00.000Z', crashed: false },
+    { at: '2026-01-01T00:02:00.000Z', crashed: false },
+  ])
+  check('recent crashes weigh more than ancient ones', (recent.value ?? 0) > (ancient.value ?? 0), {
+    recent: recent.value,
+    ancient: ancient.value,
+  })
+  check('the pressure stays in [0,1]', (recent.value ?? -1) >= 0 && (recent.value ?? -1) <= 1)
   // computeMetrics 的快照字段连通性：intervals 与 changePoint 必须真实进入快照。
   // 数据带**持续**加速（3×60s → 4×10s）：CUSUM 语义是「持续变密」才告警，
   // 单个短间隔只算尖峰（会被 max(0,·) 钳掉），这正是它对漂移敏感的证据。
+  // （cycle-4 修复：先构造快照再断言——此前断言行在 const 初始化之前引用
+  //   metricsSnapshot，TDZ ReferenceError 把整条链路判死。）
   const metricsSnapshot = computeMetrics(
     [
       { at: '2026-01-01T00:00:00.000Z', crashed: true },
@@ -266,6 +295,8 @@ async function main() {
     [],
     Date.parse('2026-01-01T00:04:00.000Z'),
   )
+  // 快照连通性：crashPressure 必须真实进入 computeMetrics 的输出。
+  check('the snapshot carries the crash pressure', metricsSnapshot.crashPressure.defined, metricsSnapshot.crashPressure)
   check('the snapshot carries the interval stats', metricsSnapshot.intervals.defined, metricsSnapshot.intervals)
   check('the snapshot carries the change point', metricsSnapshot.changePoint.defined, metricsSnapshot.changePoint)
 
@@ -358,6 +389,23 @@ async function main() {
     check('the archive manifest can be read back', readArchiveManifest(archives[0].dir)?.reason === '测试归档')
     check('the archive manifest names the workspace it came from', readArchiveManifest(archives[0].dir)?.workspace === 'D:/Project/Alpha', readArchiveManifest(archives[0].dir)?.workspace)
     check('the journal moved into the archive', archived.manifest.entries.some((e) => e.kind === 'journal'))
+
+    // cycle-4 T02：归档清单摘要必须**真正到达消费面**（工具投影），
+    // 否则「举他对照基线」只是生产了没人读的数据（过度生产缺口）。
+    console.log('\n== archive summary reaches the tool surface (cycle-4) ==')
+    const archiveOutcome2 = formatArchives({
+      archives: archives.map((a) => {
+        const manifest = readArchiveManifest(a.dir)
+        return {
+          ...a,
+          summary: manifest?.summary ?? { crashSeq: 0, autoDisabled: [], journalEvents: 0 },
+        }
+      }),
+    })
+    const archiveText = renderOutcome(archiveOutcome2)
+    check('the summary names the crash count', archiveText.includes('崩溃 3 次'), archiveText)
+    check('the summary names the disabled bundle', archiveText.includes('dsh-x'), archiveText)
+    check('the summary counts journal events', archiveText.includes('事件'), archiveText)
   } finally {
     await rm(archiveRoot, { recursive: true, force: true })
   }

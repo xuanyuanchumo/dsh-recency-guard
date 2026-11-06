@@ -186,6 +186,72 @@ export function writePartitionIndex(profileDir: string, index: PartitionIndex): 
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, PARTITION_INDEX_FILENAME), JSON.stringify(index, null, 2), 'utf8')
   } catch {
-    /* best effort: 索引丢失只是失去分区可��性，不影响守护本身 */
+    /* best effort: 索引丢失只是失去分区可读性，不影响守护本身 */
   }
+}
+
+/**
+ * 隔离视图 —— 「不同工作区互不污染」的可判定形态。
+ *
+ * 判据只有一条：**一个规范化工作区必须恰好映射到一个分区键**。
+ * 一个工作区对应两个键 ⇒ 它有两份记忆（同一项目自我分裂）；
+ * 两个工作区共用一个键 ⇒ 它们互相污染。两者都会让 `isolated` 为 false，
+ * 因此这条视图不是展示用的装饰，而是可以直接断言的判据。
+ */
+export interface IsolationView {
+  /** 当前工作区的分区（未登记时为 null —— 不猜）。 */
+  current: ProjectPartition | null
+  /** 本 profile 下的全部分区（其它工作区只出现为引用，不含它们的状态）。 */
+  partitions: ProjectPartition[]
+  /** 除当前工作区外的分区 —— 「互不可见」的对照面。 */
+  others: ProjectPartition[]
+  /** 当前工作区是唯一分区（单项目 profile 的常见形态）。 */
+  exclusive: boolean
+  /** 一个工作区一个键（隔离成立）。 */
+  isolated: boolean
+}
+
+/** 构造隔离视图（只读：不登记、不写索引）。 */
+export function isolationView(profileDir: string, workspace: string): IsolationView {
+  const index = readPartitionIndex(profileDir)
+  const normalized = normalizeWorkspace(workspace)
+  const current = index.partitions.find((p) => p.workspace === normalized) ?? null
+  const others = index.partitions.filter((p) => p.workspace !== normalized)
+
+  // 键与工作区必须是双射：一个工作区一个键（右侧），一个键一个工作区（左侧）。
+  const keysByWorkspace = new Map<string, Set<string>>()
+  const workspacesByKey = new Map<string, Set<string>>()
+  for (const partition of index.partitions) {
+    const keys = keysByWorkspace.get(partition.workspace) ?? new Set<string>()
+    keys.add(partition.key)
+    keysByWorkspace.set(partition.workspace, keys)
+    const workspaces = workspacesByKey.get(partition.key) ?? new Set<string>()
+    workspaces.add(partition.workspace)
+    workspacesByKey.set(partition.key, workspaces)
+  }
+  const isolated =
+    current !== null &&
+    [...keysByWorkspace.values()].every((keys) => keys.size === 1) &&
+    [...workspacesByKey.values()].every((workspaces) => workspaces.size === 1)
+
+  return {
+    current,
+    partitions: index.partitions.map((p) => ({ ...p })),
+    others: others.map((p) => ({ ...p })),
+    exclusive: index.partitions.length <= 1,
+    isolated,
+  }
+}
+
+/**
+ * 一个分区产物的绝对路径集合 —— 隔离的**否定性证据**。
+ *
+ * 「互不可见」很难直接证明，但它的反面很容易：列出对方分区的全部产物路径，
+ * 再断言本分区读到的每个事实都**不在**其中。测试用它对两个工作区做交叉验证。
+ */
+export function partitionArtifacts(profileDir: string, key: string): string[] {
+  const dir = partitionDir(profileDir, key)
+  return ['journal.jsonl', 'snapshot.json', 'state.json', 'decision.json', 'backups'].map((name) =>
+    join(dir, name),
+  )
 }

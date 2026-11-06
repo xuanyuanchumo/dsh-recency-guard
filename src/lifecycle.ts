@@ -24,6 +24,11 @@
  *   - 只有 `deciding` 可以发出「关闭插件」的业务动作
  *   - 只有 `recovered` / `idle` 是终态（可安全重载）
  *   - `crashed` 只能由 `deciding` 离开（必须先做决策）
+ *
+ * 状态之外还有**步骤**（`StepSpan`）：状态回答「现在处于什么状态」，步骤回答
+ * 「这一轮做了哪些事、各花多久、哪一步失败了」。归零动作（归档重置）走
+ * `reset()`：它绕过白名单但留 `forced` 痕迹 —— 归档后旧结论作废，界面不能
+ * 继续显示上一轮的 `crashed`。
  */
 
 /** 生命周期状态。 */
@@ -53,6 +58,17 @@ export interface StageTransition {
   reason: string
   /** 迁移时刻。 */
   at: string
+  /** 在 `from` 阶段停留的毫秒数（首次迁移无前序，故可选）。 */
+  durationMs?: number
+  /**
+   * 是否为**治理复位**（绕过白名单的一次显式重置）。
+   *
+   * 归档重置会作废全部旧结论，此时「当前阶段」本身也失去意义：若上一轮停在
+   * `crashed`，白名单里根本没有通往 `idle` 的路，重置后界面会继续显示「崩溃」——
+   * 旧结论换了种方式继续生效。复位必须**显式标记**，让读者一眼看出这条迁移
+   * 不是业务流程走出来的，而是人（或治理动作）宣告的。
+   */
+  forced?: boolean
 }
 
 /**
@@ -76,6 +92,47 @@ export function canTransition(from: GuardStage, to: GuardStage): boolean {
 }
 
 /**
+ * 生命周期**步骤**名 —— 插件真实走过的流程节点。
+ *
+ * 状态机回答「守护现在处于什么状态」，步骤回答「这一轮到底做了哪些事、
+ * 各花了多久、哪一步失败了」。两者缺一不可：只有状态时，一次失败的 boot
+ * 只会让阶段停在 `monitoring`，没人知道它为什么没进 `recovered`。
+ */
+export type LifecycleStepName =
+  | 'loader' // Loader 四件套（name/inject/Config/apply）就绪
+  | 'install-guarded-rows' // 同步安装守护行
+  | 'startup-record' // 同步启动记录（哨兵 + 安装/更新事实）
+  | 'boot' // 异步启动流程（状态迁移 + 变更记录 + 自动恢复）
+  | 'crash-decision' // 崩溃时的同步决策发布
+  | 'restore' // 稳定后的配置恢复
+  | 'archive' // 归档搬走 + 留档
+  | 'rerun' // 以最新项目事实重跑（新循环基线）
+  | 'shutdown' // 退出清理
+
+/** 一次步骤的执行区间。 */
+export interface StepSpan {
+  name: LifecycleStepName
+  /** 进入时刻。 */
+  startedAt: string
+  /** 退出时刻（未结束时缺失 —— 诚实表达「还在里面」）。 */
+  endedAt?: string
+  /** 耗时（毫秒，退出后才可判定）。 */
+  durationMs?: number
+  /** 是否成功（未结束时缺失）。 */
+  ok?: boolean
+  /** 失败原因（`ok === false` 时存在）。 */
+  reason?: string
+}
+
+/** 一次被拒绝的迁移（非法迁移的留痕）。 */
+export interface RejectedTransition {
+  from: GuardStage
+  to: GuardStage
+  reason: string
+  at: string
+}
+
+/**
  * 状态机。
  *
  * 迁移历史保留最近 N 条（环形缓冲），既是白盒透明的证据链，也是
@@ -85,6 +142,12 @@ export class StageMachine {
   private current: GuardStage
   private readonly history: StageTransition[] = []
   private readonly historyLimit: number
+  /** 被拒绝的迁移（观测证据：非法迁移不是「什么都没发生」）。 */
+  private readonly rejected: RejectedTransition[] = []
+  /** 步骤区间（环形缓冲：观测面不无限增长）。 */
+  private readonly spans: StepSpan[] = []
+  /** 上一次迁移的时刻（用于算「在上一阶段停留了多久」）。 */
+  private lastTransitionAt?: number
 
   constructor(initial: GuardStage = 'idle', historyLimit = 200) {
     this.current = initial
@@ -101,23 +164,131 @@ export class StageMachine {
     return this.history
   }
 
+  /** 被拒绝的迁移（按时间顺序）。 */
+  get rejectedTransitions(): readonly RejectedTransition[] {
+    return this.rejected
+  }
+
+  /** 全部步骤区间（按时间顺序，含未结束的）。 */
+  get steps(): readonly StepSpan[] {
+    return this.spans
+  }
+
   /**
    * 尝试迁移。
    *
    * @returns 成功则返回 true；非法迁移不改变状态并返回 false（不抛异常：
    *          状态机是观测设施，不该因为一次非法迁移拖垮守护流程）。
+   *          被拒绝的尝试会**留痕**（from/to/reason/时刻），因为「非法迁移
+   *          发生过」本身就是要被看见的事实 —— 静默返回 false 会让一条
+   *          写错的迁移路径永远不被发现。
    */
   transition(to: GuardStage, reason: string): boolean {
-    if (!canTransition(this.current, to)) return false
-    this.history.push({ from: this.current, to, reason, at: new Date().toISOString() })
+    const now = Date.now()
+    if (!canTransition(this.current, to)) {
+      this.rejected.push({ from: this.current, to, reason, at: new Date(now).toISOString() })
+      if (this.rejected.length > REJECTED_LIMIT) this.rejected.shift()
+      return false
+    }
+    const durationMs = this.lastTransitionAt === undefined ? undefined : now - this.lastTransitionAt
+    this.history.push({
+      from: this.current,
+      to,
+      reason,
+      at: new Date(now).toISOString(),
+      ...(durationMs === undefined ? {} : { durationMs }),
+    })
     if (this.history.length > this.historyLimit) this.history.shift()
     this.current = to
+    this.lastTransitionAt = now
     return true
+  }
+
+  /**
+   * 治理复位 —— 显式地把阶段强制拉回 `idle`。
+   *
+   * 与 `transition` 的区别是**它绕过白名单**，这正是它的用途：归档重置后
+   * 旧结论全部作废，此时不该再由「旧阶段 → 新阶段」的合法性决定界面显示什么。
+   * 复位会写入一条 `forced: true` 的迁移记录（白盒留痕），非法迁移的语义
+   * 并没有被稀释 —— 常规路径依旧只能走白名单。
+   */
+  reset(reason: string): StageTransition {
+    const now = Date.now()
+    const transition: StageTransition = {
+      from: this.current,
+      to: 'idle',
+      reason,
+      at: new Date(now).toISOString(),
+      forced: true,
+      ...(this.lastTransitionAt === undefined ? {} : { durationMs: now - this.lastTransitionAt }),
+    }
+    this.history.push(transition)
+    if (this.history.length > this.historyLimit) this.history.shift()
+    this.current = 'idle'
+    this.lastTransitionAt = now
+    return transition
   }
 
   /** 该状态下允许的动作。 */
   allowedActions(): readonly GuardStage[] {
     return ALLOWED[this.current]
+  }
+
+  // ---------- 步骤观测（进入 / 退出 / 耗时 / 失败原因）----------
+
+  /**
+   * 进入一个步骤。
+   *
+   * 同名步骤可以并发进入（例如两个工作区同一进程），因此用「未结束的同名
+   * 区间栈」匹配退出：`endStep` 关闭**最近一个**未结束的同名区间。
+   */
+  beginStep(name: LifecycleStepName): StepSpan {
+    const span: StepSpan = { name, startedAt: new Date().toISOString() }
+    this.spans.push(span)
+    if (this.spans.length > STEP_LIMIT) this.spans.shift()
+    return span
+  }
+
+  /** 退出一个步骤（关闭最近的同名未结束区间）。 */
+  endStep(name: LifecycleStepName, ok = true, reason?: string): StepSpan | undefined {
+    const now = Date.now()
+    for (let i = this.spans.length - 1; i >= 0; i -= 1) {
+      const span = this.spans[i]
+      if (span.name !== name || span.endedAt !== undefined) continue
+      span.endedAt = new Date(now).toISOString()
+      span.durationMs = Math.max(0, now - Date.parse(span.startedAt))
+      span.ok = ok
+      if (!ok) span.reason = reason ?? '未给出原因'
+      return span
+    }
+    // 没有对应的进入记录：不补造区间（补造会让「未进入就退出」变成看似正常）。
+    return undefined
+  }
+
+  /**
+   * 一步到位的记录（进入与退出同一时刻）。
+   *
+   * 用于**同步**步骤：崩溃路径上的同步 IO 只有几十微秒，单独 begin/end
+   * 反而在崩溃时留下永远闭合不了的区间（进程已死），一条闭合区间更诚实。
+   */
+  recordStep(name: LifecycleStepName, ok: boolean, reason?: string, durationMs = 0): StepSpan {
+    const at = new Date().toISOString()
+    const span: StepSpan = {
+      name,
+      startedAt: at,
+      endedAt: at,
+      durationMs,
+      ok,
+      ...(ok ? {} : { reason: reason ?? '未给出原因' }),
+    }
+    this.spans.push(span)
+    if (this.spans.length > STEP_LIMIT) this.spans.shift()
+    return span
+  }
+
+  /** 仍在进行中的步骤名（未闭合区间）。 */
+  openSteps(): LifecycleStepName[] {
+    return this.spans.filter((s) => s.endedAt === undefined).map((s) => s.name)
   }
 
   /**
@@ -144,6 +315,12 @@ export class StageMachine {
 
 /** 参与稳定性衰减计算的最近迁移条数。 */
 const STABILITY_WINDOW = 6
+
+/** 被拒绝迁移的留痕上限（观测面有界）。 */
+const REJECTED_LIMIT = 50
+
+/** 步骤区间的留痕上限（观测面有界）。 */
+const STEP_LIMIT = 120
 
 /** 各阶段的权重（有序：越靠后越接近完全健康）。 */
 const STAGE_WEIGHT: Record<GuardStage, number> = {

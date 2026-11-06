@@ -56,11 +56,84 @@ npm run build && npx tsc --noEmit && npm run lint && npm test
 | 评估器判 test-reports 缺失 FAIL | 每轮循环落盘测试报告 |
 | CUSUM 用中位数当基准 | 用 P75（中位数让一半样本天然低于基准，检测器失明） |
 | clipToRect 取最大 t 交点 | 取**最小 t**（进入点）；B 在矩形内时最大 t 就是 B 自己 |
+| 边的 filter/map 回调里重建 id→node 索引 | 索引 useMemo 与节点数组绑定（每数组一次）；回调内重建是 O(E·V) 实测债 |
+| locale 字典写 `kind.x` 字面量键 | 用**嵌套对象**（`kind: { x: … }`）—— `t()` 按点号路径逐层下钻，字面量键查不到会回退键本身 |
+| i18n 字典类型按一层嵌套声明 | `Dict` 必须递归（`string | Dict`），否则两层分组过不了类型检查 |
+| 守护行 `name:` 不加 YAML 引号 | **永远加引号**（`@` 是 YAML 保留指示符，scoped 包名会把整份 profile patch 写死） |
+| 契约测试只用 `exposedAs` 比对 | 用 `declaredExposedNames()`（主名称 ∪ 别名），否则多路由能力被误报缺口 |
+| 在 `apply` 里直接读可选服务 | `tryReadService` 包一层：未 inject 的追踪代理会抛错，整插件不激活 |
+| Reflect `formatXxx` 只返回渲染结构 | 数据必须摊平到顶层（`execute` 返回规范值），渲染只是 `output.render` 的投影 |
+| React `onWheel` 里 `preventDefault` | 用原生 `addEventListener('wheel', h, {passive:false})`（React 的是 passive，无效） |
+
+## 5.1 宿主服务读取纪律（v0.7 实测崩溃级）
+
+**症状**：沙箱启动后日志只有一行
+
+```
+dsh: warning: 1 entry did not activate
+recency-guard (dsh-recency-guard): Error: cannot get property "configEditor" without inject
+```
+
+端口照常监听、Web UI 照常打开 —— 极易误判为"启动成功"，实际**插件整体未激活**。
+
+**根因**：Cordis 的 `ctx` 是可追踪代理。读取**没有写进 `inject` 的服务**会抛异常，
+而异常发生在 `apply` 里就等于整插件加载失败。
+
+**规则**：
+
+1. 必需服务 → 写进 `inject`（Loader 会等它就绪）。
+2. 可选服务 → **只**用 `tryReadService(ctx, name)` 读（内部 try/catch，读不到即"不在场"），
+   并用 `ctx.inject([...], child => …)` 挂子 fiber 延迟接上。
+3. 契约自检的 `injectedServiceNames` 也必须走 `tryReadService` —— 它本来就是
+   "以实际可读为准"的探针，直接读会把探针自己炸掉。
+
+## 5.2 交互事件纪律（v0.7 实测 UX 缺陷）
+
+**症状**：控制台 `Unable to preventDefault inside passive event listener invocation`；
+后果是滚轮缩放图谱时**页面跟着滚**，图被滚出视野。
+
+**根因**：React 17+ 把 `wheel`/`touch*` 挂在 root 上且注册为 **passive**，
+组件里的 `event.preventDefault()` 被浏览器忽略。
+
+**规则**：需要 `preventDefault` 的手势（滚轮缩放、拖拽、触摸）一律用
+`useEffect` + `ref.addEventListener(type, handler, { passive: false })` 原生挂载，
+并用 `handlerRef` 桥接最新闭包，避免视口变化反复解绑重绑。
+
+## 5.3 数据面契约纪律（v0.7 集成复验）
+
+`tool.execute()` 返回的规范值里，**业务数据必须摊平在顶层**
+（`status.profile`、`status.suspectRanking` 等），同时保留在 `data` 下便于遍历；
+`display` 只是渲染模型。三者同源、单一构造点（`buildOutcome`），不允许任何
+formatter 自己再拼一份。v0.7 重构 display 时漏掉摊平，宿主层测试立刻以
+`status.profile === undefined` 报出 —— 注释与实现漂移的典型，别再犯。
 
 ## 6. 版本号同步（三锚点）
 
 发版前核对：`package.json` ↔ `README.md` ↔ `docs/agents/api.md` 的版本一致。
 能力清单新增 exposed 能力时，三个文档同步更新。
+
+## 6.1 客户端状态纪律（v0.5）
+
+- **用户调整是叠加层**：节点拖拽偏移（offsets）、折叠态、视口都是用户事实，
+  数据轮询**不得重置**它们 —— 轮询只是数据刷新，不是布局重置。
+- **localStorage 键统一前缀**：`recency-guard-*`（当前 `-lang`、`-collapsed`）；
+  读写全部 try/catch 退化，storage 缺席不影响功能。
+- **暂停即真停**：轮询开关暂停时不再发任何 fetch；「画面还在跳」与
+  「按钮显示暂停中」矛盾就是缺陷。
+
+## 6.2 生态插件借鉴（跨插件学习，cycle-4 沉淀）
+
+对照 `dsh-ops` 0.4.4 与 `dsh-context` 0.81.0 的实现（均以发布包为事实），
+与本插件现有纪律互补的三条：
+
+| 借鉴点 | 来源 | 本插件对应/采用 |
+|---|---|---|
+| **safeDispose 隔离注销**：一个抛异常的 disposer 不得阻断同列表其余清理（权限泄漏/守卫卡死的根因） | dsh-ops `lib/teardown.js` | routes.ts 的注销循环已逐条 try/catch（同语义）；后续新增多 disposer 列表时抽 `safeDisposeAll` 复用 |
+| **NDJSON 折叠 + 有界数据**：append-only 日志（崩溃安全）+ turn 边界折叠成 JSON 快照 + `maxBytes` 封顶丢弃并计数 | dsh-ops `lib/panel/collect.js` | 本插件 journal.jsonl 即同形态；后续若 journal 无限增长，按此模式加「折叠 + 封顶 + 丢弃计数」而非静默截断 |
+| **公开面最小化**：宿主侧只导出 name/inject/Config/apply，`lib/index.d.ts` 只暴露投影类型 | dsh-context（656KB client 单文件 bundle，公开 d.ts 仅 14KB 投影面） | 已执行（契约测试守卫 Loader 四件套）；面板数据契约（PanelSnapshot/GraphData）保持窄投影 |
+
+不采用的：dsh-context 的 zod 双运行时校验（本插件用手写形状校验 isSnapshot/isGraph，
+零依赖纪律优先）；dsh-ops 的多模式 applyMode 装配（单职责插件不需要）。
 
 ## 7. 发布与沙箱流程
 
@@ -70,3 +143,35 @@ npm run build && npx tsc --noEmit && npm run lint && npm test
    → 后台启动 web → 看日志（无 skipping 警告）→ 冒烟 → 用户旅程。
 3. 通过后才更新主力 profile（由用户重启主力 dsh）。
 4. 归档重置后不继承旧结论；「举他」用最新项目事实。
+
+## 7.1 沙箱部署三坑（cycle-4 实测，详见 archive/cycle-4 旅程报告）
+
+| 坑 | 指纹 | 正确做法 |
+|---|---|---|
+| `file:` 依赖静默落盘拷贝 | 改源码沙箱无变化；`Get-Item <pkg>.LinkType` 非 Junction | 删掉重链 `mklink /J`；挂载后**必查 LinkType** |
+| bundle 层未选择 | 无任何警告；路由 404 + cordis.patch.yml 无守护行 | 插件必须同时出现在 dependencies 与 `dsh.profile.bundles` |
+| 会话内启动沙箱 | `error: select a profile only once` | 先 `Remove-Item Env:DSH_PROFILE`（会话继承 desktop 的 profile 标记） |
+
+## 7.2 沙箱必须用 shipped 模板（v0.7 实测，比上面三坑更隐蔽）
+
+| 坑 | 指纹 | 正确做法 |
+|---|---|---|
+| **手写官方包版本 pin** | 启动日志刷 `disabling profile plugin row "…": … 0.2.1-rc.5 is incompatible with dsh 0.2.2-rc.1`，二十余行 | **不要写 pin**：`dsh sb-rg-c5 --from-default-profile web` 生成模板，官方 bundle 由运行时解析 |
+| 把「端口在听」当启动成功 | 有 token 行、能开 UI，但只有一行 `warning: N entry did not activate` | 逐条核对 §2.2 四条判据，见 [verification.md](./verification.md) §2.2 |
+| 沙箱 profile 里残留 Junction 时用 `Remove-Item -Recurse` 删目录 | **会跟进链接删掉源码仓库** | 先 `Remove-Item <junction> -Force`（只删链接）→ 再 `cmd /c rmdir /s /q <dir>`；删完立刻 `Test-Path src/index.ts` 复核 |
+
+## 8. YAML 写入纪律（v0.7 崩溃级缺陷沉淀）
+
+守护行是**追加**到用户的 `cordis.patch.yml` 里的，因此写入路径必须自证清白：
+
+1. **发射必引号**：`yamlScalar()` 单引号（唯一转义 `''`）；`!!js` 表达式用
+   `yamlDoubleQuoted()` 完整转义 `\` 与 `"`。绝不用 plain scalar。
+2. **校验后提交**：`validatePatchText()` 检查整份文档；不通过就**保持原样**返回
+   `ok:false`。宁可少一行守护行，不可让 profile 起不来。
+3. **原子落盘**：同目录 `.rg-tmp` + rename，崩溃在写入中途也不会得到半截文件。
+4. **一次性 pristine 备份**：`<profile>/.recency-guard/cordis.patch.yml.orig`，
+   有界（不增长），是回答"守护插件到底改了我什么"的唯一凭据。
+5. **重复行 id 直接拒绝**：Loader 遇 `duplicate loader entry id` 会抛错，
+   这必须在写入前拦下，不能指望调用方记得去重。
+
+修复既有污染用 `npm run repair-patch -- <profile 目录> [--dry-run]`。

@@ -17,8 +17,16 @@ import en from '../../locale/en.json' with { type: 'json' }
 
 export type ClientLang = 'zh' | 'en'
 
-interface Dict {
-  [key: string]: string | { [key: string]: string }
+/**
+ * 字典节点 —— 递归结构：叶子是字符串，分支是嵌套对象。
+ *
+ * 为什么递归而不是「string | 一层对象」：图例键（graph.kind.capability）
+ * 天然是两层分组（类型 → 语言），硬拍平会让 zh/en 文件出现 `kind.x`
+ * 字面量键 —— 与 lookup 的点号路径语义（按 `.` 拆段逐层下钻）不一致，
+ * 实测会让翻译回退到键本身。
+ */
+export interface Dict {
+  [key: string]: string | Dict
 }
 
 /** 语言选择键。 */

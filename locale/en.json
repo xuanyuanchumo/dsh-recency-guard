@@ -6,34 +6,56 @@
     "unavailable": "Data surface unavailable",
     "unavailableHint": "The host does not expose the guard routes (no webServer in this runtime).",
     "refresh": "Refresh",
+    "pausePolling": "Pause polling",
+    "resumePolling": "Resume polling",
     "archive": "Archive & reset",
     "archiveConfirm": "Archive the current artifacts and restart from the latest facts?",
+    "archiveDefaultReason": "manual archive from the panel",
     "recover": "Recover now",
     "reenable": "Re-enable",
     "empty": "No data",
-    "emptyHint": "The guard has not recorded any startup facts yet."
+    "emptyHint": "The guard has not recorded any startup facts yet.",
+    "snapshotAt": "Snapshot at {time}",
+    "pollingOn": "polling every {seconds}s",
+    "pollingPaused": "polling paused (the view is frozen at the pause moment)"
   },
   "sections": {
     "state": "Lifecycle",
     "metrics": "Metrics",
+    "decisions": "Crash decisions",
     "risks": "Suspect ranking",
-    "capabilities": "Capability matrix",
+    "capabilities": "Capabilities",
     "graph": "Capability graph",
     "partitions": "Project isolation",
     "archives": "Archives"
   },
+  "stage": {
+    "idle": "idle",
+    "monitoring": "monitoring",
+    "crashed": "crashed",
+    "deciding": "deciding",
+    "stabilizing": "stabilizing",
+    "recovered": "recovered"
+  },
   "state": {
     "stage": "Current stage",
+    "stages": "Stage rail",
     "stability": "Stability score",
-    "transitions": "Transition history",
-    "noTransitions": "No transitions recorded"
+    "transitions": "Transitions",
+    "noTransitions": "No transitions recorded",
+    "autoDisabled": "Auto-disabled",
+    "restored": "Restored"
   },
   "metrics": {
     "crashRate": "Crash rate",
+    "crashPressure": "Crash pressure (EWMA)",
     "meanRecoveryTime": "Mean recovery time",
     "detectionRate": "Crash detection rate",
     "isolationPurity": "Isolation purity",
     "trend": "Crash trend",
+    "trendSamples": "{count} samples · slope {slope}",
+    "intervals": "Crash intervals (median / CV)",
+    "changePoint": "CUSUM change point",
     "undefined": "not determinable"
   },
   "trend": {
@@ -41,16 +63,49 @@
     "improving": "improving",
     "stable": "stable"
   },
+  "kpi": {
+    "title": "Key indicators",
+    "changePointYes": "change point detected",
+    "changePointNo": "no upward change point"
+  },
   "risks": {
     "empty": "No suspect plugins",
     "experimental": "experimental",
-    "suspectHits": "{count} prior suspect hits"
+    "suspectHits": "{count} prior suspect hits",
+    "count": "{count} total"
+  },
+  "decisions": {
+    "empty": "No crash decision recorded yet",
+    "count": "{count} plugin(s) currently disabled",
+    "unknownTime": "time unknown",
+    "kind": {
+      "crash": "crash",
+      "disabled": "disabled",
+      "restored": "restored",
+      "note": "note"
+    }
   },
   "capabilities": {
     "total": "Total capabilities",
     "exposed": "Exposed",
+    "exposedMismatch": "the graph's exposure marks disagree with the snapshot count (the graph counts node weight)",
+    "graphSays": "graph says {count}",
     "connected": "Connected",
     "connectivity": "Connectivity",
+    "components": "Components",
+    "isolatedCount": "{count} isolated",
+    "list": "Registered / produces / consumes",
+    "none": "The graph has no capability node",
+    "graphMissing": "Graph data is not ready: the produce/consume links live in the graph only, and nothing is guessed here",
+    "colName": "Capability",
+    "colStage": "Stage",
+    "colExposed": "Exposed",
+    "colConsumes": "Consumes (whom I consume)",
+    "colConsumedBy": "Consumed by (who consumes me)",
+    "yes": "yes",
+    "expand": "Show all {count}",
+    "collapse": "Collapse",
+    "hintCount": "{count} items",
     "gaps": "Gaps",
     "noGaps": "No capability gaps found",
     "gapBroken": "Broken consumption",
@@ -61,29 +116,92 @@
   },
   "graph": {
     "title": "Capability production and consumption",
-    "hint": "Scroll to zoom, drag to pan, click a node to highlight its connections.",
+    "hint": "scroll to zoom · drag to pan · drag a node to rearrange · click to highlight · double-click to centre · Esc to exit",
+    "zoomGroup": "Zoom",
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",
     "fit": "Fit",
-    "reset": "Clear highlight",
+    "reset": "Clear observation",
+    "zoomLevel": "zoom",
+    "counts": "{nodes} nodes · {edges} edges",
+    "selected": "selected",
+    "clearSelection": "clear selection",
     "components": "Components",
     "isolated": "Isolated nodes",
     "legend": "Show or hide by type",
-    "empty": "The graph is empty"
+    "legendToggle": "Show or hide \"{kind}\"",
+    "empty": "The graph is empty",
+    "unavailable": "Graph data unavailable (the host returned no graph).",
+    "search": "Search nodes (Enter locates the first)",
+    "searchResults": "Search results",
+    "noResults": "No matching node",
+    "details": "Node details",
+    "kindLabel": "Kind",
+    "refLabel": "Reference",
+    "degreeLabel": "Degree",
+    "degreeValue": "in {in} · out {out}",
+    "locate": "Centre on node",
+    "closeDetails": "Close details",
+    "neighborsUp": "Upstream (producers)",
+    "neighborsDown": "Downstream (consumers)",
+    "edgeProduces": "produces",
+    "edgeConsumes": "consumes",
+    "layout": {
+      "label": "Layout",
+      "layered": "Layered",
+      "radial": "Radial"
+    },
+    "colorBy": "Colour by",
+    "color": {
+      "tone": "Risk",
+      "kind": "Kind",
+      "stage": "Stage"
+    },
+    "onlyConnected": "Connected only",
+    "onlyConnectedHint": "Keep only the subgraph reachable from the selected node (select a node first)",
+    "kind": {
+      "capability": "Capability",
+      "stage": "Stage",
+      "metric": "Metric",
+      "bundle": "Bundle",
+      "gap": "Gap"
+    }
   },
   "events": {
-    "title": "Event stream"
+    "title": "Event stream",
+    "count": "last {count}"
   },
   "partitions": {
     "title": "Project partitions",
     "hint": "Each workspace keeps its own ledger; none pollutes another.",
     "current": "current",
-    "empty": "No partition recorded"
+    "empty": "No partition recorded",
+    "select": "Partition to inspect",
+    "inspecting": "inspecting",
+    "inspect": "Inspect",
+    "mismatch": "The host data surface cannot query by partition: {requested}… was requested but the current partition {actual}… came back.",
+    "inspectingNotice": "Inspecting recorded facts of partition \"{label}\".",
+    "backToCurrent": "Back to the current partition",
+    "writeNote": "The data surface (snapshot / graph / archives) is always served by the host for its current workspace; inspecting another partition never changes what the host writes.",
+    "count": "{count} partitions"
   },
   "archives": {
     "empty": "No archives yet",
     "archivedAt": "archived at {time}",
     "reason": "reason",
-    "entries": "{count} artifacts"
+    "entries": "{count} artifacts",
+    "summaryCrashes": "{count} crashes",
+    "summaryEvents": "{count} events",
+    "summaryDisabled": "disabled",
+    "explain": "Archiving = move away + keep the manifest (read before moving); after a reset no old conclusion is inherited and the cycle restarts from the latest facts.",
+    "reasonLabel": "Archive reason",
+    "reasonPlaceholder": "Why archive this (it is kept in the manifest)",
+    "run": "Archive & rerun"
+  },
+  "time": {
+    "justNow": "just now",
+    "minutesAgo": "{count} min ago",
+    "hoursAgo": "{count} h ago",
+    "daysAgo": "{count} d ago"
   }
 }

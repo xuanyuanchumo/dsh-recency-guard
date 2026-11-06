@@ -1,0 +1,16 @@
+{
+  "status": "EVALUATING",
+  "round": 0,
+  "maxRounds": 3,
+  "lastEvalScore": 0,
+  "lastGateVerdict": "FAIL",
+  "history": [
+    {
+      "round": 0,
+      "evalScore": 0,
+      "gateVerdict": "FAIL",
+      "fixApplied": null,
+      "timestamp": "2026-11-05T16:46:39.335Z"
+    }
+  ]
+}

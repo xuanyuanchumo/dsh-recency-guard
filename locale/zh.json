@@ -6,34 +6,56 @@
     "unavailable": "数据面不可用",
     "unavailableHint": "宿主未提供守护路由（无 webServer 的运行环境）。",
     "refresh": "刷新",
+    "pausePolling": "暂停轮询",
+    "resumePolling": "恢复轮询",
     "archive": "归档重置",
     "archiveConfirm": "归档当前产物并按最新事实重跑？",
+    "archiveDefaultReason": "面板手动归档",
     "recover": "立即恢复",
     "reenable": "重新启用",
     "empty": "暂无数据",
-    "emptyHint": "守护插件尚未记录任何启动事实。"
+    "emptyHint": "守护插件尚未记录任何启动事实。",
+    "snapshotAt": "快照时刻 {time}",
+    "pollingOn": "每 {seconds} 秒轮询",
+    "pollingPaused": "轮询已暂停（画面停在暂停时刻）"
   },
   "sections": {
     "state": "生命周期",
     "metrics": "量化指标",
+    "decisions": "崩溃决策",
     "risks": "嫌疑排名",
-    "capabilities": "能力矩阵",
+    "capabilities": "能力清单",
     "graph": "能力图谱",
     "partitions": "项目隔离",
     "archives": "归档"
   },
+  "stage": {
+    "idle": "空闲",
+    "monitoring": "监控中",
+    "crashed": "崩溃",
+    "deciding": "决策中",
+    "stabilizing": "稳定中",
+    "recovered": "已恢复"
+  },
   "state": {
     "stage": "当前阶段",
+    "stages": "阶段轨道",
     "stability": "稳定性评分",
-    "transitions": "迁移历史",
-    "noTransitions": "尚无迁移记录"
+    "transitions": "迁移次数",
+    "noTransitions": "尚无迁移记录",
+    "autoDisabled": "自动关闭",
+    "restored": "已恢复"
   },
   "metrics": {
     "crashRate": "崩溃率",
+    "crashPressure": "崩溃压力（EWMA）",
     "meanRecoveryTime": "平均恢复耗时",
     "detectionRate": "崩溃检出率",
     "isolationPurity": "隔离纯度",
     "trend": "崩溃趋势",
+    "trendSamples": "{count} 个样本 · 斜率 {slope}",
+    "intervals": "崩溃间隔（中位 / CV）",
+    "changePoint": "CUSUM 变点",
     "undefined": "不可判定"
   },
   "trend": {
@@ -41,16 +63,49 @@
     "improving": "改善中",
     "stable": "平稳"
   },
+  "kpi": {
+    "title": "关键指标",
+    "changePointYes": "变点已检出",
+    "changePointNo": "无上行变点"
+  },
   "risks": {
     "empty": "当前没有嫌疑插件",
     "experimental": "实验性",
-    "suspectHits": "历史嫌疑 {count} 次"
+    "suspectHits": "历史嫌疑 {count} 次",
+    "count": "共 {count} 个"
+  },
+  "decisions": {
+    "empty": "尚无崩溃决策记录",
+    "count": "{count} 个插件处于关闭态",
+    "unknownTime": "时刻未知",
+    "kind": {
+      "crash": "崩溃",
+      "disabled": "已关闭",
+      "restored": "已恢复",
+      "note": "备注"
+    }
   },
   "capabilities": {
     "total": "能力总数",
     "exposed": "对外暴露",
+    "exposedMismatch": "图谱节点的暴露标记与快照计数不一致（图谱按节点 weight 统计）",
+    "graphSays": "图谱口径 {count}",
     "connected": "已连通",
     "connectivity": "连通率",
+    "components": "连通分量",
+    "isolatedCount": "孤立 {count}",
+    "list": "注册 / 生产 / 消费",
+    "none": "图谱里没有能力节点",
+    "graphMissing": "图谱数据未就绪：生产/消费链路只在图谱里，这里不猜",
+    "colName": "能力",
+    "colStage": "阶段",
+    "colExposed": "暴露",
+    "colConsumes": "消费（我消费谁）",
+    "colConsumedBy": "被消费（谁消费我）",
+    "yes": "是",
+    "expand": "展开全部 {count} 项",
+    "collapse": "收起",
+    "hintCount": "{count} 项",
     "gaps": "缺口",
     "noGaps": "没有发现能力缺口",
     "gapBroken": "消费断链",
@@ -61,29 +116,92 @@
   },
   "graph": {
     "title": "能力生产消费图",
-    "hint": "滚轮缩放，拖拽平移，点击节点高亮其连接。",
+    "hint": "滚轮缩放 · 拖拽平移 · 拖节点调整布局 · 点击高亮 · 双击居中 · Esc 退出观察",
+    "zoomGroup": "缩放",
     "zoomIn": "放大",
     "zoomOut": "缩小",
     "fit": "适配",
-    "reset": "清除高亮",
+    "reset": "清除观察态",
+    "zoomLevel": "缩放",
+    "counts": "节点 {nodes} · 边 {edges}",
+    "selected": "已选中",
+    "clearSelection": "清除选中",
     "components": "连通分量",
     "isolated": "孤立节点",
     "legend": "按类型显示或隐藏",
-    "empty": "图谱为空"
+    "legendToggle": "显示或隐藏「{kind}」",
+    "empty": "图谱为空",
+    "unavailable": "图谱数据不可用（宿主未返回图谱）。",
+    "search": "搜索节点（回车定位第一个）",
+    "searchResults": "搜索结果",
+    "noResults": "没有匹配的节点",
+    "details": "节点详情",
+    "kindLabel": "类型",
+    "refLabel": "引用",
+    "degreeLabel": "连接数",
+    "degreeValue": "入 {in} · 出 {out}",
+    "locate": "居中定位",
+    "closeDetails": "关闭详情",
+    "neighborsUp": "上游（生产方）",
+    "neighborsDown": "下游（消费方）",
+    "edgeProduces": "生产",
+    "edgeConsumes": "消费",
+    "layout": {
+      "label": "布局",
+      "layered": "分层",
+      "radial": "环形"
+    },
+    "colorBy": "着色",
+    "color": {
+      "tone": "风险",
+      "kind": "类型",
+      "stage": "阶段"
+    },
+    "onlyConnected": "只看关联",
+    "onlyConnectedHint": "只保留与选中节点双向可达的子图（先选中一个节点）",
+    "kind": {
+      "capability": "能力",
+      "stage": "阶段",
+      "metric": "指标",
+      "bundle": "插件",
+      "gap": "缺口"
+    }
   },
   "events": {
-    "title": "事件流"
+    "title": "事件流",
+    "count": "最近 {count} 条"
   },
   "partitions": {
     "title": "项目分区",
     "hint": "每个工作区独立记账，互不干扰。",
     "current": "当前",
-    "empty": "尚无分区记录"
+    "empty": "尚无分区记录",
+    "select": "查看哪个分区",
+    "inspecting": "查看中",
+    "inspect": "查看",
+    "mismatch": "宿主数据面不支持按分区查询：请求的是 {requested}…，返回的仍是当前分区 {actual}…。",
+    "inspectingNotice": "正在查看分区「{label}」的历史事实。",
+    "backToCurrent": "返回当前分区",
+    "writeNote": "数据面（快照/图谱/归档）始终由宿主按当前工作区返回；查看其它分区不会改变宿主的记账对象。",
+    "count": "{count} 个分区"
   },
   "archives": {
     "empty": "尚无归档",
     "archivedAt": "归档于 {time}",
     "reason": "原因",
-    "entries": "{count} 项产物"
+    "entries": "{count} 项产物",
+    "summaryCrashes": "崩溃 {count} 次",
+    "summaryEvents": "事件 {count} 条",
+    "summaryDisabled": "曾关插件",
+    "explain": "归档 = 搬走 + 留档（manifest 先读后搬）；重置后不继承旧结论，按最新事实重新自举。",
+    "reasonLabel": "归档原因",
+    "reasonPlaceholder": "写清为什么归档（会留在 manifest 里）",
+    "run": "归档并重跑"
+  },
+  "time": {
+    "justNow": "刚刚",
+    "minutesAgo": "{count} 分钟前",
+    "hoursAgo": "{count} 小时前",
+    "daysAgo": "{count} 天前"
   }
 }

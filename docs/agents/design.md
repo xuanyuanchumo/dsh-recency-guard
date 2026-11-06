@@ -1,4 +1,16 @@
-# 架构与设计（dsh-recency-guard v0.4）
+# 架构与设计（dsh-recency-guard v0.7）
+
+## 0. v0.7 的关键变化（先读这段）
+
+| 变化 | 为什么 |
+|---|---|
+| `patch.ts` 拆成 `patch-scalar.ts` / `patch-yaml.ts` / `patch.ts` 三层 | 发射+校验逻辑膨胀到复杂度 142（预算 100）。按「标量 / 文档 / 行寻址」切开，各层可独立穷举测试，`patch.ts` 退化为门面 |
+| 守护行发射改为**永远引号** | `@` 是 YAML 保留指示符，scoped 包名让整份 profile patch 不可解析 —— 防崩溃的插件把 profile 写崩了 |
+| 追加改为**校验后提交 + 原子回滚 + pristine 备份** | 发射正确还不够：文件里有别人手写的行，接缝才是风险所在 |
+| 新增 `scripts/repair-patch.mjs` | 已经写坏的真机 profile 需要一次可逆修复 |
+| `ctx.configEditor` 改走 `tryReadService` | 未 inject 直接读会抛错 → 整个插件不激活（沙箱实测） |
+| 工具规范值 `data` 摊平回顶层 | v0.7 重构 display 时漏掉，宿主层测试以 `status.profile === undefined` 报出 |
+| 图谱滚轮改原生非 passive 监听 | React 的 `onWheel` 是 passive，`preventDefault` 无效 → 缩放连带滚页面 |
 
 ## 1. 模块地图（依赖方向：自上而下）
 
@@ -20,15 +32,18 @@ src/
 ├── graph-data.ts       图谱数据模型 + 分层布局 + 连通分量（并查集）
 ├── routes.ts           宿主数据面路由（Node http 风格 handler，路径字面量）
 ├── routes-plugin.ts    路由子插件（唯一声明 webServer 硬依赖的地方）
-├── patch.ts / guarded-rows.ts  profile patch 行读写与守护行安装
+├── patch-scalar.ts     YAML 标量层（发射 / 读取 / plain-scalar 合法性）
+├── patch-yaml.ts       YAML 文档层（按缩进扫描 → 行结构 + 子集校验）
+├── patch.ts            profile patch 行寻址 + 守护行文本 + 备份（门面，再导出标量层）
+├── guarded-rows.ts    守护行安装（同步）+ 追加的校验/原子/回滚
 ├── recency.ts          嫌疑分类与最近更新排序
 └── client/
     ├── index.ts        席位注册（main + sidebar.panellist）
-    ├── GuardPanel.tsx  管理面板（生命周期/指标/排名/能力/分区/事件流/归档）
-    ├── GuardGraph.tsx  可交互图谱（箭头/裁剪边/图例过滤/悬停/列标题）
-    ├── viewport.ts     视口原语（纯函数）+ clipToRect 边裁剪
+    ├── GuardPanel.tsx  管理面板（KPI 条 + 可折叠卡片 + 图谱 + 归档）
+    ├── GuardGraph.tsx  可交互图谱（曲线边/拖拽/搜索/详情侧栏/双击居中）
+    ├── viewport.ts     视口原语（纯函数）+ 曲线边/平行边/搜索/居中
     ├── api.ts          数据面客户端（形状校验，诚实失败）
-    └── i18n.ts         自持字典（zh/en，回退链可见）
+    └── i18n.ts         自持字典（zh/en，递归 Dict，回退链可见）
 ```
 
 ## 2. 核心数据流（崩溃恢复主线）
@@ -63,6 +78,7 @@ idle ──▶ monitoring ──崩溃──▶ crashed ──▶ deciding ─�
 |---|---|---|
 | `Metric<T>` | 诚实边界：null ≠ 0 | `defined` + `reason` |
 | EWMA（半衰期） | 近期崩溃密度平滑 | H=3 ⇒ α≈0.206 |
+| **崩溃压力 crashPressure（v0.6）** | EWMA(0/1 启动信号)，时间局部性 | H=5 次启动；无观测 = null |
 | CUSUM 变点 | 崩溃密度上行检测 | P75 基准 × 0.75 容差，阈 1.5×q |
 | 中位间隔 + CV | 崩溃间隔鲁棒统计 | — |
 | 线性插值分位数 | 小样本平滑阈值 | 与 NumPy linear 一致 |
@@ -73,6 +89,11 @@ idle ──▶ monitoring ──崩溃──▶ crashed ──▶ deciding ─�
 容差后几乎无法累计证据 —— 检测器对真实变化结构性失明（cycle-3 实测）。
 P75 之下只有 25% 样本，只有持续显著变密才推得过阈值。
 
+**崩溃压力为什么不是 crashRate**：整体比率把「很久以前崩过一次」与
+「刚刚连崩两次」算成同一个数。crashPressure 把启动序列编码成 0/1 信号
+再做 EWMA（半衰期 5 次启动），指数遗忘表达「多久算近期」；全平稳序列的
+0 是**真值**（有数据且每次都没崩），与不可判定的 null 语义不同（cycle-4）。
+
 ## 5. 图谱布局与交互
 
 - **分层布局**（列 = 生命周期阶段），不用力导向：确定性（同数据同图）+ O(V log V)。
@@ -82,9 +103,137 @@ P75 之下只有 25% 样本，只有持续显著变密才推得过阈值。
 - 追溯：BFS（最少跳数 = 用户心里的「直接相关」）。
 - 视口原语全纯函数：锚点缩放推导 `t1 = anchor − (anchor−t0)·s1/s0`。
 
+### v0.5 交互增强的设计取舍
+
+- **曲线边**：二次贝塞尔（一个控制点够表达「往哪边弯」）；控制点 =
+  线段中点沿单位法向量推开 `curvature`；零曲率退化为直线（老数据不变形）。
+- **平行边**：同一端点对（互逆算同一对）的第 i 条边按 `parallelIndexes`
+  得到序号，`parallelCurvature` 奇偶交替（+18/−18/+36…），一左一右分开。
+- **节点拖拽**：屏幕位移 ÷ 当前 scale = 世界偏移，存 `offsets[id]` 叠加在
+  分层布局上 —— 布局仍是确定性投影，用户调整是**叠加层**，轮询不重置。
+- **搜索**：`matchNodes` 按精确 id → 前缀 → 标签子串三级排序；
+  Enter 定位第一个 = `centerOn`（视口居中）+ 选中。
+- **双击居中**：单击只改高亮（轻量探索），双击才移动视口（明确意图）。
+- **性能不变式**：`id→node` 索引 useMemo 与节点数组绑定，每数组一次；
+  严禁在边的 filter/map 回调里重建索引（v0.4 的 O(E·V) 实测债）。
+
+### v0.6 邻居导航（T04）
+
+- 度数（入/出）只回答「有几条边」，邻居列表回答「连到谁」——
+  详情侧栏按上游（生产方）/下游（消费方）分组列出可点击邻居，点击即
+  `locateNode`（居中 + 选中）。
+- 邻居派生规则：可见边中 `to === focus` 的 `from`（上游）与
+  `from === focus` 的 `to`（下游）；**端点不可见时不算**（类型过滤后幽灵
+  端点不可导航），**自环不算**（导航到自身无意义），Set 去重 +
+  label 字典序排序（稳定可比对）。派生逻辑与 client 测试同构，
+  组件与测试必须同步修改（本轮实测：先改组件漏改测试 → 自环断言翻红）。
+
+## 5.1 面板结构（v0.5 + v0.6）
+
+- **KPI 摘要条置顶**：稳定性 SVG 圆环（弧长 = score×周长，`rotate(-90)` 从
+  12 点起笔）、当前阶段、崩溃率、**崩溃压力（v0.6 EWMA）**、趋势判定、
+  CUSUM 变点 —— 一眼可读的六个数。
+- **卡片可折叠**：`Card` 骨架组件 + localStorage 记忆折叠态
+  （键 `recency-guard-collapsed`，storage 不可用时退化为会话内记忆）。
+- **轮询暂停**：暂停时画面时间停在暂停时刻（快照不更新），调试/截图用；
+  按钮有 aria-pressed + 边框变色的双通道提示。
+- **指标卡片补齐**：崩溃间隔（中位/CV）与 CUSUM 变点（v0.4 已在快照里）
+  本版本接入 UI —— 数据到了界面必须接住。
+- **隔离可见性（v0.6 T03）**：header 显示可读项目名（分区 label）+ 完整
+  工作区路径（悬停 title 兜底长路径），哈希前缀只在分区记录缺失时兜底 ——
+  哈希是机器的键，路径才是人可归因的事实。
+
 ## 6. 多项目隔离
 
 - 分区锚点是**项目目录**（`profileContext.cwd`），不是 profile 目录。
 - 守护行表达式拿不到分区键（只有 ctx + process）⇒ 用指针文件
   `.recency-guard/current.json` 搭桥：profile 目录 → 分区路径。
 - 分区索引只存引用不存状态；每分区独立 journal/state/decision/backups。
+
+## 7. 守护行写入管线（v0.7）——为什么不是「加个引号就完事」
+
+### 7.1 缺陷与三层防线
+
+真机证据：`~/.dsh/profiles/desktop/cordis.patch.yml:185`
+
+```yaml
+- id: ui-task-board
+  name: @linxin666/dsh-client-ui-task-board   # ← @ 是 YAML 保留指示符
+```
+
+js-yaml 报 `bad indentation of a mapping entry (185:9)`。注意失败的不是这一行，
+而是**整份文档**：Loader 拿不到任何 patch，守护行、禁用开关、config 覆盖一起失效。
+
+三层防线（缺一层都能再犯同样的错）：
+
+| 层 | 机制 | 失败时的行为 |
+|---|---|---|
+| 1 发射 | `yamlScalar()` 单引号 / `yamlDoubleQuoted()` 完整转义 | 结构上不可能产出非法标量 |
+| 2 校验 | `validatePatchText()` 全文档子集校验 | `ok:false`，**不写**，返回原因+行号 |
+| 3 落盘 | `.rg-tmp` + rename，回读复核 | 回滚到原文，文件字节不变 |
+
+### 7.2 为什么校验器要按缩进扫描而不是正则
+
+判断某个 `id:` 是不是 **Loader 行 id** 必须知道父级 key：`config.providers[].id`
+只是配置数据。用「任意 `- id:`」去重，会在真机桌面 profile 上把模型名
+`glm-5.3` / `deepseek-v4-flash-0731` 报成重复行 id（实测：一次 dry-run 刷出
+10 条假警告）。正确判据只有两种位置：
+
+1. 顶层序列（缩进 0 的 `- id:`）—— profile patch 覆盖既有行；
+2. `insert:` 的直接子项 —— 包自己声明的行。
+
+### 7.3 复杂度预算的驱动
+
+拆分前 `patch.ts` 复杂度 142（branches 108 / functions 17），预算 100。
+按职责切成标量层（87）与文档层后 `Status: OK`。
+**这不是为指标而拆**：标量层可以脱离任何文件做穷举测试（含 `\0`、换行、emoji、
+引号），文档层可以只喂文本 —— 两者混在一起时，测试必须建临时 profile 才能验证
+一句引号规则。
+
+## 8. 备份能力增强设计（v0.7 评估，未实现）
+
+用户提出「记录插件更新前后状态 + 检测式备份 + 自定义目录 + 可视化配置」。
+评估结论与分期如下（**当前未实现**，写在这里是为了让下一个循环不必重新论证）。
+
+### 8.1 采纳的部分
+
+| 需求 | 判断 | 落点 |
+|---|---|---|
+| 更新前后状态记录 | **采纳** | `journal.jsonl` 增事件：`update-start` / `update-complete`（含 from→to）/ `install-fail` |
+| 更新前备份受影响插件配置 | **采纳（增量）** | 只备份变更插件在 patch 里的 config 覆盖段 + package.json 差异，不做全量克隆 |
+| 自定义备份目录 | **采纳** | `RECENCY_GUARD_BACKUP_ROOT` 环境变量，默认 `<profile>/.recency-guard/backups` |
+| 可视化配置 | **采纳（P2）** | 面板新增「备份策略」卡片：开关 / 路径 / 保留份数 / 上限 |
+
+### 8.2 必须守住的约束
+
+1. **启动路径同步纪律不能破**：`recordStartupSync` 里只写「事实摘要」到 journal；
+   真正的备份动作排到启动完成后的微任务队列（fire-and-forget，失败只记日志）。
+   在崩溃路径上做异步备份等于没有备份。
+2. **有界**：保留份数 + 总大小上限 + LRU 清理；否则备份目录会自己变成下一个故障源。
+3. **原子**：`.tmp` → 校验 → rename，与守护行写入同款；备份后追加 checksum，
+   恢复前校验。
+4. **隔离**：备份落在分区子目录（`partitionKey`），多工作区不交叉。
+5. **失败不拖垮守护**：备份失败 = 降级（`configEditorAvailable: false` 同款语义），
+   不是错误、更不能阻塞启动。
+
+### 8.3 明确不采纳
+
+- **全量克隆 profile**：体积不可控，且会把无关插件的敏感配置卷进来；
+  增量 + 有界才是可持续的设计。
+- **在 `apply` 里异步等待备份完成**：违反同步纪律，且会让启动变慢。
+
+## 9. 可观测性接入点（宿主能力清单）
+
+已消费的宿主面，以及刻意未消费的面：
+
+| 宿主能力 | 用途 | 备注 |
+|---|---|---|
+| `profileContext` | profile 目录 / patch 路径 / cwd（分区锚点） | 必需，写进 `inject` |
+| `pluginManager` | 列举 bundle/plugin、启停插件 | 必需，写进 `inject` |
+| `tools` | 注册 `recency_guard` | 必需，写进 `inject` |
+| `webServer` | 8 条数据面路由 | **只在 `routes-plugin.ts` 声明**，避免 headless 下 fiber 挂起 |
+| `configEditor` | 关闭前备份插件配置 | **可选**：`tryReadService` + `ctx.inject` 子 fiber |
+| 崩溃哨兵（自有） | 不用宿主事件，因为要覆盖「宿主自己都没起来」的情况 | 同步写 `.recency-guard/sentinel.json` |
+
+未接入：session 事件、tool 调用钩子、宿主持久化层 —— 它们都要求插件已成功激活，
+而本插件的核心价值恰恰发生在**激活之前**，接进来对主目标无增益。

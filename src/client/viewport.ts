@@ -323,3 +323,123 @@ export function traceFrom(
   }
   return visited
 }
+
+/**
+ * 曲线边的 SVG 路径 —— 二次贝塞尔（Q 指令）。
+ *
+ * 为什么用二次而不是三次贝塞尔：一条边的形状只需要一个控制点来表达
+ * 「往哪边弯、弯多少」，二次贝塞尔的中间点公式（t=0.5 时 0.25A+0.5C+0.25B）
+ * 也是闭式的，标签定位无需数值积分。三次贝塞尔多出的一个控制点在这里
+ * 只会增加「两个端各调一个参数」的对齐负担。
+ *
+ * curvature 为 0（或两端重合）时退化为直线 —— 与旧行为逐字节一致，
+ * 老测试不用改。
+ */
+export function curveControl(ax: number, ay: number, bx: number, by: number, curvature: number): Point {
+  const dx = bx - ax
+  const dy = by - ay
+  const length = Math.hypot(dx, dy)
+  if (curvature === 0 || length < 1e-6) return { x: (ax + bx) / 2, y: (ay + by) / 2 }
+  // 单位法向量（垂直于连线方向）：把控制点从线段中点沿法线推开。
+  const nx = -dy / length
+  const ny = dx / length
+  return { x: (ax + bx) / 2 + nx * curvature, y: (ay + by) / 2 + ny * curvature }
+}
+
+export function curveEdgePath(ax: number, ay: number, bx: number, by: number, curvature = 0): string {
+  const c = curveControl(ax, ay, bx, by, curvature)
+  if (curvature === 0) return `M ${ax} ${ay} L ${bx} ${by}`
+  return `M ${ax} ${ay} Q ${c.x} ${c.y} ${bx} ${by}`
+}
+
+/**
+ * 平行边索引 —— 同一对端点（不分方向）之间已有多少条同伙边。
+ *
+ * 纯函数：输入边的顺序即遍历顺序，输出与输入同长；第 i 条边的值 =
+ * 在它之前与它共享同一端点对（from-to 或 to-from 视为同一对）的边数。
+ * 供 parallelCurvature 把同一对端点的多条边错开成不同弯曲方向。
+ */
+export function parallelIndexes(edges: ReadonlyArray<{ from: string; to: string }>): number[] {
+  const seen = new Map<string, number>()
+  const out: number[] = []
+  for (const edge of edges) {
+    const key = edge.from < edge.to ? `${edge.from}\u0000${edge.to}` : `${edge.to}\u0000${edge.from}`
+    const index = seen.get(key) ?? 0
+    out.push(index)
+    seen.set(key, index + 1)
+  }
+  return out
+}
+
+/** 二次贝塞尔在 t=0.5 处的点（闭式：0.25·A + 0.5·C + 0.25·B）。 */
+export function midpointOfQuadratic(
+  ax: number,
+  ay: number,
+  cx: number,
+  cy: number,
+  bx: number,
+  by: number,
+): Point {
+  return {
+    x: 0.25 * ax + 0.5 * cx + 0.25 * bx,
+    y: 0.25 * ay + 0.5 * cy + 0.25 * by,
+  }
+}
+
+/**
+ * 平行边的曲率分配 —— 同一对端点之间的第 i 条边弯向交替、幅度递增。
+ *
+ * 序列：i=0 → 0（直线），i=1 → +18，i=2 → −18，i=3 → +36 ……
+ * 奇偶交替保证两条平行边一左一右分开，而不是挤在同一次弯曲里。
+ * 返回 0 表示用直线（与唯一边一致），因此常见情形（无平行边）零成本。
+ */
+export function parallelCurvature(parallelIndex: number, unit = 18): number {
+  if (parallelIndex <= 0) return 0
+  const magnitude = Math.ceil(parallelIndex / 2) * unit
+  return parallelIndex % 2 === 1 ? magnitude : -magnitude
+}
+
+/**
+ * 搜索匹配 —— 按 id / 标签 / 引用对象做大小写不敏感的子串匹配。
+ *
+ * 返回按「id 精确 → 前缀 → 子串」优先级排序的节点列表：输入 `panel`
+ * 时精确 id 优先于标签里碰巧含 panel 的节点，避免「定位」跳到错误的节点。
+ */
+export function matchNodes<T extends { id: string; label: string; ref?: string }>(
+  nodes: readonly T[],
+  query: string,
+  limit = 8,
+): T[] {
+  const q = query.trim().toLowerCase()
+  if (q === '') return []
+  const scored: Array<{ node: T; rank: number }> = []
+  for (const node of nodes) {
+    const id = node.id.toLowerCase()
+    const label = node.label.toLowerCase()
+    const ref = (node.ref ?? '').toLowerCase()
+    let rank: number | null = null
+    if (id === q || ref === q) rank = 0
+    else if (id.startsWith(q) || ref.startsWith(q)) rank = 1
+    else if (label.startsWith(q)) rank = 2
+    else if (id.includes(q) || ref.includes(q) || label.includes(q)) rank = 3
+    if (rank !== null) scored.push({ node, rank })
+  }
+  scored.sort((a, b) => a.rank - b.rank || a.node.id.localeCompare(b.node.id))
+  return scored.slice(0, limit).map((s) => s.node)
+}
+
+/**
+ * 把一个世界坐标点放到视口中央。
+ *
+ * 推导：screen = world·scale + t ⇒ t = center − world·scale。
+ * 不在这里做边界钳制：钳制是视口策略（clampPan），居中是定位原语，
+ * 组合责任留给调用方（组件统一走 apply()）。
+ */
+export function centerOn(viewport: Viewport, size: Size, world: Point, targetScale?: number): Viewport {
+  const scale = clampScale(targetScale ?? viewport.scale)
+  return {
+    scale,
+    tx: finite(size.width, 0) / 2 - world.x * scale,
+    ty: finite(size.height, 0) / 2 - world.y * scale,
+  }
+}

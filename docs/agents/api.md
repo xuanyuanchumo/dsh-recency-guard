@@ -1,4 +1,46 @@
-# 对外面 API（dsh-recency-guard v0.4）
+# 对外面 API（dsh-recency-guard v0.7）
+
+## 0.0 v0.7 契约变更一句话清单
+
+| 变更 | 影响 | 兼容性 |
+|---|---|---|
+| `patch.ts` 拆分为 `patch-scalar.ts` / `patch-yaml.ts` / `patch.ts` | 仅内部模块边界 | **兼容**：`patch.js` 继续再导出全部历史符号 |
+| `appendPatchText()` 由 `void` 改为返回 `PatchAppendResult` | 追加可能被拒绝（非法 YAML / 重复 id） | **源码兼容**（忽略返回值仍可），语义变严 |
+| `installGuardedRows()` 结果增 `blocked` / `warnings` | 调用方可区分"装上了"与"被校验拦下" | 仅新增可选字段 |
+| 守护行文本改为全引号 | 落盘形态变化（`- id: 'x'`） | **YAML 语义兼容**，读取端已支持引号/裸值混排 |
+| `readPatchRows()` 只认「顶层或 `insert:` 子项」的 `- id:` | 嵌套 config 的 `id:` 不再被当作行 id | 修正假阳性，属 Bug 修复 |
+
+## 0. 工具输出契约（v0.7）——双形态同源，最容易踩的一条
+
+`recency_guard` 的 `execute()` 返回的是**规范 JSON 值**，不是字符串：
+
+```ts
+{
+  action: 'status',
+  ok: true,
+  summary: '守护正常，无待处理崩溃',
+  lines: [...],           // display.sections 的派生视图
+  data: { profile, dshVersion, crashSeq, suspectRanking, experimentalSuspects, ... },
+  display: { title, ok, summary, facts, sections, omitted, truncation },
+  // 业务数据同时**摊平在顶层**（status.profile / status.suspectRanking 直接可取）
+  profile: 'desktop',
+  suspectRanking: [...],
+  ...
+}
+```
+
+规则：
+
+1. **业务数据必须摊平在顶层**，同时保留在 `data` 下。历史上 `status.profile`
+   一直是顶层字段；v0.7 重构 display 时漏掉摊平，宿主层测试立刻以
+   `status.profile === undefined` 报出。模型与外部消费者只认顶层路径。
+2. **`lines` 是 `display.sections` 的派生**，不是手写第二份 —— 手写两份必然漂移
+   （"文本说 A、卡片说 B"）。
+3. **兜底键顺序**：`...data` 在前，`action/ok/summary/lines/data/display` 在后，
+   data 里即便出现同名键也顶不掉结构字段。
+4. **命令窗口显示** 走 `output.render(args, value)` → `renderOutcome()`：
+   摘要行 + 事实行（按列宽折行而非截断）+ 分区（含显式省略计数）。
+   长内容必须折行/折叠，不允许出现超长单行。
 
 ## 1. Agent 工具：`recency_guard`
 
@@ -22,14 +64,14 @@ v0.4 起 `execute` 返回**规范 JSON 对象**（不再是字符串）：
 
 | action | 参数 | 行为 |
 |---|---|---|
-| `status` | — | 崩溃状态、嫌疑排名（top10）、实验性名单、量化指标 |
+| `status` | — | 崩溃状态、嫌疑排名（top10）、实验性名单、量化指标；**v0.6**：输出带 `workspace` + `projectKey`（隔离归因） |
 | `history` | `limit?=40` | 安装/更新/崩溃/恢复事件时间线 |
 | `recover` | — | 立即按最近更新执行一次恢复关闭（crashSeq=1） |
 | `restore` | — | 重新启用非嫌疑插件，首要嫌疑保持关闭 |
 | `reenable` | `bundle` | 手动重新启用某个插件 |
 | `backups` | — | 配置备份清单 |
 | `archive` | `reason?` | **v0.4 新增**：归档产物并重置（按最新事实重新自举） |
-| `archives` | — | **v0.4 新增**：历史归档清单 |
+| `archives` | — | **v0.4 新增**：历史归档清单；**v0.6**：每份归档带 `summary`（crashSeq/autoDisabled/journalEvents，取自 manifest —— 举他对照的事实基线） |
 
 ## 2. HTTP 路由（面板数据面）
 
@@ -51,7 +93,8 @@ v0.4 起 `execute` 返回**规范 JSON 对象**（不再是字符串）：
 ```
 at / profile / projectKey / stage / stageLabel
 transitions[]                状态机迁移史（原因+时刻）
-metrics                      crashRate / meanRecoveryTime / detectionRate
+metrics                      crashRate / crashPressure（v0.6 EWMA 崩溃压力）
+                             / meanRecoveryTime / detectionRate
                              / isolationPurity / intervals / changePoint
                              （全部 Metric<T>：null = 不可判定，带 reason）
 risks[]                      嫌疑排名（bundle/risk/label/experimental）
@@ -61,6 +104,27 @@ partitions[]                 项目分区（key/label/workspace/lastSeenAt）
 autoDisabled[] / restored[]  关闭与恢复名单
 recentEvents[]               **v0.4 新增**：journal 尾部 24 条（事件流卡片数据源）
 ```
+
+## 3.1 面板与图谱客户端行为（v0.5 + v0.6）
+
+- **KPI 条**：稳定性圆环 / 阶段 / 崩溃率 / **崩溃压力（v0.6）** / 趋势 /
+  CUSUM 变点置顶；不可判定的指标显示「不可判定」而非 0（诚实边界进 UI）。
+- **隔离归因（v0.6）**：header 显示可读项目名（分区 label）+ 完整工作区
+  路径（悬停 title 兜底长路径）。
+- **归档卡片（v0.6）**：消费 `/archives` 的 `summary` 字段，显示每次归档
+  的崩溃次数 / 事件数 / 曾关插件（旧归档无摘要时诚实省略）。
+- **折叠卡片**：折叠态存 localStorage 键 `recency-guard-collapsed`
+  （JSON 数组）；读取失败退化为全展开 —— 不抛异常。
+- **轮询开关**：暂停 = 不再发 fetch，画面停在暂停时刻；
+  按钮文字/边框双通道区分（aria-pressed + `.rg-button-paused`）。
+- **图谱交互**（全部可由键盘/鼠标完成，均有 aria 标签）：
+  滚轮缩放（指针锚）· 拖画布平移 · 拖节点重排（offsets 叠加层）·
+  单击高亮追溯 · 双击视口居中 · 搜索定位（Enter 第一个）·
+  类型图例开关 · **邻居导航（v0.6：详情侧栏上游/下游可点击跳转）** ·
+  Esc 一次清空全部观察态。
+- **曲线边**：二次贝塞尔 `curveEdgePath`；平行边按 `parallelIndexes` +
+  `parallelCurvature` 奇偶交替弯曲；高亮边的生产/消费标签锚在
+  `midpointOfQuadratic` 闭式中点。
 
 ## 4. 能力清单（对 Agent 的承诺）
 

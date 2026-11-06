@@ -1,0 +1,21 @@
+{
+  "action": "in-sync",
+  "installedDir": "D:\\Projects\\TraeProjects\\dsh-recency-guard\\.dsh\\skills\\ai-native-iteration-cycle",
+  "repairedCount": 0,
+  "repaired": [],
+  "verify": {
+    "ok": true,
+    "reference": "inline",
+    "checked": 69,
+    "mismatches": [],
+    "extras": [],
+    "manifestVersion": "2.6.1",
+    "extraDrift": [],
+    "manifestStale": false,
+    "dualTrack": "in-sync",
+    "liveVersion": "2.6.1",
+    "inlineVersion": "2.6.1"
+  },
+  "inlineDir": "D:\\Projects\\TraeProjects\\dsh-anic\\assets\\skill",
+  "at": "2026-11-04T20:19:21.168Z"
+}

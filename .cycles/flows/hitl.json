@@ -1,0 +1,20 @@
+{
+  "flowId": "hitl",
+  "current": "PASSED",
+  "history": [
+    {
+      "trigger": "run",
+      "from": "IDLE",
+      "to": "RUNNING",
+      "at": "2026-11-04T18:26:13.670Z"
+    },
+    {
+      "trigger": "all-pass",
+      "from": "RUNNING",
+      "to": "PASSED",
+      "at": "2026-11-04T18:26:13.670Z"
+    }
+  ],
+  "updatedAt": "2026-11-04T18:26:13.670Z",
+  "ledgerHead": null
+}

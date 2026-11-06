@@ -39,6 +39,13 @@ export interface ArchiveManifest {
   workspace: string
   /** 被归档的条目（相对 profile 目录的路径 + 字节数）。 */
   entries: Array<{ path: string; bytes: number; kind: 'journal' | 'state' | 'decision' | 'backup' | 'other' }>
+  /**
+   * 搬不动的条目（诚实记录）。
+   *
+   * 旧实现把搬失败静默吞掉：清单看起来「归档了 N 项」，实际有残留还在原地，
+   * 而残留物会继续参与下一轮判断 —— 这正是「历史产物污染判断」的入口。
+   */
+  skipped?: string[]
   /** 归档时的关键事实摘要（供对照）。 */
   summary: {
     crashSeq: number
@@ -55,6 +62,8 @@ export interface ArchiveResult {
   manifest: ArchiveManifest
   /** 被归档的条目数。 */
   count: number
+  /** 搬不动的条目名（空数组表示干净归档）。 */
+  skipped: string[]
 }
 
 /** 产物的分类（决定清单里的 kind 字段）。 */
@@ -86,6 +95,7 @@ export function archiveAndReset(
   const archiveDir = join(archiveRoot, 'artifacts')
 
   const entries: ArchiveManifest['entries'] = []
+  const skipped: string[] = []
 
   // 读取被归档的状态与日志 —— 必须在**搬走之前**读。
   // （先搬后读是真实缺陷：清单里的 crashSeq 永远是 0，摘要静默失真。）
@@ -119,7 +129,9 @@ export function archiveAndReset(
         renameSync(source, target)
         entries.push({ path: name, bytes, kind: classify(name) })
       } catch {
-        // 搬不动的条目留在原地（不阻断重置）。
+        // 搬不动的条目留在原地（不阻断重置），但必须**记名** ——
+        // 静默跳过等于让残留物继续污染下一轮判断。
+        skipped.push(name)
         continue
       }
     }
@@ -131,33 +143,37 @@ export function archiveAndReset(
     reason,
     workspace,
     entries,
+    ...(skipped.length === 0 ? {} : { skipped }),
     summary: { crashSeq, autoDisabled, journalEvents },
   }
   mkdirSync(archiveRoot, { recursive: true })
   writeFileSync(join(archiveRoot, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8')
 
   // 生成新的空状态：崩溃计数归零，决策清空（不继承旧结论）。
+  resetArtifacts(stateDir, now)
+
+  return { archiveDir, manifest, count: entries.length, skipped }
+}
+
+/**
+ * 生成一份**全新的空产物**（归档后重置的落盘动作）。
+ *
+ * 单独抽出来是因为它不只被归档调用：任何「以最新事实重新开始」的入口
+ * （归档重置、自举重跑）都必须走同一条落盘路径 —— 复制一份「空状态」的
+ * 写法早晚会漂移，而漂移的空状态意味着旧结论从缝隙里漏回来。
+ */
+export function resetArtifacts(stateDir: string, now = new Date()): void {
   mkdirSync(join(stateDir, 'backups'), { recursive: true })
   writeFileSync(
     join(stateDir, 'decision.json'),
-    JSON.stringify(
-      { capturedAt: now.toISOString(), suspects: [], disable: [], reason: 'none' },
-      null,
-      2,
-    ),
+    JSON.stringify({ capturedAt: now.toISOString(), suspects: [], disable: [], reason: 'none' }, null, 2),
     'utf8',
   )
   writeFileSync(
     join(stateDir, 'state.json'),
-    JSON.stringify(
-      { bootMarker: null, crashSeq: 0, autoDisabled: [], stabilized: false, restored: [] },
-      null,
-      2,
-    ),
+    JSON.stringify({ bootMarker: null, crashSeq: 0, autoDisabled: [], stabilized: false, restored: [] }, null, 2),
     'utf8',
   )
-
-  return { archiveDir, manifest, count: entries.length }
 }
 
 /** 目录的字节数（递归）。 */

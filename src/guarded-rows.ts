@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { readPatchRows, guardedRowText } from './patch.js'
+import { readPatchRows, readPatchRowsFromText, guardedRowText, validatePatchText, ensurePatchBackup } from './patch.js'
 import { guardExpression } from './decision.js'
 import { isOfficial, isExperimentalName } from './recency.js'
 import { readDeclaredDependencies } from './observations.js'
@@ -86,6 +86,10 @@ export interface GuardInstallResult {
   added: GuardableRow[]
   /** 已存在（幂等跳过）的行。 */
   skipped: GuardableRow[]
+  /** 写入被校验拦下时的原因（此时 patch 文件未被修改）。 */
+  blocked?: string
+  /** 校验器给出的非致命提示（如重复行 id）。 */
+  warnings?: string[]
 }
 
 /**
@@ -110,19 +114,46 @@ export function installGuardedRows(profileDir: string, patchPath: string): Guard
       existing.add(row.rowId)
       added.push(row)
     }
-    if (chunks.length > 0) appendPatchText(patchPath, chunks.join('\n'))
+    if (chunks.length > 0) {
+      const result = appendPatchText(patchPath, chunks.join('\n'))
+      if (!result.ok) {
+        // 写入被拦下：patch 保持原样，profile 仍可启动。守护行缺失是可接受的退化，
+        // 「把 profile 写崩」不是。added 必须回退，否则调用方会记录假的成功。
+        return { added: [], skipped, blocked: result.reason, warnings: result.warnings }
+      }
+      return { added, skipped, warnings: result.warnings }
+    }
+    return { added, skipped }
   } catch {
     /* 守护行安装失败不该拖垮宿主启动 */
   }
   return { added, skipped }
 }
 
+/** 一次追加的结果。 */
+export interface PatchAppendResult {
+  ok: boolean
+  /** 失败原因（`ok === false` 时存在）。 */
+  reason?: string
+  /** 校验器的非致命提示。 */
+  warnings?: string[]
+  /** 追加前的原文（回滚基准，也用于审计）。 */
+  previous: string
+  /** 实际落盘的全文；失败时等于 `previous`。 */
+  next: string
+}
+
 /**
- * 往 profile patch 追加文本。
+ * 往 profile patch 追加文本 —— **校验后提交**。
+ *
+ * 这里的三段式（备份 → 校验 → 原子落盘 → 回读复核 → 失败回滚）不是防御性
+ * 编程的仪式感：v0.6.0 的崩溃是**追加了一段非法 YAML**造成的，而那次崩溃
+ * 表现成「DSH 根本起不来」——守护插件把要守护的 profile 写死了。
+ * 因此写入路径必须自证清白，任何一步不成立就保持原样。
  *
  * 保留原文件全部内容（含注释）—— 用户的 patch 是他们的资产，不该被重写。
  */
-export function appendPatchText(patchPath: string, text: string): void {
+export function appendPatchText(patchPath: string, text: string): PatchAppendResult {
   let current = ''
   try {
     current = readFileSync(patchPath, 'utf8')
@@ -142,7 +173,86 @@ export function appendPatchText(patchPath: string, text: string): void {
     .join('\n')
     .trimEnd()
   const separator = body === '' ? '' : '\n'
-  writeFileSync(patchPath, `${body}${separator}${text}\n`, 'utf8')
+  const next = `${body}${separator}${text}\n`
+
+  // 重复行 id 是 Loader 级别的硬崩溃（duplicate loader entry id），
+  // 所以它必须在**写入前**被拦下，而不是靠调用方记得去重。
+  // 这条检查让 appendPatchText 自身就是幂等安全的。
+  const existingIds = new Set(readPatchRowsFromText(current).map((r) => r.id))
+  const clash = new Set<string>()
+  for (const row of readPatchRowsFromText(text)) {
+    if (existingIds.has(row.id)) clash.add(row.id)
+  }
+  if (clash.size > 0) {
+    return {
+      ok: false,
+      reason: `行 id 已存在，拒绝重复追加：${[...clash].join(', ')}`,
+      warnings: [],
+      previous: current,
+      next: current,
+    }
+  }
+
+  const verdict = validatePatchText(next)
+  if (!verdict.ok) {
+    return {
+      ok: false,
+      reason: `${verdict.reason ?? 'YAML 校验未通过'}${verdict.line === undefined ? '' : `（第 ${verdict.line} 行）`}`,
+      warnings: verdict.warnings,
+      previous: current,
+      next: current,
+    }
+  }
+
+  ensurePatchBackup(patchPath, current)
+  try {
+    writeAtomic(patchPath, next)
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `写入失败：${error instanceof Error ? error.message : String(error)}`,
+      warnings: verdict.warnings,
+      previous: current,
+      next: current,
+    }
+  }
+
+  // 回读复核：确认落盘的内容确实是我们算出来的那一份（截断、编码、
+  // 并发覆盖都会在这里现形），不合格就把原文写回去。
+  let landed = ''
+  try {
+    landed = readFileSync(patchPath, 'utf8')
+  } catch {
+    landed = ''
+  }
+  if (landed !== next) {
+    const repaired = validatePatchText(landed).ok
+    if (!repaired) {
+      try {
+        writeAtomic(patchPath, current)
+      } catch {
+        /* 连回滚都失败：至少把原文留在内存里返回给调用方 */
+      }
+      return {
+        ok: false,
+        reason: '落盘内容与预期不一致且不可解析，已回滚',
+        warnings: verdict.warnings,
+        previous: current,
+        next: current,
+      }
+    }
+  }
+  return { ok: true, warnings: verdict.warnings, previous: current, next }
+}
+
+/**
+ * 同目录临时文件 + rename —— 崩溃在写入中途时，patch 要么是旧的、要么是
+ * 新的，绝不会是「半截」。同步 IO 是硬要求（见本模块顶部注释）。
+ */
+function writeAtomic(path: string, content: string): void {
+  const tmp = `${path}.rg-tmp`
+  writeFileSync(tmp, content, 'utf8')
+  renameSync(tmp, path)
 }
 
 /** 守护行是否已经装好（用于状态自检）。 */
