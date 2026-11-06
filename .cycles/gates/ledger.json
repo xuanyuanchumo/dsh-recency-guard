@@ -269,7 +269,16 @@
       "timestamp": "2026-11-06T08:56:33.625Z",
       "previousHash": "0c98b9f57955ae67bc6cc63452ed374ab4527e392f9a5d178146ce5c846de20a",
       "hash": "f84cf3457aeeaba83b778a4e493bd18a25ecc49377ff8ebdc2034f027e09fd66"
+    },
+    {
+      "gate": "G1",
+      "gateName": "任务收敛门",
+      "result": "PASS",
+      "detail": "All 8 tasks completed §cycle-1 [Q7:PASS]",
+      "timestamp": "2026-11-06T17:51:37.094Z",
+      "previousHash": "f84cf3457aeeaba83b778a4e493bd18a25ecc49377ff8ebdc2034f027e09fd66",
+      "hash": "18f98aa3c2d666bf0c06a7e5148d87d7d91756ae334eae78414842f72a0d3157"
     }
   ],
-  "chainHead": "f84cf3457aeeaba83b778a4e493bd18a25ecc49377ff8ebdc2034f027e09fd66"
+  "chainHead": "18f98aa3c2d666bf0c06a7e5148d87d7d91756ae334eae78414842f72a0d3157"
 }
