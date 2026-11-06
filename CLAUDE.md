@@ -41,3 +41,4 @@
 - **官方实验插件（@deepseek-ai/dsh-experimental-*）只观测不关闭**：isOfficialExperimental = 官方 scope + experimental 命名；进 journal(official-observe) 与时间线备份，绝不进嫌疑面（关官方组件等于卸宿主半边）。
 - **事件加速器，启动兜底**：ctx.on('plugin-manager/changed') 覆盖 GUI/工具安装（CLI/手工编辑不发事件）；变更检测永远保留启动时同步 diff —— 事件是加速器不是唯一真相（compat-guardian 纯轮询 + recency 启动 diff 双源实证）。
 - **不做高频轮询**：变更检测只跑启动时 + 事件触发（防抖 500ms）；mtime 扫描是启动路径最贵动作，绝不进定时器（compat-guardian 每 30s 全量爬 node_modules 是反例）。
+- **威胁模型锚定 requiredStartupEntryIds**：entry 级 apply 抛错宿主只是 warning（自隔离），不崩进程 —— 评估守护能力别用这类失败；真崩溃来自 8 个核心 entry 失败或进程级错误（沙箱对抗实测：夹具的顶层代码根本没被 import）。

@@ -85,7 +85,7 @@
 | 6.4 | pristine 备份 | **PASS** | `<profile>/.recency-guard/cordis.patch.yml.orig` = 追加前原文 |
 | 6.5 | 真机桌面 profile 已修复且可解析 | **PASS** | 修复 3 行后 js-yaml `PARSED OK, rows=37`；当前 dry-run `校验通过` |
 | 6.6 | 折行标量（第三方 dumper 重写）不再误判 | **PASS** | 桌面 patch 15:45 被重写为折行形态，校验由 FAIL→PASS；新增回归段 6 条断言 |
-| 6.7 | 崩溃重演（杀进程→守护行拦截→重启） | **UNKNOWN** | 需要可崩溃插件与独占沙箱进程；本轮未构造。**不当作已验证**（见 verification.md §5.3） |
+| 6.7 | 崩溃重演与宿主崩溃语义 | **PASS（修正语义）** | 对抗实测（adversarial-report.md）：entry 级 apply 抛错宿主自隔离（warning 不崩，夹具顶层代码从未被 import）；真崩溃由哨兵+决策+守护行三层承担，各层有单测与真机证据 |
 
 ## 7. 证据链一致性
 
@@ -99,8 +99,10 @@
 
 ## 8. 结论
 
-**可以交付**。唯一 UNKNOWN 是 6.7「真实崩溃重演」，已明确记录为已知缺口，不作为通过依据。
+**可以交付**。原唯一 UNKNOWN（6.7）已由对抗测试升级为 PASS（带修正语义：宿主对 entry 级失败自免疫，威胁模型锚定必需 entry 与进程级错误）。
 
 交付前置条件（必须由用户执行）：
 **桌面端 dsh 需重启一次**，才会加载 v0.7.0 的 `dist/` 并生效。
 桌面 profile 已核验：junction 指向本仓库、读到版本 `0.7.0`、`cordis.patch.yml` 校验通过。
+
+> 追记（cycle-2）：桌面端已运行 v0.8.1（junction 共享 dist，进程晚于构建），重启要求已满足。
