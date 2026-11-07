@@ -84,6 +84,7 @@
     "flow": "Semantic flow",
     "flowDetail": "Each event maps to stage/action/flow direction (kind→semantic table; unknown kinds are quoted verbatim)",
     "render": "Panel render",
+    "renderDetail": "Every card renders from the same snapshot (one timestamp — never 'state at A, metrics at B')",
     "flowCount": "{count} flow events"
   },
   "diagnostics": {

@@ -1,6 +1,6 @@
 {
   "flowId": "macro-phase",
-  "current": "design",
+  "current": "deploy",
   "history": [
     {
       "trigger": "advance",
@@ -67,8 +67,26 @@
       "from": "plan",
       "to": "design",
       "at": "2026-11-07T03:51:05.863Z"
+    },
+    {
+      "trigger": "advance",
+      "from": "design",
+      "to": "build",
+      "at": "2026-11-07T06:14:23.334Z"
+    },
+    {
+      "trigger": "advance",
+      "from": "build",
+      "to": "test",
+      "at": "2026-11-07T06:14:28.252Z"
+    },
+    {
+      "trigger": "advance",
+      "from": "test",
+      "to": "deploy",
+      "at": "2026-11-07T06:14:33.150Z"
     }
   ],
-  "updatedAt": "2026-11-07T03:51:05.863Z",
+  "updatedAt": "2026-11-07T06:14:33.150Z",
   "ledgerHead": null
 }

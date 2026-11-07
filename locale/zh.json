@@ -84,6 +84,7 @@
     "flow": "语义流动",
     "flowDetail": "每条事件映射到 阶段/动作/流向（kind→语义映射表，未知 kind 如实转述）",
     "render": "面板渲染",
+    "renderDetail": "同一份快照渲染全部卡片（时间点一致，不会出现「状态 A 时刻、指标 B 时刻」）",
     "flowCount": "{count} 条流动事件"
   },
   "diagnostics": {
