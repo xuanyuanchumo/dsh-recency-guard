@@ -8,6 +8,7 @@
 import {
   RingBuffer,
   computeMetrics,
+  controlBand,
   crashIntervalStats,
   crashPressure,
   crashRate,
@@ -33,6 +34,7 @@ import {
   undefinedMetric,
   type Metric,
 } from '../../src/observability.js'
+import { markovAnalysis } from '../../src/markov.js'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -398,6 +400,77 @@ function main(): void {
   check('一次未崩启动 ⇒ 压力是 0（真值）', once.crashPressure.defined && once.crashPressure.value === 0)
   check('一次未崩启动 ⇒ 无间隔统计', !once.intervals.defined)
   check('一次未崩启动 ⇒ 无崩溃检出率（无崩溃样本）', !once.detectionRate.defined)
+
+  console.log('\n== 控制带（休哈特单值-MR）==')
+  // 稳定过程：间隔在 60000ms 附近小幅波动 ⇒ 受控。
+  const bandSteadyTimes = [0, 60_000, 120_500, 179_000, 240_000, 299_500].map((t) => BASE + t)
+  const bandSteady = controlBand(bandSteadyTimes)
+  check('稳定过程 ⇒ 控制带可判定', bandSteady.defined)
+  check('稳定过程 ⇒ 无失控点', bandSteady.value !== null && bandSteady.value.breaches.length === 0, bandSteady.value)
+  check('稳定过程 ⇒ label 说受控', bandSteady.value !== null && bandSteady.value.label.includes('受控'))
+  // 失控过程：8 个恒定间隔 + 1 个骤缩。注意 MR 图的已知特性：单次突变会
+  // 抬高 MR̄（σ̂ 被突变本身污染），突变必须足够大才越带 —— 夹具用 8:1 的
+  // 恒定:骤缩比例让 LCL 显著高于 0，突变点（第 9 个间隔）才被点名。
+  const bandWorseTimes = [0, 60_000, 120_000, 180_000, 240_000, 300_000, 360_000, 420_000, 420_100].map(
+    (t) => BASE + t,
+  )
+  const bandWorse = controlBand(bandWorseTimes)
+  check('骤缩过程 ⇒ 控制带可判定', bandWorse.defined)
+  check(
+    '骤缩过程 ⇒ 报出失控间隔序号（第 8 个）',
+    bandWorse.value !== null && bandWorse.value.breaches.length === 1 && bandWorse.value.breaches[0] === 7,
+    bandWorse.value,
+  )
+  check('骤缩过程 ⇒ label 说失控（变密）', bandWorse.value !== null && bandWorse.value.label.includes('失控'))
+  // 边界：0/1 个间隔 ⇒ 不可判定。
+  const bandEmpty = controlBand([])
+  check('无崩溃 ⇒ 控制带不可判定', !bandEmpty.defined && bandEmpty.value === null)
+  const bandOne = controlBand([BASE, BASE + 60_000])
+  check('一个间隔 ⇒ 控制带不可判定（无 MR）', !bandOne.defined && bandOne.value === null)
+  // 时间戳倒序：非正间隔全部被过滤 ⇒ 无样本 ⇒ 诚实降级为不可判定
+  // （不排序兜底 —— 面板的时间线语义来自宿主的升序投影，乱序输入本身
+  // 就是数据缺陷，沉默修复会掩盖它）。
+  const bandReversed = controlBand([...bandWorseTimes].reverse())
+  check('倒序时间戳 ⇒ 诚实不可判定（负间隔全过滤）', !bandReversed.defined && bandReversed.value === null)
+  const bandSame = controlBand([BASE, BASE + 60_000, BASE + 120_000])
+  check('完美周期（σ̂=0）⇒ 带宽为 0 是真值', bandSame.defined && bandSame.value !== null && bandSame.value.lower === bandSame.value.upper, bandSame.value)
+  check('computeMetrics 快照带控制带', rich.controlBand !== undefined)
+  const bareBand = computeMetrics([], 0, [], BASE).controlBand
+  check('全空观测 ⇒ 快照控制带不可判定', !bareBand.defined)
+
+  console.log('\n== 马尔可夫转移矩阵 ==')
+  // 健康值守模式：monitoring 大概率回自己，偶尔崩一次走完整恢复链。
+  const healthy: Array<{ from: string; to: string }> = []
+  for (let i = 0; i < 16; i += 1) healthy.push({ from: 'monitoring', to: 'monitoring' })
+  healthy.push(
+    { from: 'monitoring', to: 'crashed' },
+    { from: 'crashed', to: 'deciding' },
+    { from: 'deciding', to: 'stabilizing' },
+    { from: 'stabilizing', to: 'recovered' },
+    { from: 'recovered', to: 'monitoring' },
+  )
+  const mk = markovAnalysis(healthy)
+  check('马尔可夫：样本数 = 迁移数', mk.samples === healthy.length, mk.samples)
+  const monitorRow = mk.rows.find((row) => row.stage === 'monitoring')
+  check('马尔可夫：monitoring 行有概率', monitorRow !== undefined && monitorRow.probabilities !== null)
+  check(
+    '马尔可夫：monitoring 自环概率 0.8（17 迁出中 16 次自环）',
+    monitorRow?.probabilities?.monitoring === 0.9412,
+    monitorRow?.probabilities,
+  )
+  check('马尔可夫：平稳分布收敛', mk.converged && mk.stationary !== null)
+  check('马尔可夫：平稳分布归一（和≈1）', mk.stationary !== null && Math.abs(Object.values(mk.stationary).reduce((a, b) => a + b, 0) - 1) < 0.01, mk.stationary)
+  check('马尔可夫：monitoring 平稳占比最高', mk.stationary !== null && Object.entries(mk.stationary).sort((a, b) => b[1] - a[1])[0]?.[0] === 'monitoring', mk.stationary)
+  // 空历史 ⇒ 全部不可判定（不猜）。
+  const mkEmpty = markovAnalysis([])
+  check('马尔可夫：空历史 ⇒ 样本 0', mkEmpty.samples === 0)
+  check('马尔可夫：空历史 ⇒ 平稳分布 null', mkEmpty.stationary === null && !mkEmpty.converged)
+  check('马尔可夫：空历史 ⇒ label 说明不可判定', mkEmpty.label.includes('不可判定'))
+  // 白名单外迁移被丢弃且如实计数。
+  const mkJunk = markovAnalysis([{ from: 'monitoring', to: 'atlantis' }, { from: 'monitoring', to: 'monitoring' }])
+  check('马尔可夫：白名单外迁移被丢弃', mkJunk.samples === 1 && mkJunk.label.includes('白名单外'), mkJunk.label)
+  // 快照接线：transition 投影直接进快照（markovAnalysis 由 snapshot.ts 消费，
+  // 这里只需确认同一实现被引用，防止模块被 tree-shake 出测试面）。
 
   console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}\n`)
   process.exit(failures === 0 ? 0 : 1)

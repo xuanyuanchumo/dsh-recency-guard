@@ -1,4 +1,16 @@
-# 对外面 API（dsh-recency-guard v0.9.1）
+# 对外面 API（dsh-recency-guard v0.10.0）
+
+## 0.0d v0.10 契约变更一句话清单
+
+| 变更 | 影响 | 兼容性 |
+|---|---|---|
+| 面板快照新增 `markov: MarkovAnalysis` | 转移矩阵卡：阶段去向分布 + 幂法平稳分布；samples=0 时 stationary=null（不猜） | 兼容（只增） |
+| `MetricsSnapshot` 新增 `controlBand`（休哈特单值-MR 控制带） | 指标卡新增「控制带」行；间隔 < 2 时 undefinedMetric | 兼容（只增） |
+| 面板快照新增 `diagnostics` 投影 | 系统诊断卡：插件/宿主版本、平台、Node、分区键、快照耗时、repositoryUrl/issuesUrl（null = 隐藏，不放死链） | 兼容（只增） |
+| package.json 新增 `repository` / `bugs` / `homepage` | 反馈入口的数据源（R18）；npm 与面板共用 | 兼容 |
+| `status` 工具输出新增 `pluginVersion` / `issuesUrl`（可选） | 命令窗口 facts 带「插件版本」「问题反馈」行 | 兼容（可选字段） |
+| `bin/rescue.mjs` status/history 输出按 CJK 显示宽对齐 | Windows 控制台不再错位（R10）；退出码契约不变 | 兼容（纯显示） |
+| 新增 `src/markov.ts` 模块 | 马尔可夫链视角的状态机分析（宿主侧拥有，客户端只渲染投影） | 新文件 |
 
 ## 0.0c v0.9.1 契约变更一句话清单
 

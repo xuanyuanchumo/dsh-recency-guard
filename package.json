@@ -1,9 +1,17 @@
 {
   "name": "dsh-recency-guard",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "description": "Crash-recovery guard for DeepSeek Harness: records third-party/experimental plugin install & update recency, backs up their config, and after a crash auto-disables the most-recently-updated plugin(s) so the profile boots again, then restores stable config.",
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xuanyuanchumo/dsh-recency-guard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xuanyuanchumo/dsh-recency-guard/issues"
+  },
+  "homepage": "https://github.com/xuanyuanchumo/dsh-recency-guard#readme",
   "main": "dist/index.js",
   "exports": {
     ".": "./dist/index.js",

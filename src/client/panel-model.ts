@@ -255,7 +255,142 @@ export function metricRows(snapshot: PanelSnapshot): MetricRow[] {
     (value: { index: number; at: string | null }) => `${t('kpi.changePointYes')} · #${value.index}`,
     null,
   )
+  push(
+    'controlBand',
+    t('metrics.controlBand'),
+    metrics.controlBand,
+    (value: { label: string }) => value.label,
+    null,
+  )
   return rows
+}
+
+/* ---------- 马尔可夫转移矩阵 ---------- */
+
+/** 马尔可夫卡要渲染的一行（一个阶段的去向分布）。 */
+export interface MarkovRowView {
+  stage: string
+  label: string
+  /** 自环概率（留在本阶段）；null = 无迁出样本。 */
+  selfLoop: number | null
+  /** 概率条的宽度百分比（自环 × 100）；null = 不画条。 */
+  barPercent: number | null
+}
+
+/** 马尔可夫分析的视图投影（纯函数：面板不直接读 markov 内部结构）。 */
+export function markovView(snapshot: PanelSnapshot): {
+  rows: MarkovRowView[]
+  stationary: Array<{ stage: string; share: number; percent: number }>
+  converged: boolean
+  samples: number
+  summary: string
+  available: boolean
+} {
+  const markov = snapshot.markov
+  const rows: MarkovRowView[] = markov.rows.map((row) => {
+    const selfLoop = row.probabilities?.[row.stage]
+    return {
+      stage: row.stage,
+      label: row.label,
+      selfLoop: typeof selfLoop === 'number' ? selfLoop : null,
+      barPercent: typeof selfLoop === 'number' ? Math.round(selfLoop * 100) : null,
+    }
+  })
+  const stationary =
+    markov.stationary === null
+      ? []
+      : Object.entries(markov.stationary)
+          .map(([stage, share]) => ({ stage, share, percent: Math.round(share * 100) }))
+          .sort((a, b) => b.share - a.share || a.stage.localeCompare(b.stage))
+  return {
+    rows,
+    stationary,
+    converged: markov.converged,
+    samples: markov.samples,
+    summary: markov.label,
+    available: markov.samples > 0,
+  }
+}
+
+/* ---------- 数据流（原始事件 → 投影 → 渲染） ---------- */
+
+/** 数据流链路的一环（白盒透明：每层各做了什么、还剩几条）。 */
+export interface DataFlowStage {
+  key: string
+  label: string
+  detail: string
+  count: number | null
+}
+
+/**
+ * 数据流链路投影（v0.10 R11「可视化流动」的白盒面）。
+ *
+ * 为什么从快照字段反推而不是单独接口：链路的每一环就是快照的一个字段
+ * （journal 原文 → recentEvents 截尾 → eventFlow 语义投影 → 面板渲染），
+ * 从快照自身推导链路读数，保证「链路图」与「链路实际承载数据」同源 ——
+ * 单独接口迟早会和快照漂移。
+ */
+export function dataFlowStages(snapshot: PanelSnapshot): DataFlowStage[] {
+  const flowCount = snapshot.eventFlow.length
+  return [
+    {
+      key: 'journal',
+      label: t('dataflow.journal'),
+      detail: t('dataflow.journalDetail'),
+      count: null,
+    },
+    {
+      key: 'events',
+      label: t('dataflow.events'),
+      detail: t('dataflow.eventsDetail'),
+      count: snapshot.recentEvents.length,
+    },
+    {
+      key: 'flow',
+      label: t('dataflow.flow'),
+      detail: t('dataflow.flowDetail'),
+      count: flowCount,
+    },
+    {
+      key: 'render',
+      label: t('dataflow.render'),
+      detail: t('dataflow.renderDetail'),
+      count: flowCount,
+    },
+  ]
+}
+
+/* ---------- 系统诊断（R12/R18） ---------- */
+
+/** 诊断卡的一行事实。 */
+export interface DiagnosticsRow {
+  key: string
+  label: string
+  value: string
+  /** null = 该行没有链接；有链接时值渲染成 <a>。 */
+  href: string | null
+}
+
+/** 系统诊断投影：版本事实 + 分区键 + 反馈入口。 */
+export function diagnosticsRows(snapshot: PanelSnapshot): DiagnosticsRow[] {
+  const d = snapshot.diagnostics
+  const rows: DiagnosticsRow[] = [
+    { key: 'pluginVersion', label: t('diagnostics.pluginVersion'), value: d.pluginVersion ?? t('diagnostics.unknown'), href: null },
+    { key: 'hostVersion', label: t('diagnostics.hostVersion'), value: d.hostVersion ?? t('diagnostics.unknown'), href: null },
+    { key: 'platform', label: t('diagnostics.platform'), value: `${d.platform} · node ${d.nodeVersion}`, href: null },
+    { key: 'partition', label: t('diagnostics.partition'), value: `${snapshot.projectKey.slice(0, 8)}…`, href: null },
+    { key: 'dataPlane', label: t('diagnostics.dataPlane'), value: t('diagnostics.dataPlaneOk'), href: null },
+    { key: 'snapshotMs', label: t('diagnostics.snapshotMs'), value: `${d.snapshotMs} ms`, href: null },
+  ]
+  if (d.repositoryUrl !== null) {
+    rows.push({ key: 'repository', label: t('diagnostics.repository'), value: shortRepoUrl(d.repositoryUrl), href: d.repositoryUrl })
+  }
+  return rows
+}
+
+/** 仓库链接的短显示（协议与域名去掉，路径留着）。 */
+function shortRepoUrl(url: string): string {
+  return url.replace(/^https:\/\/[^/]+\//, '')
 }
 
 /* ---------- 项目隔离 ---------- */

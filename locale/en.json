@@ -28,7 +28,10 @@
     "capabilities": "Capabilities",
     "graph": "Capability graph",
     "partitions": "Project isolation",
-    "archives": "Archives"
+    "archives": "Archives",
+    "markov": "Transition matrix",
+    "dataflow": "Data flow",
+    "diagnostics": "Diagnostics"
   },
   "stage": {
     "idle": "idle",
@@ -57,7 +60,46 @@
     "trendSamples": "{count} samples · slope {slope}",
     "intervals": "Crash intervals (median / CV)",
     "changePoint": "CUSUM change point",
+    "controlBand": "Control band (Shewhart)",
     "undefined": "not determinable"
+  },
+  "markov": {
+    "title": "Transition matrix",
+    "hint": "Where each stage goes next (Markov chain)",
+    "stage": "Stage",
+    "selfLoop": "stays here",
+    "stationary": "Long-run share",
+    "converged": "converged",
+    "notConverged": "not converged",
+    "samples": "{count} transitions",
+    "empty": "No transitions recorded yet — the matrix is not determinable"
+  },
+  "dataflow": {
+    "title": "Data flow",
+    "hint": "From host facts to panel pixels (white box)",
+    "journal": "Journal records",
+    "journalDetail": "Facts appended line-by-line by the host (synchronous IO on the crash path — survives the crash)",
+    "events": "Event projection",
+    "eventsDetail": "Journal tail (up to 40 entries) enters the snapshot",
+    "flow": "Semantic flow",
+    "flowDetail": "Each event maps to stage/action/flow direction (kind→semantic table; unknown kinds are quoted verbatim)",
+    "render": "Panel render",
+    "flowCount": "{count} flow events"
+  },
+  "diagnostics": {
+    "title": "Diagnostics",
+    "hint": "Host & plugin version facts + feedback entry",
+    "pluginVersion": "Plugin version",
+    "hostVersion": "Host version",
+    "platform": "Runtime",
+    "partition": "Partition key",
+    "dataPlane": "Data surface",
+    "dataPlaneOk": "reachable (snapshot produced)",
+    "snapshotMs": "Snapshot time",
+    "repository": "Repository",
+    "issues": "Report an issue",
+    "issuesHint": "Wrong plugin disabled / recovery misbehaving? Open an issue with the partition key + time + plugin name",
+    "unknown": "unknown"
   },
   "trend": {
     "worsening": "worsening",

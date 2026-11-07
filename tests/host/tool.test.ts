@@ -164,6 +164,9 @@ check(
 check('status carries the action echo', status.action === 'status', status.action)
 check('status is a business success', status.ok === true, status.ok)
 check('status carries a human summary', typeof status.summary === 'string' && status.summary.length > 0, status.summary)
+// v0.10 R18：命令窗口也带插件版本与反馈入口（排障现场直达 Issues）。
+check('status reports the plugin version', typeof status.pluginVersion === 'string' && status.pluginVersion.length > 0, status.pluginVersion)
+check('status reports the issues url', typeof status.issuesUrl === 'string' && status.issuesUrl.startsWith('https://'), status.issuesUrl)
 
 // output.render 把同一个规范值渲染成人读文本（双形态同源）。
 const rendered = tool.output.render({ action: 'status' }, status)
@@ -172,6 +175,11 @@ check(
   'render text is human-readable (not raw JSON)',
   typeof rendered[0]?.text === 'string' && rendered[0].text.includes('\n') && !rendered[0].text.trimStart().startsWith('{'),
   rendered[0]?.text?.slice(0, 80),
+)
+check(
+  'render text carries the feedback entry (R18)',
+  typeof rendered[0]?.text === 'string' && rendered[0].text.includes(status.issuesUrl),
+  rendered[0]?.text?.slice(-200),
 )
 
 const history = (await tool.execute({ action: 'history', limit: 5 }, exec)) as any

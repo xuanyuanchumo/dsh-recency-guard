@@ -287,7 +287,61 @@
       "timestamp": "2026-11-07T03:00:23.520Z",
       "previousHash": "18f98aa3c2d666bf0c06a7e5148d87d7d91756ae334eae78414842f72a0d3157",
       "hash": "ae4a3bfadfa5b4d22951974b246b9d9081acace9fbc363c53e649448ecd0bfbb"
+    },
+    {
+      "gate": "G0",
+      "gateName": "评估收敛门",
+      "result": "PASS",
+      "detail": "Evaluation report found in cycle-5 (16 dimension rows) [Q1:PASS,Q5:PASS]",
+      "timestamp": "2026-11-07T03:51:13.338Z",
+      "previousHash": "ae4a3bfadfa5b4d22951974b246b9d9081acace9fbc363c53e649448ecd0bfbb",
+      "hash": "398d5fbc769846ec02ea86f29df85a0c22004bbbc29e2a5ffdb16ea73ba34604"
+    },
+    {
+      "gate": "G1",
+      "gateName": "任务收敛门",
+      "result": "FAIL",
+      "detail": "No task entries found (fill the task tables in 任务清单.md) §cycle-5",
+      "timestamp": "2026-11-07T03:51:13.348Z",
+      "previousHash": "398d5fbc769846ec02ea86f29df85a0c22004bbbc29e2a5ffdb16ea73ba34604",
+      "hash": "5faa4d499a2767cece9b27cdde44548ed67984aacb02c6b5c02f5720a938a596"
+    },
+    {
+      "gate": "G2",
+      "gateName": "测试收敛门",
+      "result": "FAIL",
+      "detail": "Test report summary not recognized: 测试报告.md has no 通过/失败 rows (expected the §2 汇总 table) §cycle-5",
+      "timestamp": "2026-11-07T03:51:13.358Z",
+      "previousHash": "5faa4d499a2767cece9b27cdde44548ed67984aacb02c6b5c02f5720a938a596",
+      "hash": "86b9c7e7e297be4ab2ba42d88aeeb8cbaceb6dffcdbce6667b26d84af1ee6d48"
+    },
+    {
+      "gate": "G3",
+      "gateName": "构建收敛门",
+      "result": "PASS",
+      "detail": "Build passed: npm run build §cycle-5 [dist=absent] [Q3:PASS,Q4:PASS]",
+      "timestamp": "2026-11-07T03:51:13.989Z",
+      "previousHash": "86b9c7e7e297be4ab2ba42d88aeeb8cbaceb6dffcdbce6667b26d84af1ee6d48",
+      "hash": "d9f2457b32a8e5c56de1de0a1e098294359aca924b47e056a7d2b9ccf2314ede"
+    },
+    {
+      "gate": "G1",
+      "gateName": "任务收敛门",
+      "result": "PASS",
+      "detail": "All 12 tasks completed §cycle-5 [Q7:PASS]",
+      "timestamp": "2026-11-07T03:53:16.706Z",
+      "previousHash": "d9f2457b32a8e5c56de1de0a1e098294359aca924b47e056a7d2b9ccf2314ede",
+      "hash": "b98515e1b7e948a4df1fe883ebdcdd6cd246ff7e86a16e54ace56a4c2603d04c"
+    },
+    {
+      "gate": "G2",
+      "gateName": "测试收敛门",
+      "result": "PASS",
+      "detail": "Zero failures, zero errors (测试报告.md) §cycle-5 [Q2:PASS]",
+      "timestamp": "2026-11-07T03:53:16.724Z",
+      "previousHash": "b98515e1b7e948a4df1fe883ebdcdd6cd246ff7e86a16e54ace56a4c2603d04c",
+      "hash": "2c56a2825954282ab48618ff6bfec7ed95739244ec1313c6e041b7c217e3c0ca"
     }
   ],
-  "chainHead": "ae4a3bfadfa5b4d22951974b246b9d9081acace9fbc363c53e649448ecd0bfbb"
+  "chainHead": "2c56a2825954282ab48618ff6bfec7ed95739244ec1313c6e041b7c217e3c0ca"
 }

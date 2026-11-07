@@ -291,6 +291,10 @@ interface StatusLike {
   workspace?: string
   /** 分区键（与 workspace 成对出现）。 */
   projectKey?: string
+  /** 插件自身版本（v0.10 R18；缺失时省略该行）。 */
+  pluginVersion?: string | null
+  /** 问题反馈链接（v0.10 R18；缺失时省略该行 —— 不放死链）。 */
+  issuesUrl?: string | null
 }
 
 /** status：崩溃状态 + 嫌疑排名的摘要。 */
@@ -315,6 +319,14 @@ export function formatStatus(s: StatusLike): ToolOutcome {
     const v = s.lastRecoveryVerdict
     facts.push([v.act ? '恢复判定（已行动）' : '恢复判定（观察中）', v.label])
     facts.push(['判定轮次', v.rounds + '/' + v.required])
+  }
+  // 反馈入口（v0.10 R18）：工具面也带一条 Issues 指引 —— 命令窗口往往是
+  // 排障现场，那时用户不会想到去面板找反馈按钮。
+  if (s.pluginVersion !== undefined && s.pluginVersion !== null) {
+    facts.push(['插件版本', s.pluginVersion])
+  }
+  if (s.issuesUrl !== undefined && s.issuesUrl !== null && s.issuesUrl !== '') {
+    facts.push(['问题反馈', s.issuesUrl])
   }
 
   const runState = s.crashedLastRun

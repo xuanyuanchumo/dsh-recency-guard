@@ -17,6 +17,7 @@ import {
   archiveEntriesOf,
   type ArchiveEntry,
 } from './PanelCards.tsx'
+import { DataFlowBody, DiagnosticsBody, MarkovBody } from './InsightCards.tsx'
 import { panelForm, partitionView, shortenPath, type PanelForm } from './panel-model.ts'
 import { VIEWPORT_HEIGHT_NARROW, VIEWPORT_HEIGHT_WIDE } from './graph-model.ts'
 import type { PanelSnapshot } from '../../src/snapshot.ts'
@@ -379,6 +380,33 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
               onToggle={() => toggleCollapse('events')}
             >
               <EventsBody events={snapshot.recentEvents} />
+            </Card>
+            <Card
+              id="markov"
+              title={t('sections.markov')}
+              hint={t('markov.hint')}
+              collapsed={collapsed.has('markov')}
+              onToggle={() => toggleCollapse('markov')}
+            >
+              <MarkovBody snapshot={snapshot} />
+            </Card>
+            <Card
+              id="dataflow"
+              title={t('sections.dataflow')}
+              hint={t('dataflow.hint')}
+              collapsed={collapsed.has('dataflow')}
+              onToggle={() => toggleCollapse('dataflow')}
+            >
+              <DataFlowBody snapshot={snapshot} />
+            </Card>
+            <Card
+              id="diagnostics"
+              title={t('sections.diagnostics')}
+              hint={t('diagnostics.hint')}
+              collapsed={collapsed.has('diagnostics')}
+              onToggle={() => toggleCollapse('diagnostics')}
+            >
+              <DiagnosticsBody snapshot={snapshot} />
             </Card>
           </div>
 

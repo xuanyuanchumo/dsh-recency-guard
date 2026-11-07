@@ -4,6 +4,7 @@ import type { GuardStage, StageTransition } from './lifecycle.js'
 import { ALL_STAGES } from './lifecycle.js'
 import { computeMetrics, rankHazards, type MetricsSnapshot, type Observation, type RankedRisk } from './observability.js'
 import { deriveEventFlow, type FlowEvent } from './observations.js'
+import { markovAnalysis, type MarkovAnalysis } from './markov.js'
 import { STAGE_LABELS, buildGraphData, connectedComponents, type GraphData, type GraphNode } from './graph-data.js'
 import { readPartitionIndex, type PartitionIndex } from './isolation.js'
 
@@ -104,6 +105,36 @@ export interface PanelSnapshot {
    * 纯投影、无副作用、排序确定 —— 同一份输入必得逐字节相同的输出。
    */
   eventFlow: FlowEvent[]
+  /** 马尔可夫转移矩阵（v0.10 R11）：阶段行为的「去向分布」+ 平稳分布。 */
+  markov: MarkovAnalysis
+  /**
+   * 系统诊断投影（v0.10 R12）：宿主与插件的版本事实 + 数据面状态。
+   *
+   * 为什么是投影而非让前端自读：客户端拿不到宿主进程信息（浏览器沙箱），
+   * 版本事实只能在宿主侧收集后随快照下发；`available:false` 是诚实边界
+   * （不是所有宿主都提供 version 服务），绝不填假值。
+   */
+  diagnostics: {
+    /** 插件自身版本（package.json version，构建期注入或运行时读）。 */
+    pluginVersion: string | null
+    /** 宿主版本（ctx.env?.version；宿主不提供时 null）。 */
+    hostVersion: string | null
+    /** 平台标识（win32/darwin/linux）。 */
+    platform: string
+    /** Node 版本（宿主进程）。 */
+    nodeVersion: string
+    /** 数据面路由是否可达（能产出这份快照 ⇒ 恒 true）。 */
+    dataPlane: true
+    /** 快照产出的耗时（毫秒，观测面自身的白盒开销）。 */
+    snapshotMs: number
+    /**
+     * 反馈入口（v0.10 R18）：来自插件 package.json 的 repository.url 与 bugs.url。
+     * 没有登记时为 null —— 前端**隐藏按钮**而不是放一条必 404 的死链。
+     */
+    repositoryUrl: string | null
+    /** 问题反馈直达链接（GitHub Issues；未登记时 null）。 */
+    issuesUrl: string | null
+  }
 }
 
 /** 观测面需要的输入。 */
@@ -146,6 +177,13 @@ export interface SnapshotInput {
     customRoot: boolean
     root: string
     configEditorAvailable: boolean
+  }
+  /** 系统诊断输入（v0.10 R12/R18）：版本事实由宿主侧收集，null = 宿主未提供（诚实边界）。 */
+  diagnostics: {
+    pluginVersion: string | null
+    hostVersion: string | null
+    repositoryUrl: string | null
+    issuesUrl: string | null
   }
 }
 
@@ -213,6 +251,17 @@ export function buildPanelSnapshot(input: SnapshotInput, now = Date.now()): Pane
     autoDisabled: input.autoDisabled.map((d) => ({ ...d })),
     recentEvents: input.recentEvents.slice(-24).map((e) => ({ ...e })),
     eventFlow: deriveEventFlow(input.recentEvents, input.transitions, EVENT_FLOW_LIMIT),
+    markov: markovAnalysis(input.transitions),
+    diagnostics: {
+      pluginVersion: input.diagnostics.pluginVersion,
+      hostVersion: input.diagnostics.hostVersion,
+      repositoryUrl: input.diagnostics.repositoryUrl,
+      issuesUrl: input.diagnostics.issuesUrl,
+      platform: process.platform,
+      nodeVersion: process.version,
+      dataPlane: true,
+      snapshotMs: Math.max(0, Math.round(Date.now() - now)),
+    },
   }
 }
 

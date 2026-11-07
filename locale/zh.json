@@ -28,7 +28,10 @@
     "capabilities": "能力清单",
     "graph": "能力图谱",
     "partitions": "项目隔离",
-    "archives": "归档"
+    "archives": "归档",
+    "markov": "转移矩阵",
+    "dataflow": "数据流",
+    "diagnostics": "系统诊断"
   },
   "stage": {
     "idle": "空闲",
@@ -57,7 +60,46 @@
     "trendSamples": "{count} 个样本 · 斜率 {slope}",
     "intervals": "崩溃间隔（中位 / CV）",
     "changePoint": "CUSUM 变点",
+    "controlBand": "控制带（休哈特）",
     "undefined": "不可判定"
+  },
+  "markov": {
+    "title": "转移矩阵",
+    "hint": "阶段行为的去向分布（马尔可夫链）",
+    "stage": "阶段",
+    "selfLoop": "留在此阶段",
+    "stationary": "长期占比",
+    "converged": "已收敛",
+    "notConverged": "未收敛",
+    "samples": "{count} 次迁移",
+    "empty": "尚无迁移记录，转移矩阵不可判定"
+  },
+  "dataflow": {
+    "title": "数据流",
+    "hint": "从宿主事实到面板像素的链路（白盒）",
+    "journal": "journal 原文",
+    "journalDetail": "宿主按行落盘的事实（崩溃路径同步 IO，崩溃也不丢）",
+    "events": "事件投影",
+    "eventsDetail": "journal 尾部截取（最多 40 条）进入快照",
+    "flow": "语义流动",
+    "flowDetail": "每条事件映射到 阶段/动作/流向（kind→语义映射表，未知 kind 如实转述）",
+    "render": "面板渲染",
+    "flowCount": "{count} 条流动事件"
+  },
+  "diagnostics": {
+    "title": "系统诊断",
+    "hint": "宿主与插件的版本事实 + 反馈入口",
+    "pluginVersion": "插件版本",
+    "hostVersion": "宿主版本",
+    "platform": "运行环境",
+    "partition": "分区键",
+    "dataPlane": "数据面",
+    "dataPlaneOk": "可达（快照正常产出）",
+    "snapshotMs": "快照耗时",
+    "repository": "代码仓库",
+    "issues": "问题反馈",
+    "issuesHint": "崩溃误关/恢复异常？带上「分区键 + 时刻 + 插件名」去提 Issue",
+    "unknown": "未知"
   },
   "trend": {
     "worsening": "恶化中",

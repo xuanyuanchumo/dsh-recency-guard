@@ -123,6 +123,45 @@ function fmtTime(iso) {
   return typeof iso === 'string' ? iso.replace('T', ' ').slice(0, 19) : '?'
 }
 
+/**
+ * 一个码点占多少终端显示列（v0.10 R10 命令窗口显示修复）。
+ *
+ * 为什么 rescue.mjs 自带一份而不是 import src/tool-text：本脚本的纪律是
+ * **零依赖**（崩溃后 node_modules 可能正处于损坏状态，那正是要用逃生通道
+ * 的时刻）。这里只实现 status/history 用到的列对齐所需的宽度判定，
+ * 完整的折行/中和原语仍在 src/tool-text.ts（工具输出走那条路）。
+ */
+function codePointWidth(cp) {
+  const wide =
+    (cp >= 0x1100 && cp <= 0x115f) ||
+    (cp >= 0x2e80 && cp <= 0x303e) ||
+    (cp >= 0x3041 && cp <= 0x33ff) ||
+    (cp >= 0x3400 && cp <= 0x4dbf) ||
+    (cp >= 0x4e00 && cp <= 0x9fff) ||
+    (cp >= 0xa000 && cp <= 0xa4cf) ||
+    (cp >= 0xac00 && cp <= 0xd7a3) ||
+    (cp >= 0xf900 && cp <= 0xfaff) ||
+    (cp >= 0xfe30 && cp <= 0xfe6f) ||
+    (cp >= 0xff00 && cp <= 0xff60) ||
+    (cp >= 0xffe0 && cp <= 0xffe6) ||
+    (cp >= 0x1f300 && cp <= 0x1faff) ||
+    (cp >= 0x20000 && cp <= 0x3fffd)
+  return wide ? 2 : 1
+}
+
+/** 文本的显示列宽（CJK 全宽算 2 列；`length` 数的是码元，中文会错一半）。 */
+function displayWidth(text) {
+  let width = 0
+  for (const ch of String(text)) width += codePointWidth(ch.codePointAt(0) ?? 0)
+  return width
+}
+
+/** 按显示列右填充（`padEnd` 对 CJK 会少补空格 ⇒ 后续列错位，实测踩过）。 */
+function padWidth(text, width) {
+  const pad = width - displayWidth(text)
+  return pad > 0 ? text + ' '.repeat(pad) : String(text)
+}
+
 function cmdStatus(partition) {
   console.log(`分区：${partition.label}（${partition.key}）`)
   if (partition.workspace) console.log(`工作区：${partition.workspace}`)
@@ -131,13 +170,23 @@ function cmdStatus(partition) {
   const sentinelFile = join(partition.dir, 'sentinel.json')
   const sentinel = existsSync(sentinelFile) ? readJsonSafe(sentinelFile) : null
 
-  console.log('')
-  console.log(`崩溃计数：${state.crashSeq ?? 0}`)
-  console.log(`上次运行：${state.crashedRun ? `崩溃（退出码 ${state.lastExitCode ?? '?'}）` : '干净退出'}`)
-  if (state.bootMarker) console.log(`boot 标记：${fmtTime(state.bootMarker.startedAt)} pid=${state.bootMarker.pid}（存在 = 进程没走干净退出）`)
+  // 键值对齐表（v0.10 R10）：键列按显示宽取齐，值列从同一列起 ——
+  // 中文键（「崩溃计数」4 字 8 列）与英文值混排时 padEnd 会错位。
   const disabled = state.autoDisabled ?? []
-  console.log(`保持关闭：${disabled.length === 0 ? '无' : ''}`)
-  for (const d of disabled) console.log(`  - ${d.name}（第 ${d.crashSeq} 次崩溃后关闭 @ ${fmtTime(d.disabledAt)}，原因 ${d.reason}）`)
+  const rows = [
+    ['崩溃计数', String(state.crashSeq ?? 0)],
+    ['上次运行', state.crashedRun ? `崩溃（退出码 ${state.lastExitCode ?? '?'}）` : '干净退出'],
+  ]
+  if (state.bootMarker) {
+    rows.push(['boot 标记', `${fmtTime(state.bootMarker.startedAt)} pid=${state.bootMarker.pid}（存在 = 进程没走干净退出）`])
+  }
+  rows.push(['保持关闭', disabled.length === 0 ? '无' : `${disabled.length} 个`])
+  const keyWidth = Math.max(...rows.map(([key]) => displayWidth(key)))
+  console.log('')
+  for (const [key, value] of rows) console.log(`  ${padWidth(`${key}：`, keyWidth + 1)}${value}`)
+  for (const d of disabled) {
+    console.log(`    - ${d.name}（第 ${d.crashSeq} 次崩溃后关闭 @ ${fmtTime(d.disabledAt)}，原因 ${d.reason}）`)
+  }
   if (decision) {
     console.log('')
     console.log(`决策文件：${decision.reason} · phase=${decision.phase ?? '（旧格式，无 phase）'} · captured ${fmtTime(decision.capturedAt)}`)
@@ -151,9 +200,12 @@ function cmdStatus(partition) {
 function cmdHistory(partition, limit) {
   const events = readJournal(partition.dir, limit)
   console.log(`分区：${partition.label} · 最近 ${events.length} 条事件\n`)
+  // kind 列固定显示宽：中文 subject 的宽度不再把时间/kind 列挤歪。
+  const KIND_COL = 18
   for (const e of events) {
     const subject = e.bundle ?? e.detail ?? ''
-    console.log(`${fmtTime(e.t)}  ${String(e.kind).padEnd(17)} ${subject}${e.version ? ` v${e.version}` : ''}`)
+    const kindCell = padWidth(String(e.kind), KIND_COL)
+    console.log(`${fmtTime(e.t)}  ${kindCell} ${subject}${e.version ? ` v${e.version}` : ''}`)
   }
   return 0
 }

@@ -258,3 +258,38 @@ js-yaml 报 `bad indentation of a mapping entry (185:9)`。注意失败的不是
 
 未接入：session 事件、tool 调用钩子、宿主持久化层 —— 它们都要求插件已成功激活，
 而本插件的核心价值恰恰发生在**激活之前**，接进来对主目标无增益。
+
+## 10. v0.10 数学模型与洞察卡（cycle-5）
+
+### 10.1 马尔可夫转移矩阵（src/markov.ts）
+
+- 状态空间 = 六阶段白名单（MARKOV_STAGES，与 lifecycle.ALL_STAGES 同序的独立声明
+  —— 客户端不 import 宿主常量的铁律在**数据模型层**同样成立）。
+- 计数矩阵 O(T) 一次成型；未知阶段名（旧数据/手改）**丢弃并计数**，不进矩阵
+  （虚增置信度比丢失样本更危险）。
+- 平稳分布用幂法 π_{k+1} = π_k·P，L∞ < 1e-9 判敛，上限 200 次迭代；
+  无迁出样本的阶段按吸收态（自环 1）参与迭代，否则行随机性破坏会发散。
+- 诚实边界：samples=0 ⇒ stationary=null（不猜）；概率四舍五入到 1e-4。
+
+### 10.2 休哈特控制带（observability.controlBand）
+
+- 单值-MR 图：σ̂ = MR̄/1.128（d₂(2) 无偏常数），UCL/LCL = x̄ ± 3σ̂。
+- 与既有模型分工：CUSUM 看持续漂移的起点，回归斜率看整体方向，控制带点名
+  **单次越界的间隔序号**（特殊原因 vs 偶然原因）。
+- 已知特性（测试钉死）：单次突变会污染 MR̄，小漂移可能不越带 —— 这是该模型的
+  正常保守行为，不是缺陷；抓持续漂移是 CUSUM 的职责。
+- 负间隔（时间戳乱序）全部过滤；过滤后样本 < 2 ⇒ 诚实不可判定。
+
+### 10.3 诊断投影与反馈入口（snapshot.diagnostics）
+
+- 版本事实只在宿主侧收集（浏览器拿不到宿主进程信息），随快照下发。
+- `readSelfPackage()` 用 `createRequire(import.meta.url).resolve('../package.json')`
+  定位**自身**清单 —— 包名自引用在 pnpm 符号链接下会解析到别处。
+- repository/bugs 链接归一（git+ssh → https）；未登记 ⇒ null ⇒ 前端**隐藏**
+  反馈按钮（诚实边界：宁可不显示，不放 404 死链）。
+
+### 10.4 rescue CLI 的 CJK 宽度（bin/rescue.mjs）
+
+- 零依赖纪律 ⇒ 宽度判定（codePointWidth/displayWidth/padWidth）内联实现，
+  与 src/tool-text.ts 的同名原语语义一致但不共享代码 —— 崩溃现场 node_modules
+  可能正是损坏状态，逃生通道只能依赖 node 内置模块。

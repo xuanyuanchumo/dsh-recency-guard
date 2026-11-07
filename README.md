@@ -1,3 +1,22 @@
+## v0.10 新增（可观测性数学增强 + 洞察卡 + 插件信息/反馈入口）
+
+- **转移矩阵卡（马尔可夫链）**：阶段行为的「去向分布」——monitoring 是健康值守
+  （80% 留在自己）还是高危巡逻（40% 掉进 crashed）一眼可见；幂法迭代求平稳分布
+  （ε=1e-9，L∞ 判敛），回答「长期来看守护停在哪个阶段」。样本不足时诚实显示
+  「不可判定」，白名单外迁移被丢弃且如实计数。
+- **控制带（休哈特单值-MR）**：崩溃间隔的 x̄±3σ̂（σ̂=MR̄/1.128）控制带，
+  区分「偶然波动」与「特殊原因」——哪一次间隔越界（崩溃变密）被点名到序号；
+  与 CUSUM 变点、回归斜率、生存分析互为视角（趋势看方向，控制带看单点越界）。
+- **数据流卡**：journal 原文 → 事件投影 → 语义流动 → 面板渲染的四环链路白盒，
+  每环带说明与计数 —— 「画面上的事实从哪来、经过什么变换」不再靠猜。
+- **系统诊断卡 + 插件信息面板 + 反馈入口（R18）**：插件版本 / 宿主版本 / 运行环境 /
+  **分区键** / 数据面状态 / 快照耗时一卡尽览；仓库链接来自 package.json 的
+  `repository`/`bugs`，「问题反馈」按钮直达 GitHub Issues（未登记时隐藏按钮，
+  绝不放死链）；工具 `status` 的命令窗口输出同步携带这两条。
+- **命令窗口显示修复（R10）**：`rescue.mjs` 的 status/history 输出按 CJK 显示宽
+  （全角 2 列）对齐 —— 中文标签与英文值混排不再错位（rescue 零依赖纪律不变，
+  宽度判定内联实现）。
+
 ## v0.9.1 新增（判定可视化）
 
 - **恢复判定条**：崩溃后的分级判定现在到达用户可见面 —— 面板生命周期卡片顶部
@@ -225,6 +244,14 @@ dsh plugin --profile <profile名> add dsh-recency-guard
 ```bash
 dsh plugin --profile <profile名> add file:/绝对路径/dsh-recency-guard
 ```
+
+### 插件市场
+
+本插件已提交 [awesome-dsh-plugin](https://github.com/xuanyuanchumo/awesome-dsh-plugin) 收录（`security` 分类），
+收录后即可在 dsh 0.2.1+ 的 **Plugins → Discover** 中搜索到（索引源
+`https://cdn.jsdelivr.net/npm/dsh-plugin-catalog/index.json`），也可通过
+[dsh-market](https://github.com/dsh-market/dsh-market#readme) 一键安装。
+npm 发布后市场索引会自动携带 npm 版本；GitHub-only 期间用上面的命令安装。
 
 ---
 
