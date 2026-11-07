@@ -1,6 +1,6 @@
 {
   "flowId": "archive",
-  "current": "IDLE",
+  "current": "DONE",
   "history": [
     {
       "trigger": "run",
@@ -169,8 +169,20 @@
       "from": "DONE",
       "to": "IDLE",
       "at": "2026-11-07T03:43:13.329Z"
+    },
+    {
+      "trigger": "run",
+      "from": "IDLE",
+      "to": "RUNNING",
+      "at": "2026-11-07T08:09:44.148Z"
+    },
+    {
+      "trigger": "success",
+      "from": "RUNNING",
+      "to": "DONE",
+      "at": "2026-11-07T08:09:44.148Z"
     }
   ],
-  "updatedAt": "2026-11-07T03:43:13.329Z",
+  "updatedAt": "2026-11-07T08:09:44.148Z",
   "ledgerHead": null
 }
