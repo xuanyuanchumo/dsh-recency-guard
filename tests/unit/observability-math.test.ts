@@ -8,7 +8,6 @@
 import {
   RingBuffer,
   computeMetrics,
-  controlBand,
   crashIntervalStats,
   crashPressure,
   crashRate,
@@ -19,7 +18,6 @@ import {
   displayDigits,
   ewma,
   ewmaLevel,
-  intervalSurvival,
   intervalTrend,
   isolationPurity,
   meanRecoveryTime,
@@ -34,6 +32,8 @@ import {
   undefinedMetric,
   type Metric,
 } from '../../src/observability.js'
+import { controlBand } from '../../src/control-band.js'
+import { intervalSurvival } from '../../src/survival.js'
 import { markovAnalysis } from '../../src/markov.js'
 
 let failures = 0

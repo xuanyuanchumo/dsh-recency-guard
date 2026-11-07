@@ -1,7 +1,7 @@
-import { createRequire } from 'node:module'
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { readSelfPackage, readHostVersion, safeJson, safeVersion } from './self-describe.js'
 // The runtime version is a detail, not a hard dependency: the import is
 // resolved lazily so a missing optional peer can never stop the plugin from
 // loading.
@@ -1536,94 +1536,7 @@ class Guard {
     }
   }
 }
+// 自描述/版本事实族（safeJson/safeVersion/optionalRequire/readSelfPackage/
+// readHostVersion）已拆到 self-describe.ts —— 复杂度预算按文件计分，
+// 旁路事实不该挤占崩溃恢复主线的预算（cycle-5）。
 
-function safeJson(v: unknown): unknown {
-  try {
-    return JSON.parse(JSON.stringify(v))
-  } catch {
-    return String(v)
-  }
-}
-
-function safeVersion(): string {
-  try {
-    // Resolved lazily: the module is only loaded when the version is asked
-    // for, so an absent optional peer cannot break the plugin's startup.
-    const mod = optionalRequire('@deepseek-ai/dsh-app-boot') as {
-      getDshRuntimeVersion?: () => string
-    }
-    return typeof mod?.getDshRuntimeVersion === 'function' ? mod.getDshRuntimeVersion() : 'unknown'
-  } catch {
-    return 'unknown'
-  }
-}
-
-/**
- * Load an optional module by name.
- *
- * The runtime version is a detail, not a hard dependency, so this never
- * throws: a missing optional peer simply yields no version.
- */
-function optionalRequire(specifier: string): unknown {
-  try {
-    return createRequire(import.meta.url)(specifier)
-  } catch {
-    return undefined
-  }
-}
-
-/**
- * 读插件自身的 package.json（诊断卡 v0.10 R12/R18）。
- *
- * 为什么不用 optionalRequire('.../package.json')：包名自引用在 pnpm 的
- * 符号链接布局下可能解析到 workspace 根的 package.json —— 用
- * `require.resolve` 拿到的是安装位置，而版本事实应该来自**自己**的清单。
- * dist/index.js 与 package.json 同目录树（files 里都带 dist/），一层
- * `..` 即到包根。读不到时返回空对象（版本/链接都 null，面板诚实降级）。
- */
-function readSelfPackage(): { version: string | null; repositoryUrl: string | null; issuesUrl: string | null } {
-  const empty = { version: null, repositoryUrl: null, issuesUrl: null }
-  try {
-    const require = createRequire(import.meta.url)
-    // dist/index.js → dist → 包根；src/index.ts（测试直跑）→ src → 包根。
-    const self = require.resolve('../package.json')
-    const parsed = JSON.parse(require('node:fs').readFileSync(self, 'utf8')) as {
-      version?: unknown
-      repository?: { url?: unknown } | unknown
-      bugs?: { url?: unknown } | unknown
-    }
-    const version = typeof parsed.version === 'string' ? parsed.version : null
-    return {
-      version,
-      repositoryUrl: gitUrlOf(parsed.repository),
-      issuesUrl: gitUrlOf(parsed.bugs) ?? (typeof parsed.bugs === 'string' ? parsed.bugs : null),
-    }
-  } catch {
-    return empty
-  }
-}
-
-/** 从 package.json 的 repository/bugs 字段提取 https 链接（git+ssh 形态归一为 https）。 */
-function gitUrlOf(field: unknown): string | null {
-  const raw =
-    typeof field === 'string'
-      ? field
-      : typeof field === 'object' && field !== null && typeof (field as { url?: unknown }).url === 'string'
-        ? (field as { url: string }).url
-        : null
-  if (raw === null || raw === '') return null
-  // git+ssh（git@github.com:o/r.git）与 git+https 都归一到浏览器可开的 https。
-  const https = raw.replace(/^git\+/, '').replace(/^git@github\.com:/, 'https://github.com/').replace(/\.git$/, '')
-  return https.startsWith('https://') ? https : null
-}
-
-/** 读宿主运行时版本（v0.10 诊断卡）。宿主不提供该服务 ⇒ null，不猜。 */
-function readHostVersion(): string | null {
-  try {
-    const mod = optionalRequire('@deepseek-ai/dsh-app-boot') as { getDshRuntimeVersion?: () => unknown } | undefined
-    const version = mod?.getDshRuntimeVersion?.()
-    return typeof version === 'string' ? version : null
-  } catch {
-    return null
-  }
-}
