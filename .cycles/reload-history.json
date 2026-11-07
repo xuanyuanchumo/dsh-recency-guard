@@ -26,5 +26,19 @@
     "restartReason": null,
     "error": null,
     "finalizedAt": "2026-11-05T17:16:22.537Z"
+  },
+  {
+    "at": "2026-11-07T08:07:23.593Z",
+    "actor": "anic_reload_self",
+    "reason": "cycle-5 v0.10.0 发布完成：宿主半部（markov/control-band/survival/self-describe 拆分 + diagnostics 投影 + 状态工具反馈行）与客户端半部（三张洞察卡 + i18n）均已重建到 dist，热重载让桌面端 GUI 与工具面立即生效，无需用户手动重启。",
+    "status": "reloaded",
+    "fromRevision": "c9dad56a9853705e",
+    "toRevision": "a57f077a86a8524e",
+    "staleAtRequest": true,
+    "warnings": [],
+    "pending": [],
+    "restartReason": null,
+    "error": null,
+    "finalizedAt": "2026-11-07T08:07:25.938Z"
   }
 ]

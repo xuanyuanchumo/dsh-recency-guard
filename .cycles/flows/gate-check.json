@@ -13,8 +13,20 @@
       "from": "RUNNING",
       "to": "PASSED",
       "at": "2026-11-04T18:26:06.077Z"
+    },
+    {
+      "trigger": "run",
+      "from": "PASSED",
+      "to": "RUNNING",
+      "at": "2026-11-07T08:08:39.140Z"
+    },
+    {
+      "trigger": "all-pass",
+      "from": "RUNNING",
+      "to": "PASSED",
+      "at": "2026-11-07T08:08:39.141Z"
     }
   ],
-  "updatedAt": "2026-11-04T18:26:06.077Z",
+  "updatedAt": "2026-11-07T08:08:39.141Z",
   "ledgerHead": null
 }

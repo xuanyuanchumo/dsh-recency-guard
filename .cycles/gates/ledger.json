@@ -341,7 +341,16 @@
       "timestamp": "2026-11-07T03:53:16.724Z",
       "previousHash": "b98515e1b7e948a4df1fe883ebdcdd6cd246ff7e86a16e54ace56a4c2603d04c",
       "hash": "2c56a2825954282ab48618ff6bfec7ed95739244ec1313c6e041b7c217e3c0ca"
+    },
+    {
+      "gate": "G2",
+      "gateName": "测试收敛门",
+      "result": "PASS",
+      "detail": "Zero failures, zero errors (测试报告.md) [ignored newer non-canonical: sandbox-journey-report.md] §cycle-5 [Q2:PASS]",
+      "timestamp": "2026-11-07T08:08:39.130Z",
+      "previousHash": "2c56a2825954282ab48618ff6bfec7ed95739244ec1313c6e041b7c217e3c0ca",
+      "hash": "24d3915cb789fd85f50c0d33b997855d2c96ab8e5d3b165ffdc43ceb3a90aa22"
     }
   ],
-  "chainHead": "2c56a2825954282ab48618ff6bfec7ed95739244ec1313c6e041b7c217e3c0ca"
+  "chainHead": "24d3915cb789fd85f50c0d33b997855d2c96ab8e5d3b165ffdc43ceb3a90aa22"
 }
