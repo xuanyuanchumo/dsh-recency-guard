@@ -188,8 +188,24 @@ function StabilityRing({ score }: { score: number }): ReactElement {
 
 export function LifecycleBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
   const rail = stageRail(snapshot.stage, snapshot.transitions)
+  const verdict = snapshot.lastRecoveryVerdict
   return (
     <>
+      {/* 恢复判定条（v0.9.1）：有判定才渲染 —— undefined（从未崩溃过）
+          不造一条假判定；act=false（观察轮）用中性色而非红，
+          「观察中」不是错误。 */}
+      {verdict !== undefined && (
+        <p
+          className={`rg-verdict${verdict.act ? ' rg-verdict-act' : ' rg-verdict-watch'}`}
+          role="status"
+        >
+          <span className="rg-verdict-tag">{verdict.act ? t('verdict.act') : t('verdict.watch')}</span>
+          {verdict.label}
+          <span className="rg-verdict-meta">
+            {t('verdict.rounds', { rounds: verdict.rounds, required: verdict.required })}
+          </span>
+        </p>
+      )}
       <ol className="rg-stage-rail" aria-label={t('state.stages')}>
         {rail.map((cell) => (
           <li key={cell.stage} className={`rg-stage-cell rg-stage-${cell.state}`} aria-current={cell.state === 'current' ? 'step' : undefined}>
@@ -591,7 +607,7 @@ export function EventsBody({ events }: { events: PanelSnapshot['recentEvents'] }
             <time className="rg-event-time" title={event.t}>
               {formatClock(event.t)}
             </time>
-            <span className={`rg-badge rg-badge-${eventTone(event.kind)}`}>{event.kind}</span>
+            <span className={`rg-badge rg-badge-${eventTone(event.kind, event.detail)}`}>{event.kind}</span>
             <span className="rg-event-detail" title={event.detail ?? event.bundle ?? ''}>
               {event.bundle !== undefined && <strong>{event.bundle}</strong>}
               {event.bundle !== undefined && event.detail !== undefined && ' · '}
@@ -604,10 +620,19 @@ export function EventsBody({ events }: { events: PanelSnapshot['recentEvents'] }
   )
 }
 
-function eventTone(kind: string): string {
+function eventTone(kind: string, detail?: string): string {
   if (kind === 'crash-detected') return 'error'
   if (kind === 'restore') return 'success'
   if (kind === 'install' || kind === 'update') return 'info'
+  // 两阶段/判定事件（v0.9.1）：观察轮 warn（黄），confirmed 成功（绿）。
+  // detail 是 journal 原文，识别前缀而不是另设 kind —— 存储词汇不变，
+  // 呈现语义由显示层派生（同 lines 派生 display 的纪律）。
+  if (kind === 'note') {
+    if (typeof detail === 'string') {
+      if (detail.startsWith('两阶段对账')) return detail.includes('confirmed') ? 'success' : 'warn'
+      if (detail.startsWith('恢复判定')) return detail.includes('（已行动）') || detail.includes('关闭') ? 'success' : 'warn'
+    }
+  }
   return 'neutral'
 }
 

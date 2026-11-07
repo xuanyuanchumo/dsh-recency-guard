@@ -844,9 +844,38 @@ class Guard {
       })
       if (!verdict.act) {
         // 观察轮：不关任何插件，但崩溃证据链完整保留 —— 这是下次判定的输入。
+        // verdict 落进 state：status 工具与面板由此显示「观察中 N/M 轮」
+        // （崩溃路径是同步的，state 用 writeStateSync 已有机制带走）。
+        this.store.writeStateSync({
+          ...this.store.readStateSync(),
+          lastRecoveryVerdict: {
+            at: new Date().toISOString(),
+            crashSeq: seq,
+            evidence: verdict.evidence,
+            rounds: verdict.rounds,
+            required: verdict.required,
+            act: verdict.act,
+            label: verdict.label,
+            headSuspect: targets[0]?.bundle ?? null,
+          },
+        })
         this.recordStep('crash-decision', true, `第 ${seq} 次崩溃 → 观察轮（未关闭插件）：${verdict.label}`)
         return
       }
+      // act=true 也要带 verdict：工具显示「为什么关了它」。
+      this.store.writeStateSync({
+        ...this.store.readStateSync(),
+        lastRecoveryVerdict: {
+          at: new Date().toISOString(),
+          crashSeq: seq,
+          evidence: verdict.evidence,
+          rounds: verdict.rounds,
+          required: verdict.required,
+          act: verdict.act,
+          label: verdict.label,
+          headSuspect: targets[0]?.bundle ?? null,
+        },
+      })
       // 指针必须与决策**同时**落地：守护行的表达式在下次启动时
       // 只读 profile 目录下的指针。
       writePointer(this.profileDir, this.projectKey, this.store.partitionPath)
@@ -1274,6 +1303,7 @@ class Guard {
       observations: this.observations(),
       riskInputs: this.riskInputs(),
       restored: state.restored,
+      lastRecoveryVerdict: state.lastRecoveryVerdict,
       autoDisabled: state.autoDisabled.map((d) => ({
         name: d.name,
         reason: d.reason,
@@ -1471,6 +1501,8 @@ class Guard {
       stabilized: state.stabilized,
       restored: state.restored,
       decisionFile: DECISION_RELATIVE_PATH,
+      // 恢复判定白盒（v0.9.1）：undefined = 本分区还没有崩溃决策发生过。
+      lastRecoveryVerdict: state.lastRecoveryVerdict,
       // v0.8.1：不再在数据层裁剪到 10 个。rankedSuspects 本身就是全量排序
       // （n ≤ 100，全量排序 O(n log n)），slice 只是把「插件多」变成
       // 「看不到」。显示层的截断（带省略计数）是渲染策略，不该伪装成数据。

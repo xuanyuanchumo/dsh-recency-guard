@@ -1497,3 +1497,36 @@
     animation-duration: 0.01ms !important;
   }
 }
+
+/* ---------- 恢复判定条（v0.9.1） ---------- */
+
+.rg-verdict {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--dsw-radius-sm, 8px);
+  font-size: var(--dsw-font-xs-13, 13px);
+}
+/* act（关闭了插件）与 watch（观察轮）用**边框+标签**区分而不是只靠颜色：
+   灰度打印/色弱用户也能分辨。 */
+.rg-verdict-act {
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-2);
+}
+.rg-verdict-watch {
+  border: 1px dashed var(--dsw-alias-border-l1);
+  background: transparent;
+}
+.rg-verdict-tag {
+  padding: 1px 8px;
+  border-radius: var(--dsw-radius-sm, 8px);
+  font-weight: var(--dsw-font-s-strong-14, 600);
+  background: var(--dsw-alias-bg-layer-2);
+}
+.rg-verdict-meta {
+  margin-left: auto;
+  color: var(--dsw-alias-label-tertiary);
+}

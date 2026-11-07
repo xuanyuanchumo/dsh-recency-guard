@@ -1,4 +1,12 @@
-# 对外面 API（dsh-recency-guard v0.9）
+# 对外面 API（dsh-recency-guard v0.9.1）
+
+## 0.0c v0.9.1 契约变更一句话清单
+
+| 变更 | 影响 | 兼容性 |
+|---|---|---|
+| `status` 输出与面板快照新增 `lastRecoveryVerdict`（可选） | 命令窗口 facts 与面板生命周期卡片显示「观察中/已行动」判定；undefined = 本分区无崩溃决策史 | 兼容（可选字段） |
+| `GuardState` 新增 `lastRecoveryVerdict`（可选） | 崩溃路径同步写入，重启后仍可读 | 兼容 |
+| 事件流卡片 note 徽标派生 | detail 前缀（恢复判定/两阶段对账）→ warn/success 色调；存储词汇不变 | 兼容 |
 
 ## 0.0b v0.9 契约变更一句话清单
 

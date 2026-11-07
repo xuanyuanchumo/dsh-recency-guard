@@ -61,6 +61,17 @@ export interface PanelSnapshot {
   }
   /** 图谱连通性摘要。 */
   graphConnectivity: { components: number; largest: number; isolated: number }
+  /** 最近恢复判定（面板生命周期卡片显示「观察中 N/M 轮」）。 */
+  lastRecoveryVerdict?: {
+    at: string
+    crashSeq: number
+    evidence: 'deterministic' | 'probabilistic'
+    rounds: number
+    required: number
+    act: boolean
+    label: string
+    headSuspect: string | null
+  }
   /** 备份策略投影（面板「备份」卡片）。 */
   backupPolicy: {
     versionedBackups: boolean
@@ -117,6 +128,17 @@ export interface SnapshotInput {
   recentEvents: Array<{ t: string; kind: string; bundle?: string; detail?: string }>
   /** 实际注册出来的对外名称（契约校验用）。 */
   registeredExposedAs: readonly string[]
+  /** 最近恢复判定（v0.9.1：观察中 N/M 轮或「为什么关了它」）。 */
+  lastRecoveryVerdict?: {
+    at: string
+    crashSeq: number
+    evidence: 'deterministic' | 'probabilistic'
+    rounds: number
+    required: number
+    act: boolean
+    label: string
+    headSuspect: string | null
+  }
   /** 备份策略（v0.9：面板可视化配置的数据源；只读投影，改配置走宿主设置页）。 */
   backupPolicy: {
     versionedBackups: boolean
@@ -162,6 +184,7 @@ export function buildPanelSnapshot(input: SnapshotInput, now = Date.now()): Pane
     metrics,
     risks,
     backupPolicy: input.backupPolicy,
+    lastRecoveryVerdict: input.lastRecoveryVerdict,
     capability: {
       total: analysis.total,
       exposed: analysis.exposed,

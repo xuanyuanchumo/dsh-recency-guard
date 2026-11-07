@@ -276,6 +276,17 @@ interface StatusLike {
   autoDisabled: Array<{ name: string; reason: string; crashSeq: number; disabledAt: string }>
   suspectRanking: Array<{ bundle: string; lastChangeAt: string; lastKind: string }>
   experimentalSuspects: string[]
+  /** 最近恢复判定（v0.9.1；undefined = 本分区没有崩溃决策发生过）。 */
+  lastRecoveryVerdict?: {
+    at: string
+    crashSeq: number
+    evidence: 'deterministic' | 'probabilistic'
+    rounds: number
+    required: number
+    act: boolean
+    label: string
+    headSuspect: string | null
+  }
   /** 当前工作区（规范化路径；缺失时省略该行 —— 旧数据诚实降级）。 */
   workspace?: string
   /** 分区键（与 workspace 成对出现）。 */
@@ -298,6 +309,12 @@ export function formatStatus(s: StatusLike): ToolOutcome {
     const partition = typeof s.projectKey === 'string' ? s.projectKey.slice(0, 8) : '未知'
     facts.push(['工作区', displayPath(s.workspace)])
     facts.push(['分区', partition])
+  }
+  // 恢复判定（v0.9.1）：命令窗口里直接回答「这次崩溃为什么关/没关插件」。
+  if (s.lastRecoveryVerdict !== undefined) {
+    const v = s.lastRecoveryVerdict
+    facts.push([v.act ? '恢复判定（已行动）' : '恢复判定（观察中）', v.label])
+    facts.push(['判定轮次', v.rounds + '/' + v.required])
   }
 
   const runState = s.crashedLastRun

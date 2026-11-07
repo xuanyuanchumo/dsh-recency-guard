@@ -78,6 +78,11 @@
     "root": "备份根目录",
     "hint": "修改备份策略请在 dsh 设置 → 插件 → dsh-recency-guard 中调整（versionedBackups / backupRetain / backupRoot）。"
   },
+  "verdict": {
+    "act": "已行动",
+    "watch": "观察中",
+    "rounds": "第 {rounds}/{required} 轮"
+  },
   "card": {
     "enlarge": "扩大面板",
     "shrink": "恢复面板"

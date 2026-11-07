@@ -78,6 +78,11 @@
     "root": "Backup root",
     "hint": "Adjust policy in dsh Settings → Plugins → dsh-recency-guard (versionedBackups / backupRetain / backupRoot)."
   },
+  "verdict": {
+    "act": "Acted",
+    "watch": "Watching",
+    "rounds": "round {rounds}/{required}"
+  },
   "card": {
     "enlarge": "Enlarge panel",
     "shrink": "Restore panel"

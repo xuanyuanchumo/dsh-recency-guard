@@ -83,6 +83,21 @@ export interface GuardState {
   lastExitCode?: number
   /** True when the previous run ended with a non-zero exit code. */
   crashedRun?: boolean
+  /**
+   * 最近一次恢复判定的白盒快照（v0.9.1）：status 工具与面板据此显示
+   * 「观察中 N/M 轮」或「为什么关了它」。undefined = 本分区还没有
+   * 崩溃决策发生过（诚实缺省，不造一份假判定）。
+   */
+  lastRecoveryVerdict?: {
+    at: string
+    crashSeq: number
+    evidence: 'deterministic' | 'probabilistic'
+    rounds: number
+    required: number
+    act: boolean
+    label: string
+    headSuspect: string | null
+  }
 }
 
 export interface PrebootDecision {
