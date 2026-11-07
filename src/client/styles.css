@@ -1261,6 +1261,38 @@
   color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
 }
 
+/* 形状图例（v0.11）：图例里直接画节点形状 —— 形状是颜色之外的第二编码通道，
+   图例不展示它，色盲/灰度打印用户就永远不知道方框=呈现、三角=缺口。 */
+.rg-legend-shape {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+/* 搜索遍历指示（v0.11）：第 n/m 个匹配，回车循环跳转时告诉用户位置。 */
+.rg-search-index {
+  font-size: var(--dsw-font-xxs-12, 12px);
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+}
+
+/* 马尔可夫跨阶段去向徽标（v0.11）：`→ 崩溃 40%` 高危迁移必须一眼可见。 */
+.rg-markov-exits {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 6px;
+  flex-wrap: wrap;
+}
+
+.rg-chip-exit {
+  font-size: var(--dsw-font-xxs-12, 12px);
+  color: var(--dsw-alias-label-secondary);
+  border: 1px dashed var(--dsw-alias-border-l2);
+  background: transparent;
+  white-space: nowrap;
+}
+
 /* 图谱主体：视口 + 详情侧栏两栏（窄容器纵向堆叠）。 */
 .rg-graph-body {
   display: grid;
@@ -1623,6 +1655,34 @@
   color: var(--dsw-alias-label-secondary);
   font-size: 11px;
   font-weight: var(--dsw-font-s-strong-14, 600);
+}
+
+/* 流动脉冲（v0.11「可视化流动」）：四环链路的序号点按链路顺序呼吸 ——
+   数据从 journal 流向画面的方向感用延迟错相表达（每环延迟 0.3s）。
+   动画只动 opacity（合成层属性，不触发重排）；系统「减少动态」时停用，
+   静态序号仍然完整承载信息（动画是增强，不是信息载体）。 */
+.rg-dataflow-step .rg-dataflow-index {
+  animation: rg-flow-pulse 1.8s var(--rg-ease, ease) infinite;
+}
+.rg-dataflow-step:nth-child(2) .rg-dataflow-index {
+  animation-delay: 0.3s;
+}
+.rg-dataflow-step:nth-child(3) .rg-dataflow-index {
+  animation-delay: 0.6s;
+}
+.rg-dataflow-step:nth-child(4) .rg-dataflow-index {
+  animation-delay: 0.9s;
+}
+@keyframes rg-flow-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--dsw-alias-brand-primary) 0%, transparent);
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent);
+  }
 }
 .rg-dataflow-main {
   min-width: 0;

@@ -35,8 +35,12 @@ export interface RouteContext {
   workspace: string
   /** profile 名。 */
   profileName: string
+  /** 当前工作区的分区键（判定「请求的分区就是当前分区」用）。 */
+  projectKey: string
   /** 构造面板快照。 */
   snapshot: () => Promise<unknown>
+  /** 构造指定分区的只读快照（v0.11：`?partition=` 的宿主侧实现）。 */
+  snapshotPartition: (key: string) => Promise<unknown>
   /** 构造图谱数据。 */
   graph: () => Promise<unknown>
   /** 归档重置。 */
@@ -45,6 +49,8 @@ export interface RouteContext {
   archives: () => Promise<unknown>
   /** 重新启用插件。 */
   reenable: (bundle: string) => Promise<unknown>
+  /** 恢复非嫌疑插件（v0.11：面板此前够不着这个工具动作）。 */
+  restore: () => Promise<unknown>
   /** 手动触发一次恢复。 */
   recover: () => Promise<unknown>
   /** 项目隔离视图（分区列表 + 当前分区）。 */
@@ -78,6 +84,7 @@ export const ROUTE_PATHS = {
   archives: '/recency-guard/api/archives',
   archive: '/recency-guard/api/action/archive',
   reenable: '/recency-guard/api/action/reenable',
+  restore: '/recency-guard/api/action/restore',
   recover: '/recency-guard/api/action/recover',
 } as const
 
@@ -115,6 +122,7 @@ export const ROUTE_SURFACE: readonly RouteSurfaceEntry[] = [
   { capability: 'guard.govern.archive', name: 'archives', exposedName: 'recency-guard.archives', path: ROUTE_PATHS.archives, method: 'GET' },
   { capability: 'guard.govern.reset', name: 'archive', exposedName: 'recency-guard.reset', path: ROUTE_PATHS.archive, method: 'POST' },
   { capability: 'guard.recover.reenable', name: 'reenable', exposedName: 'recency-guard.reenable', path: ROUTE_PATHS.reenable, method: 'POST' },
+  { capability: 'guard.recover.restore', name: 'restore', exposedName: 'recency-guard.restore', path: ROUTE_PATHS.restore, method: 'POST' },
   { capability: 'guard.recover.manual', name: 'recover', exposedName: 'recency-guard.recover', path: ROUTE_PATHS.recover, method: 'POST' },
 ] as const
 
@@ -188,6 +196,46 @@ async function readBody(req: NodeRequest): Promise<Record<string, unknown> | nul
 type RouteHandler = (req: NodeRequest, res: NodeResponse) => void | Promise<void>
 
 /**
+ * 从请求 URL 里解析 `?partition=` 查询参数。
+ *
+ * 为什么必须在宿主侧实现（v0.11 P0）：客户端一直认真拼 `?partition=`
+ * （client/api.ts 的 withPartition），但 read handler 从不读 url ——
+ * 跨分区查看永远静默返回当前分区，靠客户端 mismatch 提示兜底。
+ * 「隔离查看」是 isolation 能力的承诺（guard.govern.isolation），
+ * 数据面不支持它，承诺就是假的。
+ *
+ * 解析用 URLSearchParams（ WHATWG 标准，Node 22 全局可用）：
+ * - 只取**第一个** partition 参数（重复键取首见，与大多数框架一致）；
+ * - 非法 UTF-8 由 URLSearchParams 自动容错（替换为 U+FFFD），不抛异常。
+ */
+function partitionOf(req: NodeRequest): string | undefined {
+  const url = req.url ?? ''
+  // 路由是精确匹配，url 可能带 query 也可能不带；没有 `?` 就没有参数。
+  const qIndex = url.indexOf('?')
+  if (qIndex === -1) return undefined
+  const params = new URLSearchParams(url.slice(qIndex + 1))
+  const value = params.get('partition')
+  return value === null || value === '' ? undefined : value
+}
+
+/**
+ * 动作路由的**方法守卫**（v0.11 P0 安全修复）。
+ *
+ * 为什么必须有：此前 archive/reenable/recover 三个 handler 不检查
+ * `req.method`，`GET /recency-guard/api/action/archive` 也会执行归档重置
+ * —— readBody 读不到 GET 请求体就返回 null，reason 走默认值照常归档。
+ * 浏览器预取、爬虫、用户误点链接都可能是 GET，一个破坏性动作不能把
+ * 「请求方法」当建议。非 POST 一律 405（Method Not Allowed），
+ * 并带 `allow: POST` 头 —— 这是 RFC 7231 对该语义的标准表达。
+ */
+function rejectWrongMethod(req: NodeRequest, res: NodeResponse): boolean {
+  if ((req.method ?? 'GET').toUpperCase() === 'POST') return false
+  res.writeHead(405, { allow: 'POST', 'content-type': 'application/json; charset=utf-8' })
+  res.end(JSON.stringify({ ok: false, reason: `动作路由只接受 POST（收到 ${req.method ?? 'GET'}）` }))
+  return true
+}
+
+/**
  * 各路由的 handler。
  *
  * 键必须覆盖 `ROUTE_SURFACE` 的每个 `name`（契约测试核对）—— handler 表与
@@ -195,22 +243,33 @@ type RouteHandler = (req: NodeRequest, res: NodeResponse) => void | Promise<void
  * 运行时变成 404。
  */
 function handlerTable(ctx: RouteContext): Record<RouteName, RouteHandler> {
-  /** 读面：拿不到数据时请假（`available:false`），不假装没问题。 */
-  const read = (load: () => Promise<unknown>): RouteHandler => async (_req, res) => {
+  /**
+   * 读面：拿不到数据时请假（`available:false`），不假装没问题。
+   *
+   * `?partition=` 语义（v0.11）：快照路由支持跨分区只读查看 —— 请求里带
+   * partition 且 ≠ 当前分区时走 `snapshotPartition`；宿主侧不认这个参数的
+   * 旧实现由客户端 mismatch 提示兜底（防御性双保险，契约不放宽）。
+   * 其余读面（图谱/隔离/生命周期/归档）保持当前分区事实：图谱是能力清单
+   * 的静态结构（无分区状态），其余路由的消费方从未拼过 partition 参数。
+   */
+  const read = (load: (partition: string | undefined) => Promise<unknown>): RouteHandler => async (req, res) => {
     try {
-      sendJson(res, await load())
+      sendJson(res, await load(partitionOf(req)))
     } catch (error) {
       sendJson(res, { available: false, reason: describe(error) }, 500)
     }
   }
 
   return {
-    snapshot: read(() => ctx.snapshot()),
+    snapshot: read((partition) =>
+      partition === undefined || partition === ctx.projectKey ? ctx.snapshot() : ctx.snapshotPartition(partition),
+    ),
     graph: read(() => ctx.graph()),
     isolation: read(() => ctx.isolation()),
     lifecycle: read(() => ctx.lifecycle()),
     archives: read(() => ctx.archives()),
     archive: async (req, res) => {
+      if (rejectWrongMethod(req, res)) return
       try {
         const body = await readBody(req)
         const reason = typeof body?.reason === 'string' && body.reason.trim() !== '' ? body.reason : '手动归档重置'
@@ -220,6 +279,7 @@ function handlerTable(ctx: RouteContext): Record<RouteName, RouteHandler> {
       }
     },
     reenable: async (req, res) => {
+      if (rejectWrongMethod(req, res)) return
       try {
         const body = await readBody(req)
         const bundle = typeof body?.bundle === 'string' ? body.bundle : ''
@@ -232,7 +292,16 @@ function handlerTable(ctx: RouteContext): Record<RouteName, RouteHandler> {
         sendJson(res, { ok: false, reason: describe(error) }, 500)
       }
     },
-    recover: async (_req, res) => {
+    restore: async (req, res) => {
+      if (rejectWrongMethod(req, res)) return
+      try {
+        sendJson(res, await ctx.restore())
+      } catch (error) {
+        sendJson(res, { ok: false, reason: describe(error) }, 500)
+      }
+    },
+    recover: async (req, res) => {
+      if (rejectWrongMethod(req, res)) return
       try {
         sendJson(res, await ctx.recover())
       } catch (error) {

@@ -17,7 +17,9 @@
     "emptyHint": "守护插件尚未记录任何启动事实。",
     "snapshotAt": "快照时刻 {time}",
     "pollingOn": "每 {seconds} 秒轮询",
-    "pollingPaused": "轮询已暂停（画面停在暂停时刻）"
+    "pollingPaused": "轮询已暂停（画面停在暂停时刻）",
+    "restore": "恢复非嫌疑插件",
+    "stale": "数据已停留 {minutes} 分钟（轮询已暂停）"
   },
   "sections": {
     "backupPolicy": "备份策略",
@@ -228,11 +230,13 @@
       "metric": "指标",
       "bundle": "插件",
       "gap": "缺口"
-    }
+    },
+    "matchIndex": "第 {index}/{total} 个"
   },
   "events": {
     "title": "事件流",
-    "count": "最近 {count} 条"
+    "count": "最近 {count} 条",
+    "more": "展开其余 {count} 条"
   },
   "partitions": {
     "title": "项目分区",

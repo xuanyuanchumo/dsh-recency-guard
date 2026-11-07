@@ -17,7 +17,9 @@
     "emptyHint": "The guard has not recorded any startup facts yet.",
     "snapshotAt": "Snapshot at {time}",
     "pollingOn": "polling every {seconds}s",
-    "pollingPaused": "polling paused (the view is frozen at the pause moment)"
+    "pollingPaused": "polling paused (the view is frozen at the pause moment)",
+    "restore": "Restore non-suspects",
+    "stale": "Data is {minutes} min old (polling paused)"
   },
   "sections": {
     "backupPolicy": "Backup policy",
@@ -228,11 +230,13 @@
       "metric": "Metric",
       "bundle": "Bundle",
       "gap": "Gap"
-    }
+    },
+    "matchIndex": "Match {index}/{total}"
   },
   "events": {
     "title": "Event stream",
-    "count": "last {count}"
+    "count": "last {count}",
+    "more": "Show {count} more"
   },
   "partitions": {
     "title": "Project partitions",

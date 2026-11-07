@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import { t } from './i18n.ts'
 import type { GraphNode } from '../../src/graph-data.ts'
-import { KIND_ORDER, kindKey, type ColorMode, type LayoutMode } from './graph-model.ts'
+import { KIND_ORDER, kindKey, legendColorOf, legendShapeOf, shapePath, type ColorMode, type LayoutMode } from './graph-model.ts'
 
 /**
  * 图谱的**展示层**部件 —— 只接收已经算好的事实，不含任何派生逻辑。
@@ -28,12 +28,18 @@ export interface GraphToolbarProps {
   onQuery: (value: string) => void
   matches: GraphNode[]
   onLocate: (id: string) => void
+  /** 当前遍历游标（回车循环跳转的第 n 个匹配）。 */
+  matchIndex: number
+  /** 请求下一个匹配（回车；循环取模由面板/图谱侧完成）。 */
+  onMatchNext: () => void
   counts: Record<string, number>
   hidden: ReadonlySet<string>
   onToggleKind: (kind: GraphNode['kind']) => void
   onlyConnected: boolean
   onToggleConnected: () => void
   connectedAvailable: boolean
+  /** 全部可见节点（图例的代表形状从实际数据导出，不复制映射 —— 单一真相源）。 */
+  allNodes: GraphNode[]
 }
 
 const LAYOUT_MODES: readonly LayoutMode[] = ['layered', 'radial']
@@ -62,21 +68,31 @@ export function GraphToolbar(props: GraphToolbarProps): ReactElement {
           placeholder={t('graph.search')}
           onChange={(event) => props.onQuery(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && props.matches.length > 0) props.onLocate(props.matches[0]!.id)
+            // 回车循环遍历（v0.11）：多匹配时依次跳转而不是永远停在第一个。
+            // 游标由面板持有（locateMatch），这里只报告「用户又要下一个」。
+            if (event.key === 'Enter' && props.matches.length > 0) {
+              event.preventDefault?.()
+              props.onMatchNext()
+            }
             if (event.key === 'Escape') props.onQuery('')
             // 搜索框里的按键不该冒泡到画布（否则输入 `0` 会触发「适配视图」）。
             event.stopPropagation()
           }}
           aria-label={t('graph.search')}
+          aria-keyshortcuts="Enter"
         />
         {props.query.trim() !== '' && (
           <ul className="rg-search-results" role="listbox" aria-label={t('graph.searchResults')}>
             {props.matches.length === 0 ? (
               <li className="rg-search-noresult">{t('graph.noResults')}</li>
             ) : (
-              props.matches.map((node) => (
+              props.matches.map((node, index) => (
                 <li key={node.id}>
-                  <button type="button" onClick={() => props.onLocate(node.id)}>
+                  <button
+                    type="button"
+                    onClick={() => props.onLocate(node.id)}
+                    aria-current={index === props.matchIndex}
+                  >
                     <span className={`rg-dot rg-dot-${node.tone}`} aria-hidden />
                     {node.label}
                   </button>
@@ -84,6 +100,12 @@ export function GraphToolbar(props: GraphToolbarProps): ReactElement {
               ))
             )}
           </ul>
+        )}
+        {/* 第 n/m 指示：多匹配时用户必须知道自己在遍历的第几个。 */}
+        {props.query.trim() !== '' && props.matches.length > 1 && (
+          <span className="rg-search-index" role="status">
+            {t('graph.matchIndex', { index: props.matchIndex + 1, total: props.matches.length })}
+          </span>
         )}
       </span>
 
@@ -121,7 +143,9 @@ export function GraphToolbar(props: GraphToolbarProps): ReactElement {
         {t('graph.reset')}
       </button>
 
-      {/* 类型图例：既是图例（带计数）也是开关（点击隐藏该类型）。 */}
+      {/* 类型图例：既是图例（带计数）也是开关（点击隐藏该类型）。
+          v0.11：图例颜色跟随当前着色口径（此前固定语义色，与「按类型」口径下
+          节点实际颜色不一致）；同时展示形状通道（色盲/灰度打印的第二编码）。 */}
       <span className="rg-graph-legend" role="group" aria-label={t('graph.legend')}>
         {KIND_ORDER.filter((kind) => (props.counts[kind] ?? 0) > 0).map((kind) => (
           <button
@@ -132,7 +156,9 @@ export function GraphToolbar(props: GraphToolbarProps): ReactElement {
             aria-pressed={!props.hidden.has(kind)}
             title={t('graph.legendToggle', { kind: t(kindKey(kind)) })}
           >
-            <span className={`rg-dot rg-dot-${dotToneOf(kind)}`} aria-hidden />
+            <svg className="rg-legend-shape" viewBox="-8 -8 16 16" aria-hidden>
+              <path d={shapePath(legendShapeOf(kind, props.allNodes), 7, 0)} fill={legendColorOf(kind, props.colorMode)} />
+            </svg>
             {t(kindKey(kind))}
             <span className="rg-legend-count">{props.counts[kind] ?? 0}</span>
           </button>
@@ -140,23 +166,6 @@ export function GraphToolbar(props: GraphToolbarProps): ReactElement {
       </span>
     </div>
   )
-}
-
-/** 图例圆点的语义色（与 graph-model 的类型配色同源；这里只需要 tone 名）。 */
-function dotToneOf(kind: GraphNode['kind']): string {
-  switch (kind) {
-    case 'capability':
-      return 'info'
-    case 'stage':
-      return 'neutral'
-    case 'metric':
-      return 'warn'
-    case 'bundle':
-      return 'neutral'
-    case 'gap':
-    default:
-      return 'error'
-  }
 }
 
 interface SegmentedOption {

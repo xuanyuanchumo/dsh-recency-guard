@@ -112,8 +112,8 @@ export async function fetchArchives(partition?: string): Promise<FetchResult<unk
   return fetchJson(withPartition(`${API_PREFIX}/archives`, partition))
 }
 
-/** 面板动作。 */
-export type PanelAction = 'archive' | 'reenable' | 'recover'
+/** 面板动作（v0.11：restore 补齐 —— 工具面早有，动作路由此前缺失）。 */
+export type PanelAction = 'archive' | 'reenable' | 'recover' | 'restore'
 
 /** 触发一个宿主动作。 */
 export async function postAction(

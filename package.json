@@ -1,6 +1,6 @@
 {
   "name": "dsh-recency-guard",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Crash-recovery guard for DeepSeek Harness: records third-party/experimental plugin install & update recency, backs up their config, and after a crash auto-disables the most-recently-updated plugin(s) so the profile boots again, then restores stable config.",
   "license": "MIT",
   "type": "module",
@@ -43,10 +43,10 @@
     "extract-runtime": "node scripts/extract-runtime.mjs",
     "repair-patch": "tsx scripts/repair-patch.mjs",
     "test": "tsx tests/run.ts",
-    "test:unit": "tsx tests/unit.test.ts",
-    "test:tool": "tsx tests/tool.test.ts",
+    "test:unit": "tsx tests/unit/core.test.ts",
+    "test:routes": "tsx tests/host/routes.test.ts",
     "test:coverage": "tsx tests/run.ts --coverage",
-    "test:e2e": "tsx tests/tool.test.ts"
+    "test:e2e": "tsx tests/host/tool.test.ts"
   },
   "dsh": {
     "manifestVersion": 1,

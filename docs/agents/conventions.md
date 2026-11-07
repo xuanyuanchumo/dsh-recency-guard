@@ -24,12 +24,23 @@ npm run build && npx tsc --noEmit && npm run lint && npm test
 | 层 | 目录 | 覆盖 |
 |---|---|---|
 | Core | tests/unit/ | 纯逻辑：能力图/状态机/指标/隔离/归档/工具渲染 |
-| Host | tests/host/ | 插件入口 + 工具注册与 action（假服务挂载） |
-| Client | tests/client/ | 视口原语/布局/形状/i18n/形状校验（纯函数） |
+| Host | tests/host/ | 插件入口 + 工具注册与 action（假服务挂载）+ **路由 HTTP 行为（v0.11）** |
+| Client | tests/client/ | 视口原语/布局/形状/i18n/形状校验（纯函数）+ **graph-model 纯函数（v0.11）** |
 | Contract | tests/contract/ | 能力清单 ↔ 注册处双向比对 + 包清单 |
 
 新增能力的检查单：清单条目（capability-specs）→ 注册处 noteRegistered →
 契约测试 → 快照字段 → 面板/工具消费点。五处缺一即缺口。
+
+## 3.1 v0.11 新增纪律（cycle-6 实测）
+
+- **动作路由必须过方法守卫**：`rejectWrongMethod(req, res)` 是 handler 第一行 ——
+  破坏性动作不把「请求方法」当建议（GET 预取曾能触发归档）。
+- **跨分区视图是磁盘投影**：`partition-snapshot.ts` 只读对方分区目录；
+  运行时字段（stage/metrics/markov）如实降级为 null/idle，绝不冒充。
+- **图例必须与着色同源**：改 KIND_COLOR/STAGE_COLOR 时图例自动跟随
+  （legendColorOf），新增形状映射时不复制 —— 代表形状从实际数据多数票导出。
+- **语言文件最小 diff**：locale/*.json 用 `json.dumps(indent=2)` 原行尾重写
+  （Python json.dump 会改全文件行尾 ⇒ 542 行假 diff 实测发生过）。
 
 ## 4. 宿主纪律（dsh 插件通用）
 

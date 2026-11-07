@@ -18,7 +18,6 @@
  * 本文件只认数字与字符串：不 import React，不碰 DOM，因此能在无浏览器环境
  * 逐条断言（见 tests/client/graph-model.test.ts）。
  */
-
 import type { GraphEdge, GraphNode, GraphNodeKind } from '../../src/graph-data.ts'
 import { LAYOUT } from '../../src/graph-data.ts'
 import {
@@ -248,6 +247,59 @@ export function kindCounts(nodes: readonly GraphNode[]): Record<string, number> 
   const counts: Record<string, number> = {}
   for (const node of nodes) counts[node.kind] = (counts[node.kind] ?? 0) + 1
   return counts
+}
+
+/**
+ * 图例的着色随「着色口径」走（v0.11 P0 修复）。
+ *
+ * 为什么图例必须跟口径切换：此前图例圆点永远用 `dotToneOf`（语义色调色板），
+ * 而节点在「按类型 / 按阶段」口径下用的是 KIND_COLOR / STAGE_COLOR ——
+ * 同一个图例块在两种口径下说两种谎（图例显示灰、节点显示业务色）。
+ * 图例是「颜色通道的字典」，字典必须和正文用同一套词典。
+ *
+ * 阶段口径的图例不在这里：图例按**节点类型**过滤（类型是开关维度），
+ * 阶段是**着色维度**，两个维度正交 —— 阶段色含义由「按阶段」分段控件旁的
+ * title 提示承载，不混进类型图例。
+ */
+export function legendColorOf(kind: GraphNodeKind, mode: ColorMode): string {
+  if (mode === 'kind') return KIND_COLOR[kind]
+  // tone / stage 口径下类型图例退回语义色（tone 口径节点就是语义色；
+  // stage 口径下同一类型可能是任意阶段色，用类型的中性代表色避免误读）。
+  return TONE_COLOR[LEGEND_TONE[kind]]
+}
+
+/** 类型 → 代表语义色（图例在 tone 口径下的颜色；与 graph-data 的能力域色调一致）。 */
+const LEGEND_TONE: Record<GraphNodeKind, GraphNode['tone']> = {
+  capability: 'info',
+  stage: 'neutral',
+  metric: 'warn',
+  bundle: 'neutral',
+  gap: 'error',
+}
+
+/**
+ * 类型 → 代表形状（v0.11 P0：形状图例缺失修复）。
+ *
+ * 形状是颜色之外的第二编码通道，但它只对「知道映射的人」可读 ——
+ * 图例必须同时展示形状与颜色。能力域的形状映射真相在
+ * `graph-data.ts` 的 CAPABILITY_SHAPES；这里用**实际出现的节点**导出
+ * 代表形状（多数票），而不是复制一份映射 —— 复制就是第二真相源。
+ */
+export function legendShapeOf(kind: GraphNodeKind, nodes: readonly GraphNode[]): GraphNode['shape'] {
+  const tally = new Map<GraphNode['shape'], number>()
+  for (const node of nodes) {
+    if (node.kind !== kind) continue
+    tally.set(node.shape, (tally.get(node.shape) ?? 0) + 1)
+  }
+  let best: GraphNode['shape'] | null = null
+  let bestCount = 0
+  for (const [shape, count] of tally) {
+    if (count > bestCount) {
+      best = shape
+      bestCount = count
+    }
+  }
+  return best ?? 'circle'
 }
 
 /* ---------- 布局投影 ---------- */

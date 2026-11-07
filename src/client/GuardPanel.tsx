@@ -208,6 +208,18 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
 
   const unavailable = failure !== null && snapshot === null
   const loading = snapshot === null
+  // 暂停轮询后的「数据陈旧度」：面板停了，但用户要知道画面停在多早。
+  // 用 tick 每分钟重算一次（暂停时才渲染这条，运行时 footer 显示轮询状态）。
+  const [nowTick, setNowTick] = useState(() => Date.now())
+  useEffect(() => {
+    if (polling) return
+    const timer = setInterval(() => setNowTick(Date.now()), 60_000)
+    return () => clearInterval(timer)
+  }, [polling])
+  const staleMinutes = useMemo(() => {
+    if (polling || snapshot === null) return 0
+    return Math.max(0, Math.round((nowTick - Date.parse(snapshot.at)) / 60_000))
+  }, [polling, snapshot, nowTick])
 
   return (
     <section className="rg-panel" data-form={form} data-recency-guard-panel="" ref={rootRef} aria-busy={loading || busy}>
@@ -248,6 +260,10 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
           </button>
           <button type="button" className="rg-button" onClick={() => void runAction('recover')} disabled={busy}>
             {t('panel.recover')}
+          </button>
+          {/* v0.11：restore 补齐面板动作面 —— 工具早有此动作，路由此前缺失。 */}
+          <button type="button" className="rg-button" onClick={() => void runAction('restore')} disabled={busy}>
+            {t('panel.restore')}
           </button>
           <button
             type="button"
@@ -454,7 +470,7 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
 
           <footer className="rg-foot">
             <span>{t('panel.snapshotAt', { time: snapshot.at.replace('T', ' ').slice(0, 19) })}</span>
-            <span>{polling ? t('panel.pollingOn', { seconds: POLL_INTERVAL / 1000 }) : t('panel.pollingPaused')}</span>
+            <span>{polling ? t('panel.pollingOn', { seconds: POLL_INTERVAL / 1000 }) : t('panel.stale', { minutes: staleMinutes })}</span>
           </footer>
         </>
       )}

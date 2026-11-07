@@ -65,6 +65,37 @@
 
 当某个插件把 DSH 拖垮时，本插件会在崩溃的那一刻记录下"谁最可疑"，并在**下一次启动时、在崩溃插件的代码被加载之前**把它挡在门外。反复崩溃时，关闭的插件会逐个增加（第 1 次关最近更新的 1 个，仍崩溃则关最近更新的 2 个）。稳定之后，除首要嫌疑外，其余被关闭的配置会自动恢复。
 
+## v0.11 新增（数据面安全 + 图谱图例一致性 + 马尔可夫去向可见 + 市场准备）
+
+- **动作路由方法守卫（P0 安全修复）**：`/action/archive|reenable|restore|recover`
+  此前不检查 HTTP 方法 —— `GET /recency-guard/api/action/archive` 也会执行归档重置
+  （浏览器预取/爬虫/误点链接都可能触发）。现在非 POST 一律 405 + `allow: POST`。
+- **`?partition=` 真正生效（P0）**：客户端一直拼分区查询参数，但数据面此前从不读它
+  —— 跨分区查看永远静默返回当前分区。现在快照路由在宿主侧实现分区感知：
+  请求其它分区返回**只读磁盘投影**（状态/日志/决策/备份），运行时字段如实标注
+  归属，未知分区返回 `available:false`（绝不假绿）。
+- **面板动作面补齐**：新增 `/action/restore` 路由 + 面板「恢复非嫌疑插件」按钮
+  （工具早有此动作，路由此前缺失）；暂停轮询时 footer 显示「数据已停留 N 分钟」。
+- **图谱图例一致性（P0）**：图例颜色此前固定语义色调色板，切到「按类型」口径时
+  与节点实际颜色不一致；现在图例色**跟随当前着色口径**（legendColorOf），并直接
+  绘制节点形状（形状=第二编码通道，图例不展示它就只对知道映射的人可读）。
+- **搜索循环跳转**：多匹配时回车依次遍历（第 n/m 指示可见），不再永远停在第一个；
+  「重置」按钮现在同时清掉拖拽偏移（此前节点拖飞后只能刷新页面）。
+- **马尔可夫跨阶段去向（P0）**：矩阵卡此前只渲染自环概率条 —— `monitoring → 崩溃
+  40%` 这类核心去向分布（README 宣称的）在界面上根本看不到。现在每行带 top-2
+  跨阶段去向徽标。
+- **事件流展开**：默认 12 条 + 「展开其余 N 条」显式计数（与嫌疑排名同款纪律，
+  数据层给全量、显示层管截断）。
+- **测试盲区补齐**：新增 `tests/client/graph-model.test.ts`（过滤共源/布局确定性/
+  图例同源/平行边曲率）与 `tests/host/routes.test.ts`（方法守卫/partition/参数
+  校验/请假语义）—— 文件头「已由测试钉死」的注释如今成真。13/13 全绿。
+- **参考插件取长补短**：系统研究 dsh-ops（输出 notice 三要素）、dsh-compat-guardian
+  （reconcile 自愈/原子写/乐观锁）、dsh-context（工作预算/资源自适应）、
+  dsh-cookie-guard（独立救援 CLI）后按审计清单采纳落地；研究报告见
+  `.cycles/cycles/cycle-6/参考插件研究报告.md`。
+- **插件市场准备**：仓库 topics（dsh-plugin 等）补齐、256px 图标、screenshots.json
+  声明、投稿 YAML 按 awesome-dsh-plugin contributing.md 形态定稿。
+
 ## v0.7 新增（崩溃级修复 + 可交互图谱 + 可观测性白盒化）
 
 **先说最要紧的一条：v0.6 会把 profile 写崩。**
@@ -267,6 +298,10 @@ npm 发布后市场索引会自动携带 npm 版本；GitHub-only 期间用上�
     includeExperimental: true  # 是否把 experimental/beta 命名的包算作嫌疑
     maxAutoDisable: 2          # 单次恢复最多关闭几个嫌疑插件
     autoRestore: true          # 稳定后自动恢复非首要嫌疑的配置
+    confirmRounds: 2           # 概率性证据的行动阈值（唯一嫌疑不受限）
+    versionedBackups: true     # 插件更新时写带版本的时间线备份
+    backupRetain: 5            # 每插件保留几份时间线备份
+    backupRoot: ''             # 备份自定义目录（留空=profile 内分区目录）
 ```
 
 | 配置 | 默认 | 说明 |
@@ -275,6 +310,10 @@ npm 发布后市场索引会自动携带 npm 版本；GitHub-only 期间用上�
 | `includeExperimental` | `true` | 实验性/beta 命名的包是否算嫌疑 |
 | `maxAutoDisable` | `2` | 单次恢复最多关闭几个。崩溃次数递增，但封顶于此值 |
 | `autoRestore` | `true` | 稳定启动后自动重新启用非首要嫌疑 |
+| `confirmRounds` | `2` | 多嫌疑时同一头号嫌疑连续 N 轮崩溃才自动关闭（唯一嫌疑第 1 轮即行动） |
+| `versionedBackups` | `true` | 插件更新时写「带版本的时间线备份」，可逐版对账 |
+| `backupRetain` | `5` | 每个插件保留的备份份数（超出删最旧） |
+| `backupRoot` | `''` | 备份自定义目录；环境变量 `RECENCY_GUARD_BACKUP_ROOT` 优先 |
 
 ---
 
@@ -305,12 +344,18 @@ npm 发布后市场索引会自动携带 npm 版本；GitHub-only 期间用上�
 
 ```
 <profile>/.recency-guard/
-├── journal.jsonl        # 只追加的事件日志：install / update / crash-detected / disable / restore …
-├── snapshot.json        # 上次观测到的 { 插件名: 版本 }，用于识别更新
-├── state.json           # 崩溃计数、被自动关闭的插件、已恢复的插件
-├── decision.json        # 本轮要拦截的插件（守护行的表达式读它）
-├── crashed              # 崩溃哨兵：非零退出码时写下
-└── backups/             # 关闭前备份的配置
+├── current.json          # 指针文件：当前分区键（守护行的 disabled 表达式经它搭桥）
+├── partitions.json       # 分区索引：项目 → 分区键（多项目隔离的登记处）
+├── projects/<分区键>/    # 每个项目的分区目录（状态/日志/决策完全独立）
+│   ├── journal.jsonl     # 只追加的事件日志：install / update / crash-detected / disable / restore …
+│   ├── snapshot.json     # 上次观测到的 { 插件名: 版本 }，用于识别更新
+│   ├── state.json        # 崩溃计数、被自动关闭的插件、已恢复的插件
+│   ├── decision.json     # 本轮要拦截的插件（守护行的表达式读它）
+│   ├── crashed           # 崩溃哨兵：非零退出码时写下
+│   ├── observation-*.json # 观测快照（启动事实，量化指标的数据源）
+│   ├── archive/          # 本分区的历史归档（搬走+留档）
+│   └── backups/          # 关闭前备份的配置（versionedBackups 时带版本）
+└── …
 ```
 
 ---
@@ -349,9 +394,9 @@ npm 发布后市场索引会自动携带 npm 版本；GitHub-only 期间用上�
 
 ```bash
 npm install
-npm run build        # esbuild 打包到 lib/
+npm run build        # esbuild 双产物：dist/index.js（宿主）+ dist/client.js（客户端）
 npm run typecheck    # tsc --noEmit
-npm test             # 单元测试 + 工具行为测试
+npm test             # 分层测试（Core/Host/Client/Contract）
 ```
 
 工具行为测试需要 DSH 运行时包（harness 由应用提供，不在 profile 的 node_modules 中）：

@@ -38,6 +38,16 @@ export function MarkovBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElem
               <span className="rg-markov-nodata">{t('metrics.undefined')}</span>
             )}
             <span className="rg-markov-value">{row.selfLoop !== null ? `${Math.round(row.selfLoop * 100)}%` : '—'}</span>
+            {/* 跨阶段去向徽标（v0.11）：`→ 崩溃 40%` 直接可读，高危迁移无法被忽略。 */}
+            {row.exits !== null && (
+              <span className="rg-markov-exits">
+                {row.exits.map((exit) => (
+                  <span key={exit.stage} className="rg-chip rg-chip-exit" title={row.label}>
+                    → {stageLabelOf(exit.stage as never, exit.stage)} {exit.percent}%
+                  </span>
+                ))}
+              </span>
+            )}
           </li>
         ))}
       </ul>

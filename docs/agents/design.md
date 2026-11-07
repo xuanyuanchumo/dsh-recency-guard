@@ -293,3 +293,36 @@ js-yaml 报 `bad indentation of a mapping entry (185:9)`。注意失败的不是
 - 零依赖纪律 ⇒ 宽度判定（codePointWidth/displayWidth/padWidth）内联实现，
   与 src/tool-text.ts 的同名原语语义一致但不共享代码 —— 崩溃现场 node_modules
   可能正是损坏状态，逃生通道只能依赖 node 内置模块。
+
+## 11. v0.11 数据面安全与图谱一致性（cycle-6）
+
+### 11.1 动作路由方法守卫（routes.ts）
+
+- 漏洞形态：archive/reenable/recover 的 handler 不检查 `req.method`，
+  GET 请求 readBody 读不到体 → reason 走默认值照常执行 —— 浏览器预取、
+  爬虫、误点链接都可能触发破坏性动作。
+- 修复：`rejectWrongMethod` 统一守卫，非 POST → 405 + `allow: POST`
+  （RFC 7231 语义）。测试钉死：tests/host/routes.test.ts。
+
+### 11.2 跨分区只读快照（partition-snapshot.ts）
+
+- `?partition=` 的宿主侧实现：**磁盘投影**（另一个 Store 实例读对方分区目录），
+  不是运行时视图切换 —— 观察动作不得影响本分区状态机。
+- 诚实降级：stage 恒 `idle` + 说明标签、metrics/capability/markov 为 null
+  （那些是当前进程的状态机事实，不能替对方编造）；未知分区 `available:false`。
+- 独立成模块：index.ts 复杂度预算 100，内联投影实测 hotspot 到 103。
+
+### 11.3 图例与着色同源（graph-model.ts）
+
+- 缺陷形态：图例色固定语义色调色板（dotToneOf），节点在「按类型」口径用
+  KIND_COLOR —— 同一个图例在两种口径下说两种谎。
+- 修复：`legendColorOf(kind, mode)` 图例色跟随着色口径；
+  `legendShapeOf(kind, nodes)` 代表形状从**实际数据多数票**导出
+  （不复制 CAPABILITY_SHAPES 映射 —— 复制就是第二真相源）。
+
+### 11.4 马尔可夫跨阶段去向（panel-model.ts）
+
+- 缺陷形态：矩阵卡只渲染自环概率条 —— `monitoring → crashed 40%` 这类
+  核心去向分布（README 宣称的）界面上看不到。
+- 修复：`MarkovRowView.exits`（排除自环与零概率，按概率降序 top-2，
+  并列按阶段名稳定排序）→ 行内「→ 崩溃 40%」徽标。

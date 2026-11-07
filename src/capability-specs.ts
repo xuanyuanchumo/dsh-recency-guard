@@ -196,6 +196,9 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
     stage: 'recovered',
     exposed: true,
     exposedAs: 'recency_guard',
+    // v0.11：restore 同时作为**动作路由**暴露（/action/restore），面板的
+    // 「恢复非嫌疑插件」按钮走这条路由 —— 名称必须声明，契约测试双向核对。
+    exposedAlsoAs: ['recency-guard.restore'],
     exposedActions: ['restore'],
     hostServices: ['tools', 'pluginManager'],
   },

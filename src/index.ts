@@ -29,6 +29,7 @@ import { buildCapabilityGraph, verifyCapabilityContract } from './capability-spe
 import { currentRegistrationSurface, verifySurfaceAlignment } from './capability-specs.js'
 import { TOOL_SURFACE } from './capability.js'
 import { buildPanelSnapshot, buildGraphDataFor, type PanelSnapshot } from './snapshot.js'
+import { buildPartitionSnapshot } from './partition-snapshot.js'
 import {
   isolationView,
   partitionArtifacts,
@@ -202,11 +203,14 @@ export function apply(ctx: Context, config: Config) {
         profileDir: profile.dir,
         workspace: partition.workspace,
         profileName: profile.name,
+        projectKey: partition.key,
         snapshot: () => guard.panelSnapshot(),
+        snapshotPartition: (key) => guard.partitionSnapshot(key),
         graph: () => guard.graphData(),
         archive: (reason) => guard.archiveReset(reason),
         archives: () => guard.archives(),
         reenable: (bundle) => guard.reenable(bundle),
+        restore: () => guard.restore(),
         recover: () => guard.recoverNow(),
         isolation: async () => guard.isolationView(),
         lifecycle: async () => guard.lifecycleView(),
@@ -1339,6 +1343,32 @@ class Guard {
   /** 图谱数据（能力生产消费关系 + 缺口节点）。 */
   async graphData(): Promise<unknown> {
     return buildGraphDataFor(buildCapabilityGraph())
+  }
+
+  /**
+   * 跨分区只读快照（v0.11 P0：数据面真正支持 `?partition=` 查询）。
+   *
+   * 投影实现在 `partition-snapshot.ts`（独立模块：磁盘投影有自己的一条
+   * 隔离边界要讲清楚，且 index.ts 复杂度预算 100 不该被它撑破）。
+   */
+  async partitionSnapshot(key: string): Promise<unknown> {
+    return buildPartitionSnapshot(
+      {
+        profileDir: this.profileDir,
+        profileName: this.profileName,
+        config: {
+          versionedBackups: this.config.versionedBackups,
+          backupRetain: this.config.backupRetain,
+          configEditorAvailable: this.configEditorAvailable,
+        },
+        selfPackage: {
+          version: this.selfPackage.version,
+          repositoryUrl: this.selfPackage.repositoryUrl,
+          issuesUrl: this.selfPackage.issuesUrl,
+        },
+      },
+      key,
+    )
   }
 
   /**

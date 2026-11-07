@@ -275,7 +275,19 @@ export interface MarkovRowView {
   selfLoop: number | null
   /** 概率条的宽度百分比（自环 × 100）；null = 不画条。 */
   barPercent: number | null
+  /**
+   * 跨阶段去向 top-N（v0.11 P0 修复：自环之外的最大概率去向）。
+   *
+   * 为什么必须有：`monitoring → crashed 40%` 这类**跨阶段**迁移才是
+   * 「高危巡逻」的核心信号，此前 UI 只渲染自环条，README 宣称的
+   * 「去向分布」在界面上根本看不到。每行最多 2 个（top-2），
+   * 排除自环与零概率；null = 无跨阶段迁出（健康值守或无样本）。
+   */
+  exits: Array<{ stage: string; percent: number }> | null
 }
+
+/** 跨阶段去向保留几个（top-2：一行最多放得下两个徽标，再多进 tooltip）。 */
+const MARKOV_EXITS_LIMIT = 2
 
 /** 马尔可夫分析的视图投影（纯函数：面板不直接读 markov 内部结构）。 */
 export function markovView(snapshot: PanelSnapshot): {
@@ -289,11 +301,21 @@ export function markovView(snapshot: PanelSnapshot): {
   const markov = snapshot.markov
   const rows: MarkovRowView[] = markov.rows.map((row) => {
     const selfLoop = row.probabilities?.[row.stage]
+    // 跨阶段去向：排除自环与零概率，按概率降序取 top-N（并列按阶段名稳定排序）。
+    const exits =
+      row.probabilities === null
+        ? null
+        : Object.entries(row.probabilities)
+            .filter(([stage, p]) => stage !== row.stage && p > 0)
+            .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+            .slice(0, MARKOV_EXITS_LIMIT)
+            .map(([stage, p]) => ({ stage, percent: Math.round(p * 100) }))
     return {
       stage: row.stage,
       label: row.label,
       selfLoop: typeof selfLoop === 'number' ? selfLoop : null,
       barPercent: typeof selfLoop === 'number' ? Math.round(selfLoop * 100) : null,
+      exits: exits !== null && exits.length > 0 ? exits : null,
     }
   })
   const stationary =

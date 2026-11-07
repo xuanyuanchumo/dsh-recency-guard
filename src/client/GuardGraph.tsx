@@ -96,6 +96,8 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set())
   const [size, setSize] = useState<Size>({ width: 0, height })
   const [query, setQuery] = useState('')
+  // 搜索遍历游标（v0.11）：回车在匹配列表里循环前进；查询变化时归零。
+  const [matchIndex, setMatchIndex] = useState(0)
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('layered')
   const [colorMode, setColorMode] = useState<ColorMode>('tone')
   const [onlyConnected, setOnlyConnected] = useState(false)
@@ -339,9 +341,22 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
       apply(centerOn(viewport, size, centreOfNode(node)))
       onFocusChange(nodeId)
       setQuery('')
+      setMatchIndex(0)
     },
     [apply, viewport, size, positionedById, centreOfNode, onFocusChange],
   )
+
+  /**
+   * 回车循环跳转（v0.11）：游标 +1 取模 → 定位到下一个匹配。
+   * matches 变化（输入变了）时游标归零由下面的 effect 负责 ——
+   * 定位与归零分开写，避免「输入和跳转抢同一个 state 更新」。
+   * （声明位置在 `matches` 之后 —— useCallback 依赖块级作用域变量。）
+   */
+
+  // 查询文本变化 ⇒ 游标归零（新搜索从第一个匹配开始）。
+  useEffect(() => {
+    setMatchIndex(0)
+  }, [query])
 
   /** 面板发起的居中请求：nonce 变化才执行（同一个节点被再次请求也要真的居中）。 */
   useEffect(() => {
@@ -389,6 +404,19 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
   }, [focusId, visibleEdges])
 
   const matches = useMemo(() => matchNodes(visibleNodes, query), [visibleNodes, query])
+
+  /**
+   * 回车循环跳转（v0.11）：游标 +1 取模 → 定位到下一个匹配。
+   */
+  const locateMatchNext = useCallback((): void => {
+    if (matches.length === 0) return
+    const next = (matchIndex + 1) % matches.length
+    setMatchIndex(next)
+    const node = matches[next]
+    if (!node) return
+    apply(centerOn(viewport, size, centreOfNode(node)))
+    onFocusChange(node.id)
+  }, [matches, matchIndex, apply, viewport, size, centreOfNode, onFocusChange])
   const matchIds = useMemo(() => new Set(matches.map((node) => node.id)), [matches])
   const focusNode = focusId === null ? undefined : nodeById.get(focusId)
   const focusDegree = useMemo(() => (focusId === null ? { in: 0, out: 0 } : degreeOf(focusId, visibleEdges)), [focusId, visibleEdges])
@@ -437,14 +465,20 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
           onFocusChange(null)
           setQuery('')
           setHoverId(null)
+          // 拖拽偏移一并清零（v0.11）：「重置」若不还原用户拖乱的布局，
+          // 节点拖飞后只能刷新页面 —— 那不是重置，是摆设。
+          setOffsets({})
         }}
-        canReset={focusId !== null || query !== ''}
+        canReset={focusId !== null || query !== '' || Object.keys(offsets).length > 0}
         query={query}
         onQuery={setQuery}
         matches={matches}
         onLocate={locateNode}
+        matchIndex={matchIndex}
+        onMatchNext={locateMatchNext}
         counts={counts}
         hidden={hidden}
+        allNodes={visibleNodes}
         onToggleKind={(kind) =>
           setHidden((current) => {
             const next = new Set(current)

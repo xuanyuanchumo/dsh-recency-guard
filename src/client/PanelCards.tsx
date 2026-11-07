@@ -595,14 +595,21 @@ function PartitionRow({
 
 /* ---------- 事件流 ---------- */
 
+/** 事件流默认展示条数（超出给「还有 N 条」展开按钮 —— 与 risks 卡同款纪律）。 */
+const EVENTS_INITIAL = 12
+
 export function EventsBody({ events }: { events: PanelSnapshot['recentEvents'] }): ReactElement {
+  const [showAll, setShowAll] = useState(false)
   if (events.length === 0) return <p className="rg-empty">{t('panel.emptyHint')}</p>
+  // 快照给的是升序尾部；显示按时间倒序（最新在最上）。
+  const ordered = [...events].reverse()
+  // 快照已按 EVENT_FLOW_LIMIT 截断过一次；这里再补「显示层」截断，且必须显式计数。
+  const visible = showAll ? ordered : ordered.slice(0, EVENTS_INITIAL)
+  const omitted = ordered.length - visible.length
   return (
-    <ol className="rg-events">
-      {[...events]
-        .slice(-12)
-        .reverse()
-        .map((event, index) => (
+    <>
+      <ol className="rg-events">
+        {visible.map((event, index) => (
           <li key={`${event.t}-${index}`} className="rg-event">
             <time className="rg-event-time" title={event.t}>
               {formatClock(event.t)}
@@ -616,12 +623,17 @@ export function EventsBody({ events }: { events: PanelSnapshot['recentEvents'] }
             <span className="rg-event-ago">{agoLabel(event.t)}</span>
           </li>
         ))}
-    </ol>
+      </ol>
+      {omitted > 0 && (
+        <button type="button" className="rg-link rg-risks-expand" onClick={() => setShowAll(true)}>
+          {t('events.more', { count: omitted })}
+        </button>
+      )}
+    </>
   )
 }
 
-function eventTone(kind: string, detail?: string): string {
-  if (kind === 'crash-detected') return 'error'
+function eventTone(kind: string, detail?: string): string {  if (kind === 'crash-detected') return 'error'
   if (kind === 'restore') return 'success'
   if (kind === 'install' || kind === 'update') return 'info'
   // 两阶段/判定事件（v0.9.1）：观察轮 warn（黄），confirmed 成功（绿）。

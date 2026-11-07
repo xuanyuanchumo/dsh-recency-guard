@@ -1,4 +1,18 @@
-# 对外面 API（dsh-recency-guard v0.10.0）
+# 对外面 API（dsh-recency-guard v0.11.0）
+
+## 0.0e v0.11 契约变更一句话清单
+
+| 变更 | 影响 | 兼容性 |
+|---|---|---|
+| **动作路由新增方法守卫** | `/action/*` 非 POST 一律 405 + `allow: POST`（此前 GET 也会触发归档——P0 安全修复） | 破坏性收紧（此前 GET 行为是缺陷，不是契约） |
+| **`/snapshot` 支持 `?partition=<key>`** | 请求其它分区返回只读磁盘投影（`readonly:true`，stage 恒 idle + 说明标签）；未知分区 `{available:false, reason}` | 兼容（无参数行为不变） |
+| RouteContext 新增 `snapshotPartition(key)` 与 `projectKey` | 路由接线处必须提供（index.ts 已接） | 内部接口 |
+| 新增 `/action/restore` 路由（POST） | 面板「恢复非嫌疑插件」按钮；`PanelAction` 联合类型加 `'restore'` | 兼容（只增） |
+| 能力清单 `guard.recover.restore` 新增 `exposedAlsoAs: ['recency-guard.restore']` | 契约测试双向核对新路由名 | 兼容（只增） |
+| 面板快照 `MarkovRowView` 新增 `exits: Array<{stage, percent}> \| null` | 跨阶段去向 top-2 徽标（此前只渲染自环——P0 展示缺口） | 兼容（只增） |
+| 面板 i18n 新增 `panel.restore` / `panel.stale` / `graph.matchIndex` / `events.more` | zh/en 218+ 键同步 | 兼容 |
+| 图谱图例色跟随着色口径（`legendColorOf`）+ 形状图例（`legendShapeOf`） | graph-model 新导出两个纯函数；GraphToolbar props 新增 `allNodes` / `matchIndex` / `onMatchNext` | 内部接口 |
+| 新增 `tests/client/graph-model.test.ts` 与 `tests/host/routes.test.ts` | 测试 12→13 文件；HTTP 行为与图谱纯函数不再零覆盖 | 新文件 |
 
 ## 0.0d v0.10 契约变更一句话清单
 
@@ -105,7 +119,7 @@ v0.4 起 `execute` 返回**规范 JSON 对象**（不再是字符串）：
 
 | action | 参数 | 行为 |
 |---|---|---|
-| `status` | — | 崩溃状态、嫌疑排名（top10）、实验性名单、量化指标；**v0.6**：输出带 `workspace` + `projectKey`（隔离归因） |
+| `status` | — | 崩溃状态、嫌疑排名（**全量**，v0.8 起不再截断 10）、实验性名单、量化指标；输出带 `workspace` + `projectKey`（隔离归因）与「插件版本」「问题反馈」 |
 | `history` | `limit?=40` | 安装/更新/崩溃/恢复事件时间线 |
 | `recover` | — | 立即按最近更新执行一次恢复关闭（crashSeq=1） |
 | `restore` | — | 重新启用非嫌疑插件，首要嫌疑保持关闭 |
@@ -120,12 +134,15 @@ v0.4 起 `execute` 返回**规范 JSON 对象**（不再是字符串）：
 
 | 路由 | 方法 | 语义 |
 |---|---|---|
-| `/snapshot` | GET | 面板快照（状态/指标/排名/能力矩阵/事件流，一次成型） |
+| `/snapshot` | GET | 面板快照（状态/指标/排名/能力矩阵/事件流，一次成型）；**v0.11**：支持 `?partition=<key>` 跨分区只读查看 |
 | `/graph` | GET | 图谱数据（节点/边/缺口/分层布局/连通分量） |
+| `/isolation` | GET | 项目隔离视图（分区列表 + 当前分区 + 产物路径对照） |
+| `/lifecycle` | GET | 生命周期步骤流 + 迁移史 + 被拒迁移 |
 | `/archives` | GET | 历史归档清单 |
-| `/action/archive` | POST | `{reason}` → 归档重置 |
-| `/action/reenable` | POST | `{bundle}` → 重新启用 |
-| `/action/recover` | POST | 手动恢复 |
+| `/action/archive` | POST | `{reason}` → 归档重置；**v0.11**：非 POST 一律 405 |
+| `/action/reenable` | POST | `{bundle}` → 重新启用；缺 bundle 400 |
+| `/action/restore` | POST | **v0.11 新增**：恢复非嫌疑插件（面板按钮） |
+| `/action/recover` | POST | 手动恢复；**v0.11**：非 POST 一律 405 |
 
 缺席即诚实：数据不可用时返回 `{available:false, reason}`，不返回空数组假装没问题。
 
@@ -143,8 +160,19 @@ capability                   total/exposed/connected/connectivity/gaps[]/byStage
 graphConnectivity            components/largest/isolated
 partitions[]                 项目分区（key/label/workspace/lastSeenAt）
 autoDisabled[] / restored[]  关闭与恢复名单
-recentEvents[]               **v0.4 新增**：journal 尾部 24 条（事件流卡片数据源）
+recentEvents[]               **v0.4 新增**：journal 尾部投影（事件流卡片数据源）
+eventFlow[]                  **v0.10**：事件流/状态流转时序（stage/action/flow/source）
+markov                       **v0.10**：转移矩阵（rows[].probabilities/stationary/samples）
+backupPolicy                 **v0.9**：备份策略投影（versionedBackups/retain/root…）
+lastRecoveryVerdict?         **v0.9.1**：最近恢复判定（观察中 N/M 轮 或 已行动）
+diagnostics                  **v0.10**：插件/宿主版本、平台、快照耗时、repositoryUrl/issuesUrl
 ```
+
+跨分区查看（v0.11）：`GET /snapshot?partition=<key>` 返回**只读磁盘投影**
+（`readonly: true`、workspace、journal 尾部、autoDisabled/restored/备份根）；
+运行时字段如实降级（stage 恒 `idle` + stageLabel 说明「跨分区只读视图」，
+metrics/capability/markov 为 null —— 那些是当前进程的状态机事实，不能替
+对方分区编造）。未知分区返回 `{available:false, reason}`。
 
 ## 3.1 面板与图谱客户端行为（v0.5 + v0.6）
 
@@ -159,10 +187,11 @@ recentEvents[]               **v0.4 新增**：journal 尾部 24 条（事件流
 - **轮询开关**：暂停 = 不再发 fetch，画面停在暂停时刻；
   按钮文字/边框双通道区分（aria-pressed + `.rg-button-paused`）。
 - **图谱交互**（全部可由键盘/鼠标完成，均有 aria 标签）：
-  滚轮缩放（指针锚）· 拖画布平移 · 拖节点重排（offsets 叠加层）·
-  单击高亮追溯 · 双击视口居中 · 搜索定位（Enter 第一个）·
-  类型图例开关 · **邻居导航（v0.6：详情侧栏上游/下游可点击跳转）** ·
-  Esc 一次清空全部观察态。
+  Ctrl/⌘+滚轮缩放（指针锚）· 拖画布平移 · 拖节点重排（offsets 叠加层）·
+  单击高亮追溯 · 双击视口居中 · 搜索定位（**v0.11：Enter 循环遍历 + 第 n/m 指示**）·
+  类型图例开关（**v0.11：图例色跟随着色口径 + 形状通道入图例**）·
+  **邻居导航（v0.6：详情侧栏上游/下游可点击跳转）** ·
+  Esc 一次清空全部观察态 · **v0.11：重置按钮同时清拖拽偏移**。
 - **曲线边**：二次贝塞尔 `curveEdgePath`；平行边按 `parallelIndexes` +
   `parallelCurvature` 奇偶交替弯曲；高亮边的生产/消费标签锚在
   `midpointOfQuadratic` 闭式中点。
@@ -186,3 +215,7 @@ npx @deepseek-ai/dsh@<ver> plugin --profile <profile> add file:/绝对路径/dsh
 | `includeExperimental` | true | experimental 命名是否算嫌疑 |
 | `maxAutoDisable` | 2 | 单次恢复最多关闭数 |
 | `autoRestore` | true | 稳定后自动恢复非嫌疑 |
+| `confirmRounds` | 2 | **v0.9**：多嫌疑行动阈值（唯一嫌疑不受限） |
+| `versionedBackups` | true | **v0.8**：带版本的时间线备份开关 |
+| `backupRetain` | 5 | **v0.8**：每插件备份份数 |
+| `backupRoot` | '' | **v0.8**：备份自定义目录（环境变量优先） |
