@@ -20,6 +20,7 @@
     "pollingPaused": "轮询已暂停（画面停在暂停时刻）"
   },
   "sections": {
+    "backupPolicy": "备份策略",
     "state": "生命周期",
     "metrics": "量化指标",
     "decisions": "崩溃决策",
@@ -67,6 +68,19 @@
     "title": "关键指标",
     "changePointYes": "变点已检出",
     "changePointNo": "无上行变点"
+  },
+  "backupPolicy": {
+    "versioned": "时间线备份",
+    "on": "开启",
+    "off": "关闭",
+    "retain": "每插件保留份数",
+    "editor": "配置编辑服务（关闭前备份）",
+    "root": "备份根目录",
+    "hint": "修改备份策略请在 dsh 设置 → 插件 → dsh-recency-guard 中调整（versionedBackups / backupRetain / backupRoot）。"
+  },
+  "card": {
+    "enlarge": "扩大面板",
+    "shrink": "恢复面板"
   },
   "risks": {
     "empty": "当前没有嫌疑插件",

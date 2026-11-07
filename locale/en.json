@@ -20,6 +20,7 @@
     "pollingPaused": "polling paused (the view is frozen at the pause moment)"
   },
   "sections": {
+    "backupPolicy": "Backup policy",
     "state": "Lifecycle",
     "metrics": "Metrics",
     "decisions": "Crash decisions",
@@ -67,6 +68,19 @@
     "title": "Key indicators",
     "changePointYes": "change point detected",
     "changePointNo": "no upward change point"
+  },
+  "backupPolicy": {
+    "versioned": "Versioned backups",
+    "on": "On",
+    "off": "Off",
+    "retain": "Versions kept per plugin",
+    "editor": "Config editor (pre-disable backup)",
+    "root": "Backup root",
+    "hint": "Adjust policy in dsh Settings → Plugins → dsh-recency-guard (versionedBackups / backupRetain / backupRoot)."
+  },
+  "card": {
+    "enlarge": "Enlarge panel",
+    "shrink": "Restore panel"
   },
   "risks": {
     "empty": "No suspect plugins",

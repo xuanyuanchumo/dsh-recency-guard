@@ -367,6 +367,70 @@
   border-radius: var(--dsw-radius-md, 12px);
   background: var(--dsw-alias-bg-layer-1);
   min-width: 0;
+  min-height: 0;
+}
+
+/**
+ * 卡片内容区固定高度 + 内部滚动（v0.9.1 用户需求）。
+ *
+ * 为什么限高而不是让内容自然伸展：展开的卡片多了之后，面板被单个
+ * 卡片撑到几千像素，下面的卡片要滚很久才看得到 —— 均匀的视口密度
+ * 比单卡的完整性更重要（这正是用户原始诉求）。
+ *
+ * - 默认 `--rg-card-body-h: 240px`：足够看约 10 行内容，超出内部滚动；
+ * - `overscroll-behavior: contain`：滚到尽头不把外层面板带着滚；
+ * - `.rg-card-enlarged` 解除限高（⤢ 按钮），摊开阅读长清单；
+ * - 窄形态把限高降到 180px（侧栏空间少，密度优先）。
+ */
+.rg-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: var(--rg-card-body-h, 240px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+}
+
+/* 扩大态：解除限高，卡片按内容自然伸展（面板自身仍是滚动容器）。 */
+.rg-card-enlarged .rg-card-body {
+  height: auto;
+  max-height: none;
+  overflow-y: visible;
+}
+
+/* 扩大按钮：头部内的第二个动作，小尺寸、低对比，不与折叠箭头竞争。 */
+.rg-card-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  border-radius: var(--dsw-radius-sm, 8px);
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--rg-motion-fast, 120ms) var(--rg-ease, ease);
+}
+.rg-card-expand:hover,
+.rg-card-expand:focus-visible {
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+}
+.rg-card-enlarged .rg-card-expand {
+  color: var(--dsw-alias-label-primary);
+}
+
+.rg-card-title {
+  margin: 0;
+  font-size: var(--dsw-font-s-14, 14px);
+  font-weight: var(--dsw-font-s-strong-14, 600);
+}
+
+/* 窄形态：侧栏空间少，密度优先 —— 内容区限高降为 180px。 */
+.rg-panel[data-form='narrow'] .rg-card-body {
+  --rg-card-body-h: 180px;
 }
 
 .rg-card-title {

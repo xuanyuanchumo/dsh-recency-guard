@@ -1,6 +1,6 @@
 {
   "flowId": "archive",
-  "current": "DONE",
+  "current": "IDLE",
   "history": [
     {
       "trigger": "run",
@@ -109,8 +109,50 @@
       "from": "RUNNING",
       "to": "DONE",
       "at": "2026-11-06T15:36:02.176Z"
+    },
+    {
+      "trigger": "reset",
+      "from": "DONE",
+      "to": "IDLE",
+      "at": "2026-11-06T23:29:05.529Z"
+    },
+    {
+      "trigger": "run",
+      "from": "IDLE",
+      "to": "RUNNING",
+      "at": "2026-11-06T23:29:05.538Z"
+    },
+    {
+      "trigger": "blocked",
+      "from": "RUNNING",
+      "to": "BLOCKED",
+      "at": "2026-11-06T23:29:05.538Z"
+    },
+    {
+      "trigger": "reset",
+      "from": "BLOCKED",
+      "to": "IDLE",
+      "at": "2026-11-06T23:32:40.093Z"
+    },
+    {
+      "trigger": "run",
+      "from": "IDLE",
+      "to": "RUNNING",
+      "at": "2026-11-06T23:32:51.534Z"
+    },
+    {
+      "trigger": "success",
+      "from": "RUNNING",
+      "to": "DONE",
+      "at": "2026-11-06T23:32:51.534Z"
+    },
+    {
+      "trigger": "reset",
+      "from": "DONE",
+      "to": "IDLE",
+      "at": "2026-11-06T23:34:01.126Z"
     }
   ],
-  "updatedAt": "2026-11-06T15:36:02.176Z",
+  "updatedAt": "2026-11-06T23:34:01.126Z",
   "ledgerHead": null
 }

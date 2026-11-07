@@ -23,6 +23,7 @@ import { deriveObservations, deriveRiskInputs } from './observations.js'
 import { installExitSentinel, readSentinel, clearSentinel } from './sentinel.js'
 import { observeOfficialExperimental } from './official-observe.js'
 import { watchPluginChanges } from './event-watch.js'
+import { assessConfidence, environmentChanged, reconcilePrepared, type CrashHistoryEntry } from './recovery-policy.js'
 import { StageMachine, type LifecycleStepName } from './lifecycle.js'
 import { buildCapabilityGraph, verifyCapabilityContract } from './capability-specs.js'
 import { currentRegistrationSurface, verifySurfaceAlignment } from './capability-specs.js'
@@ -52,6 +53,11 @@ export interface Config {
   /** Auto re-enable the needed (non-suspect) bundles after the profile boots clean. */
   autoRestore: boolean
   /**
+   * 概率性证据的行动阈值：头号嫌疑连续 N 轮复现才动手（v0.9 置信分级）。
+   * 唯一嫌疑不受此限制（确定性证据，第 1 轮即行动）。
+   */
+  confirmRounds: number
+  /**
    * 插件更新时是否写「带版本的时间线备份」（v0.8 备份增强）。
    *
    * 默认开：备份是 best-effort，写失败只降级不报错；关闭则回到只保留
@@ -77,6 +83,7 @@ export const Config: Schema<Config> = Schema.object({
   includeExperimental: Schema.boolean().default(true).description('把 experimental/beta 命名的组合包也算作嫌疑。'),
   maxAutoDisable: Schema.number().default(2).description('单次恢复最多自动关闭的嫌疑插件数（崩溃次数递增，封顶此值）。'),
   autoRestore: Schema.boolean().default(true).description('稳定启动后自动重新启用非嫌疑插件，恢复需要的配置。'),
+  confirmRounds: Schema.number().default(2).description('概率性证据的行动阈值：同一头号嫌疑连续 N 轮崩溃才自动关闭（唯一嫌疑不受限）。'),
   versionedBackups: Schema.boolean().default(true).description('插件更新时写带版本的时间线备份（可回溯更新前后的配置）。'),
   backupRetain: Schema.number().default(5).description('每个插件保留的时间线备份份数（超出删最旧）。'),
   backupRoot: Schema.string().default('').description('备份自定义目录（留空用 profile 内默认位置，随分区隔离）。'),
@@ -597,6 +604,30 @@ class Guard {
     }, (message) => this.ctx.logger?.warn?.(message))
   }
 
+  /**
+   * 从 journal 抽崩溃历史（置信分级的输入）。
+   *
+   * 每条 crash-detected 事件的 suspects 字段就是当时的嫌疑名单快照；
+   * runtime 版本取事件时刻附近的 note（简化：用当前版本 —— 宿主升级
+   * 必然伴随重启，note 里 pid 变化 + 版本字段足以断代）。
+   */
+  private readCrashHistory(): CrashHistoryEntry[] {
+    const events = this.store.readJournalSync(1000)
+    const runtime = safeVersion()
+    const out: CrashHistoryEntry[] = []
+    for (const e of events) {
+      if (e.kind !== 'crash-detected') continue
+      const suspects = Array.isArray(e.suspects) ? e.suspects.filter((s): s is string => typeof s === 'string') : []
+      out.push({
+        at: e.t,
+        exitCode: typeof e.exitCode === 'number' ? e.exitCode : -1,
+        suspects,
+        runtimeVersion: runtime,
+      })
+    }
+    return out
+  }
+
   /** Journal-derived recency map: most recent install-or-update per bundle. */
   private async journalRecency(): Promise<Map<string, { at: string; kind: 'install' | 'update'; version?: string }>> {
     const events = await this.store.readJournal(1000)
@@ -780,12 +811,25 @@ class Guard {
       const ranked = this.rankedSuspectsSync()
       const n = Math.min(Math.max(1, seq), Math.max(1, this.config.maxAutoDisable))
       const targets = pickSuspects(ranked, n)
+      // 置信分级（v0.9.0）：唯一嫌疑是确定性证据，第 1 轮即行动；
+      // 多嫌疑是概率性证据，连续 confirmRounds 轮同头号嫌疑才动手。
+      // 环境变化（runtime/头号插件版本）⇒ 历史计数清零。
+      const history = this.readCrashHistory()
+      const envChanged = environmentChanged(history[history.length - 1], safeVersion(), ranked)
+      const verdict = assessConfidence(envChanged ? [] : history, ranked, { confirmRounds: this.config.confirmRounds })
+      this.store.appendSync({
+        kind: 'note',
+        detail: `恢复判定：${verdict.label}`,
+      })
       this.store.appendSync({
         kind: 'crash-detected',
         detail: `第 ${seq} 次崩溃（退出码 ${exitCode}）`,
         exitCode,
         suspects: targets.map((t) => t.bundle),
       })
+      // 两阶段（v0.9.0）：act=false 只写 prepared（嫌疑保留、disable 为空），
+      // 守护行拿到空名单 = 全放行 —— 偶发崩溃不该有人被关。
+      // act=true 直接 quarantined（动手了），补 prepared 历史到 journal。
       this.store.writeDecisionSync({
         capturedAt: new Date().toISOString(),
         suspects: ranked.map((s) => ({
@@ -793,10 +837,16 @@ class Guard {
           version: s.version,
           lastChangeAt: s.lastChangeAt,
         })),
-        disable: targets.map((t) => t.bundle),
+        disable: verdict.act ? targets.map((t) => t.bundle) : [],
         reason: 'crash-recovery',
+        phase: verdict.act ? 'quarantined' : 'prepared',
         crashSeq: seq,
       })
+      if (!verdict.act) {
+        // 观察轮：不关任何插件，但崩溃证据链完整保留 —— 这是下次判定的输入。
+        this.recordStep('crash-decision', true, `第 ${seq} 次崩溃 → 观察轮（未关闭插件）：${verdict.label}`)
+        return
+      }
       // 指针必须与决策**同时**落地：守护行的表达式在下次启动时
       // 只读 profile 目录下的指针。
       writePointer(this.profileDir, this.projectKey, this.store.partitionPath)
@@ -862,6 +912,30 @@ class Guard {
     // The sentinel says the PREVIOUS run crashed: this boot is the recovery
     // boot, and the decision it published must not be touched.
     const crashedLastRun = sentinel !== null
+
+    // 两阶段对账（v0.9.0）：上一轮可能留下 prepared 记录（崩溃打断或正常
+    // 退出没走到升级）。按磁盘现状归类：autoDisabled 里有 = 关闭已走到
+    // pluginManager ⇒ confirmed；不在 ⇒ reverted（证据链保留）。
+    try {
+      const decision = this.store.readDecisionSync()
+      if (decision?.phase === 'prepared' && decision.disable.length > 0) {
+        const stateNow = this.store.readStateSync()
+        const disabledNow = new Set(stateNow.autoDisabled.map((d) => d.name))
+        const reconciled = reconcilePrepared(
+          decision.disable.map((bundle) => ({ bundle, preparedAt: decision.capturedAt, crashSeq: decision.crashSeq ?? 0 })),
+          new Map(decision.disable.map((b) => [b, !disabledNow.has(b)] as const)),
+        )
+        for (const r of reconciled) {
+          this.store.appendSync({
+            kind: 'note',
+            detail: `两阶段对账：${r.bundle} → ${r.outcome === 'confirmed' ? '关闭已生效（confirmed）' : '未生效（reverted，重启后重试或人工 reenable）'}`,
+          })
+        }
+      }
+    } catch (err) {
+      // 对账失败不拖垮启动：prepared 记录保持原样，下轮再对。
+      this.ctx.logger?.warn?.(`[recency-guard] prepared 对账失败：${describeError(err)}`)
+    }
     // A crash recovery already published the decision and recorded the
     // disabled bundles at the end of the crashed run.
     const recovering = state.autoDisabled.length > 0
@@ -1207,6 +1281,16 @@ class Guard {
         disabledAt: d.disabledAt,
       })),
       partitions: readPartitionIndex(this.profileDir),
+      backupPolicy: {
+        versionedBackups: this.config.versionedBackups,
+        retain: this.config.backupRetain,
+        // customRoot 的判定：环境变量或配置了自定义根 ⇒ resolveBackupsDir
+        // 会把备份指到分区目录之外。用「备份根不在分区内」反推，避免在
+        // 这里重复维护一条 backupRoot 解析规则（单一真相在 store）。
+        customRoot: !this.store.backupsRoot.startsWith(this.store.partitionPath),
+        root: this.store.backupsRoot,
+        configEditorAvailable: this.configEditorAvailable,
+      },
       registeredExposedAs: [...this.actuallyRegistered],
       recentEvents,
     })

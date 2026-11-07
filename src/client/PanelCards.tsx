@@ -45,8 +45,15 @@ export function Card({
   children: ReactNode
   hint?: string
 }): ReactElement {
+  // 「扩大」是卡片自身的第二状态（v0.9.1）：默认内容区限高、内部滚动；
+  // 扩大后解除限高，让卡片按内容自然伸展。与折叠态独立 ——
+  // 折叠是「收起来」，扩大是「摊开来」。
+  const [enlarged, setEnlarged] = useState(false)
   return (
-    <article className={`rg-card${collapsed ? ' rg-card-collapsed' : ''}`} data-card-id={id}>
+    <article
+      className={`rg-card${collapsed ? ' rg-card-collapsed' : ''}${enlarged ? ' rg-card-enlarged' : ''}`}
+      data-card-id={id}
+    >
       <button
         type="button"
         className="rg-card-head"
@@ -56,6 +63,29 @@ export function Card({
       >
         <span className="rg-card-title">{title}</span>
         {hint !== undefined && <span className="rg-card-head-hint">{hint}</span>}
+        {/* 扩大按钮必须 stopPropagation：它是头部内的第二个动作，
+            点它不该触发折叠。 */}
+        <span
+          className="rg-card-expand"
+          role="button"
+          tabIndex={0}
+          aria-pressed={enlarged}
+          aria-label={enlarged ? t('card.shrink') : t('card.enlarge')}
+          title={enlarged ? t('card.shrink') : t('card.enlarge')}
+          onClick={(event) => {
+            event.stopPropagation()
+            setEnlarged((current) => !current)
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              event.stopPropagation()
+              setEnlarged((current) => !current)
+            }
+          }}
+        >
+          {enlarged ? '⤡' : '⤢'}
+        </span>
         <span className="rg-card-chevron" aria-hidden>
           {collapsed ? '▸' : '▾'}
         </span>
@@ -272,6 +302,27 @@ export function RisksBody({
           {t('risks.showMore', { count: hiddenCount })}
         </button>
       )}
+    </>
+  )
+}
+
+/* ---------- 备份策略（v0.9：只读投影 + 指引；改配置走宿主设置页） ---------- */
+
+export function BackupPolicyBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+  const p = snapshot.backupPolicy
+  return (
+    <>
+      <dl className="rg-dl">
+        <dt>{t('backupPolicy.versioned')}</dt>
+        <dd>{p.versionedBackups ? t('backupPolicy.on') : t('backupPolicy.off')}</dd>
+        <dt>{t('backupPolicy.retain')}</dt>
+        <dd>{p.retain}</dd>
+        <dt>{t('backupPolicy.editor')}</dt>
+        <dd>{p.configEditorAvailable ? t('backupPolicy.on') : t('backupPolicy.off')}</dd>
+        <dt>{t('backupPolicy.root')}</dt>
+        <dd className="rg-mono" title={p.root}>{p.root}</dd>
+      </dl>
+      <p className="rg-empty">{t('backupPolicy.hint')}</p>
     </>
   )
 }

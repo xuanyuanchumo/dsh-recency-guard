@@ -93,6 +93,11 @@ export interface PrebootDecision {
   disable: string[]
   reason: 'none' | 'crash-recovery'
   crashSeq?: number
+  /**
+   * 两阶段标记（v0.9.0）：prepared = 已记录待执行；quarantined = 已生效。
+   * 守护行只认 disable 名单，phase 供 reconcile 与面板对账。
+   */
+  phase?: 'prepared' | 'quarantined' | 'reconciled'
 }
 
 export function emptyState(): GuardState {
@@ -115,6 +120,10 @@ export class Store {
   private readonly statePath: string
   private readonly decisionPath: string
   private readonly backupsDir: string
+  /** 备份根的绝对路径（面板「备份」卡片展示；v0.9.0 只读暴露）。 */
+  get backupsRoot(): string {
+    return this.backupsDir
+  }
 
   /**
    * @param profileDir profile 目录

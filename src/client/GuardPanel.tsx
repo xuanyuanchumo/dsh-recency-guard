@@ -4,6 +4,7 @@ import type { FetchResult, PanelAction } from './api.ts'
 import { GuardGraph } from './GuardGraph.tsx'
 import {
   ArchivesCard,
+  BackupPolicyBody,
   CapabilityBody,
   Card,
   DecisionsBody,
@@ -315,6 +316,15 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
               onToggle={() => toggleCollapse('metrics')}
             >
               <MetricsBody snapshot={snapshot} />
+            </Card>
+            <Card
+              id="backup-policy"
+              title={t('sections.backupPolicy')}
+              hint={snapshot.backupPolicy.versionedBackups ? t('backupPolicy.on') : t('backupPolicy.off')}
+              collapsed={collapsed.has('backup-policy')}
+              onToggle={() => toggleCollapse('backup-policy')}
+            >
+              <BackupPolicyBody snapshot={snapshot} />
             </Card>
             <Card
               id="decisions"

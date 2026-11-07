@@ -1,4 +1,14 @@
-# 对外面 API（dsh-recency-guard v0.7）
+# 对外面 API（dsh-recency-guard v0.9）
+
+## 0.0b v0.9 契约变更一句话清单
+
+| 变更 | 影响 | 兼容性 |
+|---|---|---|
+| Config 新增 `confirmRounds`（默认 2） | 多嫌疑恢复需连续 N 轮同头号嫌疑；唯一嫌疑不受限 | 兼容（confirmRounds=1 退化回旧行为） |
+| `PrebootDecision` 新增 `phase?: 'prepared'\|'quarantined'\|'reconciled'` | 两阶段对账；守护行只认 disable 名单，语义不变 | 兼容（可选字段） |
+| 面板快照新增 `backupPolicy` 投影 | 面板备份策略卡片数据源 | 兼容（只增） |
+| 新增 `bin/rescue.mjs`（npm bin: recency-guard-rescue） | 宿主崩溃后的离线只读查询 | 新文件 |
+| journal 观察轮记录 | act=false 轮写 note（恢复判定：…），crash-detected 链完整 | 兼容 |
 
 ## 0.0a v0.8 契约变更一句话清单
 
