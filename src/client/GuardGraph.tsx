@@ -9,6 +9,7 @@ import {
   fitToView,
   matchNodes,
   panBy,
+  pinchViewport,
   screenToWorld,
   traceFrom,
   zoomBy,
@@ -107,6 +108,9 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
   const [onlyConnected, setOnlyConnected] = useState(false)
   // 布局切换的显式计数：只有用户点「布局」才允许重新 fit（铁律：轮询不得重置缩放）。
   const [layoutEpoch, setLayoutEpoch] = useState(0)
+  // 触摸/笔指针的快照（v0.11.4）：两个指针同时按下即进入捏合缩放。
+  const pointersRef = useRef(new Map<number, Point>())
+  const pinchPrevRef = useRef<{ a: Point; b: Point } | null>(null)
   // 节点拖拽的布局偏移（世界坐标）：键 = 节点 id。只在用户拖动后出现，
   // 数据轮询不会重置它 —— 布局是用户的调整，不是轮询的产物。
   const [offsets, setOffsets] = useState<Record<string, Point>>({})
@@ -251,14 +255,34 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
     return () => host.removeEventListener('wheel', listener)
   }, [])
 
-  const onPointerDown = useCallback((event: { clientX: number; clientY: number }): void => {
+  const onPointerDown = useCallback((event: { pointerId?: number; clientX: number; clientY: number }): void => {
     // 节点上的按下已在节点侧 stopPropagation，走到这里的一定是画布空白。
+    const id = event.pointerId ?? 0
+    pointersRef.current.set(id, { x: event.clientX, y: event.clientY })
+    // v0.11.4：两个指针同时在场 ⇒ 进入捏合缩放，取消本次平移拖拽。
+    if (pointersRef.current.size >= 2) {
+      const [a, b] = [...pointersRef.current.values()]
+      pinchPrevRef.current = { a: a ?? { x: 0, y: 0 }, b: b ?? { x: 0, y: 0 } }
+      dragRef.current = { active: false, moved: false, x: 0, y: 0 }
+      return
+    }
     suppressClickRef.current = false
     dragRef.current = { active: true, moved: false, x: event.clientX, y: event.clientY }
   }, [])
 
   const onPointerMove = useCallback(
-    (event: { clientX: number; clientY: number }): void => {
+    (event: { pointerId?: number; clientX: number; clientY: number }): void => {
+      // 优先级 0（v0.11.4）：双指捏合 —— 中点世界点在缩放中不动，中点位移平移画布。
+      const id = event.pointerId ?? 0
+      if (pointersRef.current.has(id)) pointersRef.current.set(id, { x: event.clientX, y: event.clientY })
+      if (pointersRef.current.size >= 2 && pinchPrevRef.current !== null) {
+        const [a, b] = [...pointersRef.current.values()]
+        const next = { a: a ?? { x: 0, y: 0 }, b: b ?? { x: 0, y: 0 } }
+        const prev = pinchPrevRef.current
+        setViewport((current) => clampPan(pinchViewport(current, prev, next), size, bounds))
+        pinchPrevRef.current = next
+        return
+      }
       // 优先级 1：正在拖节点 —— 位移换算成世界坐标增量写入偏移。
       const nodeDrag = nodeDragRef.current
       if (nodeDrag !== null) {
@@ -293,7 +317,10 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
     [viewport.scale, size, bounds],
   )
 
-  const onPointerUp = useCallback((): void => {
+  const onPointerUp = useCallback((event?: { pointerId?: number }): void => {
+    // v0.11.4：移除抬起的指针；捏合结束时清空快照（下一次两指重新取样）。
+    pointersRef.current.delete(event?.pointerId ?? 0)
+    if (pointersRef.current.size < 2) pinchPrevRef.current = null
     if (nodeDragRef.current !== null && nodeDragRef.current.moved) suppressClickRef.current = true
     nodeDragRef.current = null
     dragRef.current = { active: false, moved: false, x: 0, y: 0 }

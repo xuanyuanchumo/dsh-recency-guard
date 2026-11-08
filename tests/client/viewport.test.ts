@@ -14,6 +14,7 @@ import {
   matchNodes,
   midpointOfQuadratic,
   panBy,
+  pinchViewport,
   parallelCurvature,
   parallelIndexes,
   screenToWorld,
@@ -290,6 +291,28 @@ function main() {
   check('a graph shape is accepted', isGraph({ nodes: [], edges: [] }))
   check('a graph without edges is rejected', !isGraph({ nodes: [] }))
   check('an unavailable marker is not a snapshot', !isSnapshot({ available: false, reason: 'x' }))
+
+  console.log('\n== 双指捏合（v0.11.4）==')
+  {
+    // 两指距离翻倍、中点不动 ⇒ 缩放 ×2，中点下的世界点保持不动。
+    const before = { scale: 1, tx: 0, ty: 0 }
+    const zoomed = pinchViewport(before, { a: { x: 100, y: 100 }, b: { x: 200, y: 100 } }, { a: { x: 50, y: 100 }, b: { x: 250, y: 100 } })
+    check('pinch out doubles the scale', Math.abs(zoomed.scale - 2) < 1e-9, zoomed)
+    check(
+      'the world point under the midpoint stays put',
+      Math.abs(zoomed.tx + 150 * zoomed.scale - 150) < 1e-9 && Math.abs(zoomed.ty + 100 * zoomed.scale - 100) < 1e-9,
+      zoomed,
+    )
+    // 中点平移、距离不变 ⇒ 视口跟随手指平移。
+    const moved = pinchViewport(before, { a: { x: 0, y: 0 }, b: { x: 100, y: 0 } }, { a: { x: 20, y: 0 }, b: { x: 120, y: 0 } })
+    check('a moving midpoint pans the viewport', Math.abs(moved.scale - 1) < 1e-9 && Math.abs(moved.tx - 20) < 1e-9, moved)
+    // 退化输入（两点重合/非有限）⇒ 原视口，绝不产生 Infinity。
+    const degenerate = pinchViewport(before, { a: { x: 10, y: 10 }, b: { x: 10, y: 10 } }, { a: { x: 0, y: 0 }, b: { x: 100, y: 0 } })
+    check('coincident fingers return the viewport unchanged', degenerate.scale === before.scale && degenerate.tx === before.tx, degenerate)
+    // 缩放上界钳制。
+    const huge = pinchViewport(before, { a: { x: 0, y: 0 }, b: { x: 1, y: 0 } }, { a: { x: 0, y: 0 }, b: { x: 100000, y: 0 } })
+    check('pinch respects the scale ceiling', huge.scale === SCALE_MAX, huge.scale)
+  }
 
   console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}\n`)
   process.exit(failures === 0 ? 0 : 1)

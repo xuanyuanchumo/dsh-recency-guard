@@ -91,6 +91,41 @@ export function zoomBy(viewport: Viewport, anchor: Point, factor: number): Viewp
   return zoomAt(viewport, anchor, clampScale(viewport.scale) * finite(factor, 1))
 }
 
+/**
+ * 双指捏合（v0.11.4 触屏交互补齐）。
+ *
+ * 语义：**两指中点下的世界点**在捏合前后保持不动 —— 与单指缩放同一不变式
+ * （`zoomAt` 的推导），同时中点位移会带动画布平移（手指拖动画面）。
+ *
+ * 为什么不用 `zoomBy(中点)` 再 `panBy` 两步：两步各自把「中点」当屏幕坐标，
+ * 但捏合过程中**中点在变**；先缩放再平移会以旧中点锚定，世界点会漂移。
+ * 这里一次解出 `t1 = nextMid - world(prevMid) * s1` —— 缩放与跟随同时成立。
+ *
+ * 退化输入（两点重合 / 非有限值）返回原视口：捏合手势刚开始时两指可能
+ * 几乎在同一像素，除零会得到 Infinity 并污染视口。
+ */
+export function pinchViewport(
+  viewport: Viewport,
+  prev: { a: Point; b: Point },
+  next: { a: Point; b: Point },
+): Viewport {
+  const prevDx = finite(prev.b.x, 0) - finite(prev.a.x, 0)
+  const prevDy = finite(prev.b.y, 0) - finite(prev.a.y, 0)
+  const nextDx = finite(next.b.x, 0) - finite(next.a.x, 0)
+  const nextDy = finite(next.b.y, 0) - finite(next.a.y, 0)
+  const prevDist = Math.hypot(prevDx, prevDy)
+  const nextDist = Math.hypot(nextDx, nextDy)
+  if (!(prevDist > 0.01) || !Number.isFinite(nextDist)) return viewport
+  const s0 = clampScale(viewport.scale)
+  const s1 = clampScale((s0 * nextDist) / prevDist)
+  const prevMid = { x: (finite(prev.a.x, 0) + finite(prev.b.x, 0)) / 2, y: (finite(prev.a.y, 0) + finite(prev.b.y, 0)) / 2 }
+  const nextMid = { x: (finite(next.a.x, 0) + finite(next.b.x, 0)) / 2, y: (finite(next.a.y, 0) + finite(next.b.y, 0)) / 2 }
+  // prevMid 下的世界点在缩放后必须落在 nextMid：w = (prevMid - t0) / s0。
+  const worldX = (prevMid.x - viewport.tx) / s0
+  const worldY = (prevMid.y - viewport.ty) / s0
+  return { scale: s1, tx: nextMid.x - worldX * s1, ty: nextMid.y - worldY * s1 }
+}
+
 /** 视口中心（按钮缩放以视图中心为锚 —— 用户的注意力在画面中央）。 */
 export function centerOf(size: Size): Point {
   return { x: finite(size.width, 0) / 2, y: finite(size.height, 0) / 2 }
