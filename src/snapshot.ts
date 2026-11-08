@@ -4,7 +4,7 @@ import type { GuardStage, StageTransition } from './lifecycle.js'
 import { ALL_STAGES } from './lifecycle.js'
 import { computeMetrics, rankHazards, type MetricsSnapshot, type Observation, type RankedRisk } from './observability.js'
 import { deriveEventFlow, type FlowEvent } from './observations.js'
-import { computeRevision } from './change-guard.js'
+import { computeRevision, type RevisionFacts } from './change-guard.js'
 import { markovAnalysis, type MarkovAnalysis } from './markov.js'
 import { STAGE_LABELS, buildGraphData, connectedComponents, type GraphData, type GraphNode } from './graph-data.js'
 import { readPartitionIndex, type PartitionIndex } from './isolation.js'
@@ -199,18 +199,17 @@ export interface SnapshotInput {
   /**
    * revision 派生所需的写状态事实（v0.12）。
    *
-   * 为什么给输入而不是给输出：`revision` 必须是**派生值**（投影），
-   * 而不是调用方随手传进来的字符串 —— 否则「快照说 revision=X
+   * 为什么给**完整事实**而不是让本文件自己拼：面板快照的 revision 与动作路由
+   * 核对的 revision 必须是同一组字段跑同一算法。两处各自装配时，将来加一个
+   * 字段漏改另一处的后果不是「少核对一项」，而是**每次动作都 409**（面板
+   * 发出去的凭证永远核对不过）—— 一个可选加强项变成整体失效。
+   * 装配唯一在 `Guard.revisionFactsFrom()`，本文件只消费并派生。
+   *
+   * 为什么给输入而不是给现成的 revision 字符串：`revision` 必须是**派生值**
+   * （投影），而不是调用方随手传进来的字符串 —— 否则「快照说 revision=X
    * 但事实早已变」这种漂移就无法在结构上排除。
-   * autoDisabled / restored 已经在输入里，这里只补三样：
-   * 崩溃计数、决策名单真值、journal 尾部时间戳。
    */
-  revisionFacts: {
-    crashSeq: number
-    stabilized: boolean
-    decisionDisable: readonly string[]
-    journalTail: string
-  }
+  revisionFacts: RevisionFacts
 }
 
 /**
@@ -275,16 +274,10 @@ export function buildPanelSnapshot(input: SnapshotInput, now = Date.now()): Pane
     })),
     restored: [...input.restored],
     autoDisabled: input.autoDisabled.map((d) => ({ ...d })),
-    // revision 是**派生**的：从同一份事实重算必得同一枚值（哈希而非计数器），
-    // 所以它不需要持久化位点，也不会在崩溃后说谎。
-    revision: computeRevision({
-      crashSeq: input.revisionFacts.crashSeq,
-      stabilized: input.revisionFacts.stabilized,
-      decisionDisable: input.revisionFacts.decisionDisable,
-      journalTail: input.revisionFacts.journalTail,
-      autoDisabled: input.autoDisabled.map((d) => d.name),
-      restored: input.restored,
-    }),
+    // revision 是**派生**的：同一份事实重算必得同一枚值（哈希而非计数器），
+    // 所以它不需要持久化位点，也不会在崩溃后说谎。字段装配唯一在
+    // Guard.revisionFactsFrom（见 SnapshotInput 注释）—— 本函数只投影不拼字段。
+    revision: computeRevision(input.revisionFacts),
     recentEvents: input.recentEvents.slice(-24).map((e) => ({ ...e })),
     eventFlow: deriveEventFlow(input.recentEvents, input.transitions, EVENT_FLOW_LIMIT),
     markov: markovAnalysis(input.transitions),

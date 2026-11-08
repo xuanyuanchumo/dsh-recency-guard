@@ -16,6 +16,8 @@ import {
 } from './recency.js'
 import type { BundleLike, RecencyEntry } from './recency.js'
 import type { JournalEvent } from './store.js'
+import type { GuardState } from './store.js'
+import { computeRevision, type RevisionFacts } from './change-guard.js'
 import { DECISION_RELATIVE_PATH, writePointer } from './decision.js'
 import { installGuardedRows, GUARD_PACKAGE_NAME } from './guarded-rows.js'
 import { deriveObservations, deriveRiskInputs } from './observations.js'
@@ -37,7 +39,6 @@ import {
   writePartitionIndex,
 } from './isolation.js'
 import { archiveAndReset, listArchives, readArchiveManifest } from './archive.js'
-import { computeRevision } from './change-guard.js'
 import { wireRoutes } from './routes-plugin.js'
 import { registerGuardTool } from './tool-registration.js'
 import type { Observation } from './observability.js'
@@ -1309,30 +1310,48 @@ class Guard {
    * 保证界面上的事实互相一致（不会出现「状态是 A 时刻、指标是 B 时刻」）。
    */
   /**
+   * revision 事实的**唯一装配处**（v0.12）。
+   *
+   * 为什么必须是单一函数而不是两处内联：面板快照里的 revision 与动作路由
+   * 核对用的 revision 必须是**同一组字段跑同一算法**。两处各自装配时，
+   * 将来谁加了一个字段而忘了另一处，结果不是「少核对一项」而是**每次动作都
+   * 409**（面板发出去的凭证永远核对不过）—— 把一个可选加强项变成整体失效。
+   * 现在两处都只经这里，字段漂移在结构上无法发生（契约层另有比对门）。
+   */
+  private revisionFactsFrom(state: GuardState, journalTail: string): RevisionFacts {
+    return {
+      crashSeq: state.crashSeq,
+      stabilized: state.stabilized,
+      decisionDisable: this.store.readDecisionSync()?.disable ?? [],
+      journalTail,
+      autoDisabled: state.autoDisabled.map((d) => d.name),
+      restored: state.restored,
+    }
+  }
+
+  /**
    * 当前写状态凭证（v0.12 乐观并发）。
    *
    * 为什么不复用 panelSnapshot：快照要投影指标、风险排名、能力图与马尔可夫
    * 矩阵（几十毫秒），而动作路由**每次 POST** 都要核对一次。这里只读派生
    * revision 必需的三样事实（state / decision / journal 尾），一次同步
-   * readState + 一次 readDecisionSync + 一次 journal 尾巴读，开销小一个量级。
-   *
-   * 与 panelSnapshot 里的 revision **同源同式**（同一个 computeRevision、
-   * 同一组事实字段），所以「面板看到的那枚」与「宿主核对的那枚」不可能
-   * 各自漂移 —— 这是整条门可用的前提。
+   * readState + 一次 readDecisionSync + 一次 journal 末行读，开销小一个量级。
    */
   async currentRevision(): Promise<string> {
     const state = await this.store.readState()
+    // 凭证只依赖 journal 的**末行**（写一次就变一次），不需要切片：
+    // 取 limit 1 而非复用快照那份 slice(-40)，把「取末行」这个意图写死，
+    // 而不是依赖「两份切片的末位恰好相同」这一巧合。
     const tail = this.store.readJournalSync(1)
-    return computeRevision({
-      crashSeq: state.crashSeq,
-      stabilized: state.stabilized,
-      decisionDisable: this.store.readDecisionSync()?.disable ?? [],
-      journalTail: tail.length > 0 ? tail[tail.length - 1].t : '',
-      autoDisabled: state.autoDisabled.map((d) => d.name),
-      restored: state.restored,
-    })
+    return computeRevision(this.revisionFactsFrom(state, tail.length > 0 ? tail[tail.length - 1].t : ''))
   }
 
+  /**
+   * 面板快照 —— 状态、指标、排名、能力矩阵、图谱连通性、分区列表。
+   *
+   * 纯读：观测面不写任何状态。所有视图渲染同一份快照，
+   * 保证界面上的事实互相一致（不会出现「状态是 A 时刻、指标是 B 时刻」）。
+   */
   async panelSnapshot(): Promise<PanelSnapshot> {
     const state = await this.store.readState()
     // 事件流快照：journal 尾部直接投影（时间升序），面板据此画「流动」。
@@ -1372,12 +1391,9 @@ class Guard {
       // 只多一次 readDecisionSync —— 决策文件是几十十字节的小 JSON，
       // 而它是「下次启动会不会拦住插件」的真值，不读它就等于用一份
       // 可能过期的名单派生凭证。journal 尾复用 recentEvents（同一份读盘结果）。
-      revisionFacts: {
-        crashSeq: state.crashSeq,
-        stabilized: state.stabilized,
-        decisionDisable: this.store.readDecisionSync()?.disable ?? [],
-        journalTail: recentEvents.length > 0 ? recentEvents[recentEvents.length - 1].t : '',
-      },
+      // revision 的事实基座：与 currentRevision() **同一个装配函数**，
+      // 所以「面板发出去的凭证」与「宿主核对用的凭证」派生自同一组字段。
+      revisionFacts: this.revisionFactsFrom(state, recentEvents.length > 0 ? recentEvents[recentEvents.length - 1].t : ''),
       diagnostics: {
         pluginVersion: this.selfPackage.version,
         hostVersion: readHostVersion(),
