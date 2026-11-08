@@ -441,6 +441,39 @@ export function GraphMinimap({ width, height, rects, view, focusRect, onNavigate
     return { x: ((clientX - box.left) / box.width) * width, y: ((clientY - box.top) / box.height) * height }
   }
 
+  /**
+   * 指针捕获**必须**包在 try 里（真机 GUI 用户旅程实测出的缺陷）。
+   *
+   * 症状：点小地图毫无反应，控制台报
+   * `NotFoundError: Failed to execute 'setPointerCapture': No active pointer
+   * with the given id is found`。
+   *
+   * 为什么 `?.` 不够：可选链只保护「方法不存在」，**不保护方法抛异常**。
+   * 而这一句排在 `onNavigate(...)` 之前 —— 一个只为「拖拽连续性」存在的
+   * 可选优化，抛错时把「定位到那一块」这个主功能整个吞掉了。
+   * 顺序 + 未捕获异常 = 次要能力否决主要能力，这是嵌套手势控件的通病。
+   *
+   * 浏览器在 pointerId 已失效（合成事件、快速抬起、跨窗口）时会抛 NotFoundError，
+   * 这是**规范行为**而不是环境故障，所以必须就地吞掉：捕获失败只是
+   * 「拖出小地图后不再跟随」，比「点了没反应」轻得多。
+   */
+  const capturePointer = (event: React.PointerEvent<SVGSVGElement>): void => {
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId)
+    } catch {
+      /* 捕获失败不否决导航：见上 */
+    }
+  }
+
+  const releasePointer = (event: React.PointerEvent<SVGSVGElement>): void => {
+    // 与 capturePointer 成对：没捕获成功时 release 同样会抛。
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    } catch {
+      /* 未持有捕获 ⇒ 释放本就无事可做 */
+    }
+  }
+
   // 事件**必须**拦在这里往外冒泡：小地图渲染在 .rg-graph-viewport 内部，
   // 而那个容器上有 onPointerDown（拖画布平移）与 onClick（点空白清选中）。
   // 不拦的结果是两个都发生：拖小地图的同时画布也被拖着平移（两套坐标系
@@ -458,7 +491,7 @@ export function GraphMinimap({ width, height, rects, view, focusRect, onNavigate
       onPointerDown={(event) => {
         event.stopPropagation()
         draggingRef.current = true
-        event.currentTarget.setPointerCapture?.(event.pointerId)
+        capturePointer(event)
         onNavigate(localPoint(event.clientX, event.clientY))
       }}
       onPointerMove={(event) => {
@@ -469,7 +502,7 @@ export function GraphMinimap({ width, height, rects, view, focusRect, onNavigate
       onPointerUp={(event) => {
         event.stopPropagation()
         draggingRef.current = false
-        event.currentTarget.releasePointerCapture?.(event.pointerId)
+        releasePointer(event)
       }}
       onPointerCancel={(event) => {
         event.stopPropagation()

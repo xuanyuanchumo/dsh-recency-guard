@@ -5,7 +5,7 @@
  * 一个无辜插件」与「半成品状态怎么对账」，是本插件里最不该出错的判定。
  * 夹具数据取自真实场景：多嫌疑连续复现、头号更换、唯一嫌疑、空名单。
  */
-import { assessConfidence, environmentChanged, reconcilePrepared, type CrashHistoryEntry } from '../../src/recovery-policy.js'
+import { assessConfidence, environmentChanged, reconcilePrepared, classifyAbnormalExit, abnormalExitDecision, type CrashHistoryEntry } from '../../src/recovery-policy.js'
 import type { RecencyEntry } from '../../src/recency.js'
 
 let failures = 0
@@ -111,6 +111,50 @@ function main() {
     check('uninstalled ⇒ reverted (no disk record)', rows[2]?.outcome === 'reverted', rows[2])
     check('preparedAt/crashSeq carried through', rows.every((r) => r.preparedAt === prepared[0]?.preparedAt && r.crashSeq === 2), rows)
     check('empty prepared ⇒ empty report', reconcilePrepared([], disk).length === 0)
+  }
+
+  // ---------- v0.12.1 异常终止通道（哨兵盲区） ----------
+  // P0 缺口（用户旅程实测）：SIGKILL / OOM / 断电 / 原生崩溃**不运行**
+  // process.on('exit') ⇒ 没有哨兵 ⇒ 每一轮都被当成「干净启动」，
+  // crashSeq 永远归零 ⇒ 崩溃循环失去逐级升级的依据。
+  // 修法沿用 v0.9 的概率性分级：累计 confirmRounds 轮才动手，
+  // 因为「bootMarker 残留」同样可由用户主动杀进程/关机产生。
+  {
+    const self = 999
+    const alive = { sentinelPresent: false, staleBootMarker: { pid: 1234 }, stalePidAlive: true, currentPid: self }
+    const dead = { sentinelPresent: false, staleBootMarker: { pid: 1234 }, stalePidAlive: false, currentPid: self }
+    const clean = { sentinelPresent: false, staleBootMarker: null, stalePidAlive: false, currentPid: self }
+    const withSentinel = { sentinelPresent: true, staleBootMarker: { pid: 1234 }, stalePidAlive: false, currentPid: self }
+    const sameProc = { sentinelPresent: false, staleBootMarker: { pid: self }, stalePidAlive: true, currentPid: self }
+
+    check('classifyAbnormalExit: 无残留标记 ⇒ clean', classifyAbnormalExit(clean) === 'clean')
+    check('classifyAbnormalExit: 标记残留 + pid 已死 ⇒ abnormal', classifyAbnormalExit(dead) === 'abnormal')
+    // 并发实例（桌面 + web 同 profile 同时开）不是崩溃：误判会关掉无辜插件。
+    check('classifyAbnormalExit: 标记残留但 pid 活着 ⇒ concurrent（不计崩溃）', classifyAbnormalExit(alive) === 'concurrent')
+    // 有哨兵时走既有通道，本通道必须归零，否则一次崩溃记两笔、升级翻倍。
+    check('classifyAbnormalExit: 哨兵在场 ⇒ clean（不与既有通道重复计数）', classifyAbnormalExit(withSentinel) === 'clean')
+    // 同进程重入 boot（热重载/HMR）：实测形态 —— 装完新版后同一 pid 又写启动记录。
+    // 必须与 concurrent 分开，否则会报「检测到另一个实例」这种假归因。
+    check('classifyAbnormalExit: 标记 pid == 本进程 ⇒ self-reload（热重载不是并发实例）', classifyAbnormalExit(sameProc) === 'self-reload')
+
+    // 阈值语义：第 1 轮只观察（残留标记可能是人为杀进程），到 confirmRounds 才动手。
+    const d1 = abnormalExitDecision(1, 2, 2)
+    check('abnormalExitDecision: 第 1 轮不动手（概率性证据）', d1.act === false && d1.targets === 0, d1)
+    const d2 = abnormalExitDecision(2, 2, 2)
+    check('abnormalExitDecision: 达阈值即行动且关 1 个', d2.act === true && d2.targets === 1, d2)
+    // 逐级扩大与哨兵通道同形（+1 轮多关 1 个），封顶 maxAutoDisable。
+    const d3 = abnormalExitDecision(3, 2, 2)
+    check('abnormalExitDecision: 再多一轮关 2 个', d3.act === true && d3.targets === 2, d3)
+    const d9 = abnormalExitDecision(9, 2, 2)
+    check('abnormalExitDecision: 封顶 maxAutoDisable（不无限扩大隔离面）', d9.targets === 2, d9)
+    const dZero = abnormalExitDecision(0, 2, 2)
+    check('abnormalExitDecision: 计数 0 不动手', dZero.act === false && dZero.rounds === 0, dZero)
+    // confirmRounds=1 的极端配置必须「一轮即行动」，而不是永不行动。
+    const dOnce = abnormalExitDecision(1, 1, 2)
+    check('abnormalExitDecision: confirmRounds=1 时一轮即行动', dOnce.act === true && dOnce.targets === 1, dOnce)
+    // 非法阈值（0/负）不能把门变成「永不行动」或「无限关闭」。
+    const dBad = abnormalExitDecision(1, 0, 0)
+    check('abnormalExitDecision: 非法阈值被钳制（required≥1、targets≥1）', dBad.required === 1 && dBad.act === true && dBad.targets === 1, dBad)
   }
 
   console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}\n`)

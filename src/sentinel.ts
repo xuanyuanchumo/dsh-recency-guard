@@ -60,6 +60,34 @@ export function clearSentinel(partitionDir: string): void {
 }
 
 /**
+ * 某个 pid 现在是否还活着（v0.12.1，异常终止通道的复核）。
+ *
+ * 用 `process.kill(pid, 0)`：信号 0 不发送任何信号，只做存在性与权限检查，
+ * 是 POSIX 的标准探活手法（比读 /proc 或调 tasklist 便宜且跨平台）。
+ *
+ * 三种返回值的语义必须分清，否则判据会反过来：
+ * - 不抛 ⇒ 进程存在 ⇒ `true`；
+ * - `ESRCH` ⇒ 进程不存在 ⇒ `false`（这是我们要的「上一轮没走到 disposer」）；
+ * - `EPERM` ⇒ 进程存在但没权限操作 ⇒ **必须算活着**。把它当「不存在」
+ *   会在有权限边界的环境（容器、别的用户拥有的进程）里误判成崩溃，
+ *   进而误关插件 —— 假阳性比漏判更糟，因为代价是关掉无辜插件。
+ *
+ * 其它异常（平台不支持等）保守返回 `true`：探活失败时**不动手**，
+ * 观测设施永远不该因为自己看不清就改变宿主行为。
+ */
+export function pidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    const code = (error as { code?: string }).code
+    if (code === 'ESRCH') return false
+    return true
+  }
+}
+
+/**
  * Write the sentinel synchronously. Called from the `process.on('exit')`
  * handler, where only synchronous work completes.
  */

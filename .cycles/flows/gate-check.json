@@ -25,8 +25,32 @@
       "from": "RUNNING",
       "to": "PASSED",
       "at": "2026-11-07T08:08:39.141Z"
+    },
+    {
+      "trigger": "run",
+      "from": "PASSED",
+      "to": "RUNNING",
+      "at": "2026-11-08T17:10:04.167Z"
+    },
+    {
+      "trigger": "any-fail",
+      "from": "RUNNING",
+      "to": "FAILED",
+      "at": "2026-11-08T17:10:04.167Z"
+    },
+    {
+      "trigger": "run",
+      "from": "FAILED",
+      "to": "RUNNING",
+      "at": "2026-11-08T17:15:15.703Z"
+    },
+    {
+      "trigger": "all-pass",
+      "from": "RUNNING",
+      "to": "PASSED",
+      "at": "2026-11-08T17:15:15.704Z"
     }
   ],
-  "updatedAt": "2026-11-07T08:08:39.141Z",
+  "updatedAt": "2026-11-08T17:15:15.704Z",
   "ledgerHead": null
 }

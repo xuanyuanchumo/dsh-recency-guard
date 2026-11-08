@@ -109,5 +109,24 @@ for (const gesture of GESTURES) {
 // 它只该把导航意图交回调用方 —— 一旦这里出现 onSelect，说明选中态被复制成两份。
 check('小地图不携带选中态写入（导航意图交回调用方）', !/onSelect|setSelected/.test(body))
 
+/**
+ * 指针捕获的异常安全（真机用户旅程实测出的缺陷，不是假想需求）。
+ *
+ * 缺陷形态：`event.currentTarget.setPointerCapture?.(id)` 排在
+ * `onNavigate(...)` **之前**，而 `?.` 只防「方法不存在」不防「方法抛异常」。
+ * 浏览器在 pointerId 失效时按规范抛 NotFoundError ⇒ 整条 handler 中断 ⇒
+ * 点小地图**毫无反应**（控制台才有痕迹）。一个可选优化否决了主功能。
+ *
+ * 这道门钉两件事：
+ * 1. 源码里不得再出现「裸 setPointerCapture 调用」（必须经 try 包裹的封装）；
+ * 2. 捕获调用必须排在 onNavigate **之后**或被保护 —— 用「不得出现
+ *    `setPointerCapture` 紧跟 `onNavigate` 的裸调用序列」表达。
+ */
+const bareCapture = /currentTarget\.setPointerCapture\?\.\(/.test(body)
+check('不再有裸 setPointerCapture?.() —— 可选链不防抛异常（真机实测缺陷）', !bareCapture)
+const bareRelease = /currentTarget\.releasePointerCapture\?\.\(/.test(body)
+check('不再有裸 releasePointerCapture?.()（未持有时同样抛）', !bareRelease)
+check('捕获走 try 包裹的封装', /try\s*\{[^}]*setPointerCapture/.test(body) && /try\s*\{[^}]*releasePointerCapture/.test(body))
+
 console.log(failures === 0 ? '\n小地图手势门 全部通过\n' : `\n${failures} 个断言失败\n`)
 if (failures > 0) process.exit(1)

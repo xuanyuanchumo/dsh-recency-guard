@@ -33,6 +33,78 @@ import type { RecencyEntry } from './recency.js'
 /** 一轮崩溃观察的证据分类。 */
 export type EvidenceClass = 'deterministic' | 'probabilistic'
 
+/**
+ * 异常终止的分类判定（v0.12.1）—— 哨兵缺席时的第二条检测通道。
+ *
+ * ## 四种结局，各自的处理不同
+ *
+ * - `clean`：上一轮走到过 disposer（bootMarker 已清）⇒ 正常退出，计数归零；
+ * - `self-reload`：bootMarker 里的 pid **就是本进程** ⇒ 宿主在同一个进程里
+ *   重新跑了 boot（热重载 / HMR reconcile 的真实形态，实测：装完新版后
+ *   同一 pid 又写了一条启动记录）。这不是崩溃、也不是「另一个实例」，
+ *   计数必须归零，且不能报「检测到另一个实例」—— 那是假归因；
+ * - `abnormal`：bootMarker 残留且那个 pid **已不在** ⇒ 上一轮没走到 disposer。
+ *   这正是哨兵机制的盲区：SIGKILL / OOM / 断电 / 原生崩溃都不会运行
+ *   `process.on('exit')`；
+ * - `concurrent`：bootMarker 残留但那个 pid **还活着（且不是自己）** ⇒
+ *   同一 profile 上有第二个实例在跑（桌面 + web 同时启动是真实用法）。
+ *   这不是异常终止，把它计入会让「另一个进程还开着」变成「宿主崩了」，
+ *   进而误关插件。
+ *
+ * 为什么必须区分这四种：判据是「进程没走干净退出」，而**残留标记本身
+ * 不携带死因**。pid 存活检查 + 「是不是自己」是两个同步、廉价、语义明确的
+ * 复核 —— 缺了它们，这条通道就退化成「只要热重载过就误判崩溃」或
+ * 「只要有人并发开过就误判崩溃」。
+ */
+export type AbnormalExitClass = 'clean' | 'self-reload' | 'abnormal' | 'concurrent'
+
+export function classifyAbnormalExit(input: {
+  /** 哨兵文件存在（= 上一轮以非零退出码结束，exit 处理器跑到了）。 */
+  sentinelPresent: boolean
+  /** 上一轮留下的 bootMarker（null = 干净退出或首次安装）。 */
+  staleBootMarker: { pid: number } | null
+  /** 那个 pid 现在是否还活着。 */
+  stalePidAlive: boolean
+  /** 当前进程 pid（用于识别「同一进程内的 boot 重入」）。 */
+  currentPid: number
+}): AbnormalExitClass {
+  // 有哨兵 ⇒ 走的是既有崩溃通道，本通道不重复计数（否则一次崩溃记两笔）。
+  if (input.sentinelPresent) return 'clean'
+  if (input.staleBootMarker === null) return 'clean'
+  // 同一进程重入 boot（热重载）：既不是崩溃也不是并发实例。
+  if (input.staleBootMarker.pid === input.currentPid) return 'self-reload'
+  if (input.stalePidAlive) return 'concurrent'
+  return 'abnormal'
+}
+
+/**
+ * 异常终止累计到多少轮才动手（v0.12.1）。
+ *
+ * 沿用 v0.9 的**概率性证据**纪律：残留标记同样可由「用户主动杀进程/关机」
+ * 产生，不是插件崩溃的证明，所以必须累计 `confirmRounds` 轮才动手，
+ * 而不是第一轮就关插件。
+ *
+ * 升级依据是这个计数本身（不是 crashSeq）：崩溃循环失去哨兵时，
+ * crashSeq 每轮都被清零 ⇒ 永远停在「关 0 个」。用 abnormalSeq 当依据，
+ * 第 confirmRounds 轮关 1 个、再多一轮关 2 个，封顶 maxAutoDisable，
+ * 与哨兵通道的逐级扩大保持同一形状。
+ */
+export function abnormalExitDecision(
+  abnormalSeq: number,
+  confirmRounds: number,
+  maxAutoDisable: number,
+): { act: boolean; targets: number; rounds: number; required: number } {
+  const required = Math.max(1, confirmRounds)
+  if (abnormalSeq < required) return { act: false, targets: 0, rounds: abnormalSeq, required }
+  const over = abnormalSeq - required
+  return {
+    act: true,
+    targets: Math.min(1 + over, Math.max(1, maxAutoDisable)),
+    rounds: abnormalSeq,
+    required,
+  }
+}
+
 /** 恢复决策的阶段。 */
 export type DecisionPhase = 'prepared' | 'quarantined' | 'reconciled'
 

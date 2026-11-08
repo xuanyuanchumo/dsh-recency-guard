@@ -98,6 +98,28 @@ export interface GuardState {
     label: string
     headSuspect: string | null
   }
+  /**
+   * 连续「异常终止但未留下哨兵」的轮数（v0.12.1）。
+   *
+   * ## 为什么需要这个计数（用户旅程实测出的 P0 缺口）
+   *
+   * 崩溃信号此前**只有**哨兵文件，而哨兵写在 `process.on('exit')` 里。
+   * SIGKILL / OOM killer / 断电 / 原生段错误这些死法**根本不会运行 exit 处理器**
+   * —— 实测：强杀沙箱后 `bootMarker` 残留（pid 39576）而 `crashSeq` 仍是 0，
+   * 面板说「启动时未发现上次崩溃」。
+   *
+   * 危险的不是「少记一次」，而是**崩溃循环失去升级依据**：插件把宿主
+   * 以原生方式撞死时，每一轮都只看得到残留的 bootMarker，每一轮都被当成
+   * 「干净启动」把计数清零 ⇒ 永远停在「关 0 个」，正是本插件要防的那个场景。
+   *
+   * ## 为什么它是**概率性**证据而不是确定性证据
+   *
+   * 残留的 bootMarker 同样可由「用户主动杀进程 / 关机」产生（recovery-policy
+   * 的 v0.9 分级早已把这两类归为偶发不确定证据）。所以它**不能**单独触发关闭，
+   * 只能像多嫌疑场景那样累计到 `confirmRounds` 轮才动手 —— 沿用既有分级，
+   * 不新造一套策略。
+   */
+  abnormalExitSeq?: number
 }
 
 export interface PrebootDecision {

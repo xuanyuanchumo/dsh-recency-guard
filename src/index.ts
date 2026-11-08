@@ -21,10 +21,10 @@ import { computeRevision, type RevisionFacts } from './change-guard.js'
 import { DECISION_RELATIVE_PATH, writePointer } from './decision.js'
 import { installGuardedRows, GUARD_PACKAGE_NAME } from './guarded-rows.js'
 import { deriveObservations, deriveRiskInputs } from './observations.js'
-import { installExitSentinel, readSentinel, clearSentinel } from './sentinel.js'
+import { installExitSentinel, readSentinel, clearSentinel, pidAlive } from './sentinel.js'
 import { observeOfficialExperimental } from './official-observe.js'
 import { watchPluginChanges } from './event-watch.js'
-import { assessConfidence, environmentChanged, reconcilePrepared, type CrashHistoryEntry } from './recovery-policy.js'
+import { assessConfidence, environmentChanged, reconcilePrepared, classifyAbnormalExit, abnormalExitDecision, type CrashHistoryEntry } from './recovery-policy.js'
 import { StageMachine, type LifecycleStepName } from './lifecycle.js'
 import { buildCapabilityGraph, verifyCapabilityContract } from './capability-specs.js'
 import { currentRegistrationSurface, verifySurfaceAlignment } from './capability-specs.js'
@@ -936,6 +936,57 @@ class Guard {
     // boot, and the decision it published must not be touched.
     const crashedLastRun = sentinel !== null
 
+    // ---------- 第二条检测通道：哨兵缺席的异常终止（v0.12.1） ----------
+    // 用户旅程实测出的 P0：强杀沙箱后 bootMarker 残留（pid 39576）而
+    // crashSeq 仍是 0，面板说「启动时未发现上次崩溃」。
+    // 根因是信号源的覆盖面：哨兵写在 `process.on('exit')` 里，而
+    // SIGKILL / OOM killer / 断电 / 原生段错误**根本不运行 exit 处理器**。
+    // 危险的不是少记一次，而是崩溃循环失去升级依据 —— 插件以原生方式
+    // 撞死宿主时，每一轮都只看到残留标记、每一轮都被当成干净启动清零计数，
+    // 于是永远停在「关 0 个」，正是本插件要防的那个场景。
+    const staleMarker = state.bootMarker
+    const exitClass = classifyAbnormalExit({
+      sentinelPresent: sentinel !== null,
+      staleBootMarker: staleMarker,
+      // pid 存活复核：残留标记不携带死因，「另一个实例还开着」不是崩溃。
+      stalePidAlive: staleMarker === null ? false : pidAlive(staleMarker.pid),
+      // 同一进程内的 boot 重入（热重载/HMR）也要认出来 —— 实测：装完新版后
+      // 那个 pid 又写了一条启动记录，若不识别就会被读成「另一个实例在跑」。
+      currentPid: process.pid,
+    })
+    // 上一轮的存活时长（人读用；判据不依赖它 —— 死亡时间无法从磁盘推出）。
+    const staleAgeMs = staleMarker === null ? 0 : Date.now() - Date.parse(staleMarker.startedAt)
+    const abnormalSeqNext = exitClass === 'abnormal' ? (state.abnormalExitSeq ?? 0) + 1 : 0
+    if (exitClass === 'abnormal') {
+      // 记成 crash-detected 而不是新 kind：journal 的 kind 是跨层词汇表
+      // （store / observations 的 FlowAction / 流动映射 / 面板着色四处），
+      // 漏改任一处这条事实就在事件流里静默消失。退出码缺席写在 detail 里。
+      this.store.appendSync({
+        kind: 'crash-detected',
+        detail: `上次运行未留下退出码（哨兵缺席）—— 强杀/OOM/断电/原生崩溃之一；` +
+          `启动于 ${staleMarker?.startedAt ?? '?'}（约 ${Math.max(0, Math.round(staleAgeMs / 1000))}s 前），` +
+          `pid ${staleMarker?.pid ?? '?'} 已不存在，连续异常终止 ${abnormalSeqNext} 轮`,
+        exitCode: null,
+        signal: 'unobserved',
+      })
+    } else if (exitClass === 'concurrent') {
+      // 并发实例不是崩溃：如实留痕但计数归零，避免「有人开着另一个 dsh」
+      // 被读成「宿主崩了」进而误关插件。
+      this.store.appendSync({
+        kind: 'note',
+        detail: `检测到同 profile 的另一个实例仍在运行（pid ${staleMarker?.pid}）—— 不计为异常终止`,
+      })
+    } else if (exitClass === 'self-reload') {
+      // 同一进程内重跑 boot（热重载 / HMR reconcile）：不是崩溃，也不是并发实例。
+      // 这条分支存在的意义是**防假归因** —— 实测：装完新版后同一 pid 又写了
+      // 一条启动记录，若归到 concurrent 就会报「检测到另一个实例」，
+      // 用户会去查一个根本不存在的第二个进程。
+      this.store.appendSync({
+        kind: 'note',
+        detail: `同一进程内重新加载守护（pid ${process.pid}）—— 不计为异常终止`,
+      })
+    }
+
     // 两阶段对账（v0.9.0）：上一轮可能留下 prepared 记录（崩溃打断或正常
     // 退出没走到升级）。按磁盘现状归类：autoDisabled 里有 = 关闭已走到
     // pluginManager ⇒ confirmed；不在 ⇒ reverted（证据链保留）。
@@ -975,6 +1026,9 @@ class Guard {
       bootMarker: { startedAt: new Date().toISOString(), pid: process.pid },
       crashedRun: false,
       lastExitCode: undefined,
+      // 计数随每轮启动重写：abnormal 累加，clean/concurrent 归零。
+      // 不在别处清零 ⇒ 「计数从哪来」只有一条路径可查。
+      abnormalExitSeq: abnormalSeqNext,
     }))
 
     try {
@@ -991,7 +1045,16 @@ class Guard {
       this.ctx.logger.warn(`[recency-guard] 官方实验插件观测失败：${describeError(err)}`)
     }
 
-    if (recovering && !crashedLastRun) {
+    // ---------- 恢复/升级的分支（v0.12.1 重排） ----------
+    // 判据顺序是语义问题，不是风格问题：
+    //   crashedLastRun（哨兵在）> exitClass==='abnormal'（标记残留且 pid 已死）
+    //   > recovering（名单里有被关的插件）> 干净启动。
+    // 「上一轮是否活过了启动」只能由**上一轮的退出方式**回答；此前用
+    // `!crashedLastRun` 当「活过了」的代理，在哨兵通道下成立（没哨兵=干净退出），
+    // 但新增通道之后不再成立：异常终止同样没有哨兵。若沿用旧条件，
+    // 「关了嫌疑插件 → 又死了一次（无哨兵）」会被读成「崩溃已过」而把插件
+    // 全部恢复 —— 那等于把刚建立的隔离亲手拆掉，正是崩溃循环最需要的反面。
+    if (recovering && !crashedLastRun && exitClass === 'clean') {
       // The profile booted with the suspect(s) disabled and SURVIVED the boot,
       // so the crash is over. Restore everything except the prime suspect,
       // which stays off until the user confirms it with the reenable action.
@@ -1016,10 +1079,50 @@ class Guard {
         ;(timer as { unref?: () => void }).unref?.()
       }
     } else if (recovering) {
-      // This boot IS the recovery boot: the previous run crashed, so the
-      // decision stays exactly as the crash published it. Restoring here would
-      // re-enable the suspect and bring the crash straight back.
-      this.ctx.logger.warn('[recency-guard] 上次崩溃后启动，保持嫌疑插件关闭。')
+      // 仍在崩溃循环里（哨兵在 / 上一轮异常终止 / 并发实例语义不明）：
+      // 决策保持原样，恢复会把嫌疑插件重新放进来、把崩溃直接带回来。
+      const why =
+        crashedLastRun
+          ? '上次崩溃后启动'
+          : exitClass === 'abnormal'
+            ? `上一轮异常终止（连续 ${abnormalSeqNext} 轮）`
+            : exitClass === 'concurrent'
+              ? '同 profile 存在另一个运行中的实例'
+              : '守护在同一进程内重载'
+      this.ctx.logger.warn(`[recency-guard] ${why}，保持嫌疑插件关闭。`)
+    } else if (exitClass === 'abnormal') {
+      // 没有隔离记录 + 上一轮异常终止 ⇒ 走概率性通道：累计到 confirmRounds
+      // 轮才动手（沿用 v0.9 分级，不新造策略）。第一轮只观察不动手，
+      // 因为「标记残留」同样可由用户主动杀进程/关机产生。
+      const decision = abnormalExitDecision(abnormalSeqNext, this.config.confirmRounds, this.config.maxAutoDisable)
+      const ranked = this.rankedSuspectsSync()
+      const head = ranked.length === 0 ? null : ranked[0].bundle
+      this.store.appendSync({
+        kind: 'note',
+        detail: decision.act
+          ? `异常终止判定：连续 ${decision.rounds}/${decision.required} 轮 ⇒ 行动，本轮关闭 ${decision.targets} 个（头号嫌疑 ${head ?? '无'}）`
+          : `异常终止判定：观察中 ${decision.rounds}/${decision.required} 轮（残留标记也可能是人为杀进程，不动手）`,
+      })
+      await this.store.updateState((s) => ({
+        ...s,
+        lastRecoveryVerdict: {
+          at: new Date().toISOString(),
+          crashSeq: abnormalSeqNext,
+          evidence: 'probabilistic',
+          rounds: decision.rounds,
+          required: decision.required,
+          act: decision.act,
+          label: decision.act
+            ? `异常终止累计 ${decision.rounds} 轮 ⇒ 关闭 ${decision.targets} 个`
+            : `异常终止观察中（${decision.rounds}/${decision.required} 轮）`,
+          headSuspect: head,
+        },
+      }))
+      if (decision.act && head !== null) {
+        // 复用既有恢复通道：备份配置 + 关闭 + 发布决策（守护行据此拦截）。
+        // 不另写一套关闭逻辑，否则两条通道的隔离语义会各自漂移。
+        await this.recover(decision.targets)
+      }
     } else {
       await this.store.updateState((s) => ({ ...s, crashSeq: 0 }))
     }

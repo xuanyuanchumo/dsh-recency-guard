@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Store } from '../../src/store.js'
+import { pidAlive } from '../../src/sentinel.js'
 import { appendPatchText } from '../../src/guarded-rows.js'
 import {
   suspectBundles,
@@ -498,6 +499,24 @@ async function main() {
   const components = connectedComponents(graphData.nodes, graphData.edges)
   check('connectivity analysis runs', components.count >= 1, components)
   check('the largest component is at least one', components.largest >= 1)
+
+
+  // ---------- v0.12.1 pidAlive（异常终止通道的复核依据） ----------
+  // 这条通道判的是「上一轮没走到 disposer」，而残留 bootMarker 本身不携带死因：
+  // 并发实例（另一个 dsh 还开着）不是崩溃。误判的代价是关掉无辜插件，
+  // 所以探活的每个分支都要钉住 —— 尤其是 EPERM 必须算「活着」。
+  check('pidAlive(自己) === true（当前进程必然存在）', pidAlive(process.pid) === true)
+  check('pidAlive(0) === false（非法 pid 不是进程）', pidAlive(0) === false)
+  check('pidAlive(-1) === false', pidAlive(-1) === false)
+  check('pidAlive(NaN) === false', pidAlive(Number.NaN) === false)
+  check('pidAlive(1.5) === false（非整数 pid 不存在）', pidAlive(1.5) === false)
+  // 远超系统 PID 上限的值必然 ESRCH ⇒ false（用它避免与真实进程相撞造成偶发红）。
+  check('pidAlive(2^31-1) === false（不存在的进程报 ESRCH）', pidAlive(2147483647) === false)
+  // **不要断言 PID 1 存在**：那是平台事实而非不变式 —— Linux 的 1 是 init，
+  // 而 Windows 根本没有 PID 1（System Idle Process 是 PID 0）。本行只验证
+  // 「探活不会因为平台差异抛异常」，具体存在性交给上面两个确定用例
+  // （自己的 pid 必然活、2^31-1 必然死）。
+  check('pidAlive(1) 返回布尔且不抛（存在性是平台事实，不据此判定）', typeof pidAlive(1) === 'boolean')
 
   console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}\n`)
   process.exit(failures === 0 ? 0 : 1)

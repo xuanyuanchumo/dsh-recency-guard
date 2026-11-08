@@ -42,3 +42,13 @@
 - **事件加速器，启动兜底**：ctx.on('plugin-manager/changed') 覆盖 GUI/工具安装（CLI/手工编辑不发事件）；变更检测永远保留启动时同步 diff —— 事件是加速器不是唯一真相（compat-guardian 纯轮询 + recency 启动 diff 双源实证）。
 - **不做高频轮询**：变更检测只跑启动时 + 事件触发（防抖 500ms）；mtime 扫描是启动路径最贵动作，绝不进定时器（compat-guardian 每 30s 全量爬 node_modules 是反例）。
 - **威胁模型锚定 requiredStartupEntryIds**：entry 级 apply 抛错宿主只是 warning（自隔离），不崩进程 —— 评估守护能力别用这类失败；真崩溃来自 8 个核心 entry 失败或进程级错误（沙箱对抗实测：夹具的顶层代码根本没被 import）。
+
+## 沙箱与真机（v0.12 实测新增）
+- **崩溃信号只有哨兵 = 漏掉一半死法**：哨兵写在 `process.on('exit')` 里，而 SIGKILL/OOM/断电/原生崩溃**不跑 exit 处理器**。强杀后 `bootMarker` 残留而 `crashSeq=0`，面板照报「未发现上次崩溃」，崩溃循环因此失去升级依据（永远停在关 0 个）。第二条通道：残留标记 + `pidAlive` + 累计到 `confirmRounds` 才动手（概率性证据，人为杀进程也是这个形状）。
+- **boot 重入 ≠ 并发实例**：热重载会在**同一 pid** 里重跑 boot 并再写一条启动记录。只看「pid 还活着」就会报「检测到另一个实例」——让人去查一个不存在的进程。必须先判 `残留 pid == 本进程 ⇒ self-reload`。
+- **`?.` 不防抛异常**：`setPointerCapture?.(id)` 在 pointerId 失效时按规范抛 `NotFoundError`；它排在 `onNavigate` 之前 ⇒ 点击小地图毫无反应（真机实测）。可选优化不得排在主功能之前，且这类调用必须 try 包裹。
+- **从 dsh 会话内起子 dsh 会继承 `DSH_PROFILE/DSH_PROFILE_DIR`**，它们压过 `--profile`；`env -u` 在本执行器下无效。正确形态是 `dsh --profile <name> <app>`（profile 在 app 名之前），且用 `--from-default-profile web` 建干净沙箱。
+- **`dsh web --profile X` 是错的**：launcher 会给非 flag 首参自动前置 `--profile` ⇒ `--profile web --profile X` ⇒ "select a profile only once"。子 dsh 实际跑的是 shipped `web` profile（判别证据：日志里出现 `dsh-anic`/`codegraph`）。
+- **pnpm 对同版本 `file:` 安装按版本去重**：`plugin add` 报 "Already up to date" 时沙箱副本**没刷新**（改完代码要 `remove` + `add`，或用 `link:`）。验证方式：在沙箱 `node_modules` 里 grep 新代码特征。
+- **测试追加到 `process.exit` 之后 = 静默假绿**：core.test.ts 里追加的断言块落在 `main()` 的 `process.exit` 之后，从不执行，而文件照样打印 ALL PASS。追加断言必须插在汇总行**之前**，且看到 PASS 要确认它真的打印出来了。
+- **平台事实不是不变式**：`pidAlive(1) === true` 在 Linux 成立（init），Windows 根本没有 PID 1（System Idle 是 0）。测试别把平台事实写成断言。
