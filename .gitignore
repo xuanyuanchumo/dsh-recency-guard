@@ -9,3 +9,8 @@ runtime/
 .cycles/.eval-parallel/
 .cycles/flow-history.jsonl
 .cycles/flow-tracker.json
+
+# 发布/临时产物（不进库）
+*.tgz
+.tmp-*.mjs
+.tmp-*.log
