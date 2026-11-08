@@ -1032,11 +1032,21 @@ class Guard {
         `[recency-guard] 上次崩溃已通过阻止加载 ${state.autoDisabled.map((d) => d.name).join(', ')} 恢复。`,
       )
       if (this.config.autoRestore) {
-        try {
-          await this.restore()
-        } catch (err) {
-          this.ctx.logger.warn(`[recency-guard] 自动恢复配置失败：${describeError(err)}`)
-        }
+        // v0.11.2：恢复要经过插件管理器的 HMR 事务，而 boot 阶段 Loader
+        // 自己可能正在事务中（实测 enable 返回 `HMR transactions cannot be
+        // nested` 且 application=failed）。延后 1.5s 到事务之外执行；
+        // 定时器 unref 不拖住宿主退出。失败由 reenable 的诚实结果兜底
+        // （不谎报成功、留在 autoDisabled 下轮重试）。
+        const timer = setTimeout(() => {
+          void this.restore().catch((err) => {
+            try {
+              this.ctx.logger.warn(`[recency-guard] 自动恢复配置失败：${describeError(err)}`)
+            } catch {
+              /* 日志通道失败也不能抛出 */
+            }
+          })
+        }, 1500)
+        ;(timer as { unref?: () => void }).unref?.()
       }
     } else if (recovering) {
       // This boot IS the recovery boot: the previous run crashed, so the
@@ -1192,6 +1202,7 @@ class Guard {
     const disabled = new Set(auto.map((d) => d.name))
     const reenabled: string[] = []
     const keptDisabled: string[] = []
+    const failed: string[] = []
 
     for (const d of auto) {
       // The most recently disabled bundle is the prime suspect: it stays off
@@ -1200,28 +1211,34 @@ class Guard {
         keptDisabled.push(d.name)
         continue
       }
-      await this.reenable(d.name)
-      reenabled.push(d.name)
+      // v0.11.2 白盒修复：恢复结果必须如实区分「真的启用了」与「管理器拒绝」。
+      const result = (await this.reenable(d.name)) as { reenabled?: boolean }
+      if (result?.reenabled === true) reenabled.push(d.name)
+      else failed.push(d.name)
     }
 
     await this.store.updateState((s) => ({
       ...s,
-      autoDisabled: s.autoDisabled.filter((d) => keptDisabled.includes(d.name)),
+      // 失败者留在 autoDisabled（下轮启动重试）；成功者与首要嫌疑移出。
+      autoDisabled: s.autoDisabled.filter((d) => keptDisabled.includes(d.name) || failed.includes(d.name)),
       stabilized: true,
       restored: [...s.restored, ...reenabled],
     }))
     this.machine.transition('recovered', `已恢复 ${reenabled.length} 个插件`)
-    await this.store.append({ kind: 'restore', detail: `重新启用 ${reenabled.join(', ') || '无'}` })
+    await this.store.append({
+      kind: 'restore',
+      detail: `重新启用 ${reenabled.join(', ') || '无'}${failed.length > 0 ? `；未启用（管理器拒绝，保留待重试） ${failed.join(', ')}` : ''}`,
+    })
     await this.publishDecision(
       [...disabled].map((bundle) => ({ bundle, lastChangeAt: '', lastKind: 'install' as const })),
-      keptDisabled,
-      keptDisabled.length ? 'crash-recovery' : 'none',
+      [...keptDisabled, ...failed],
+      keptDisabled.length || failed.length ? 'crash-recovery' : 'none',
     )
     return {
       reenabled,
-      keptDisabled,
-      note: keptDisabled.length
-        ? `已恢复需要的配置，仅保留嫌疑插件 ${keptDisabled.join(', ')} 关闭。确认安全后可用 reenable 手动开启。`
+      keptDisabled: [...keptDisabled, ...failed],
+      note: keptDisabled.length || failed.length
+        ? `已恢复 ${reenabled.length} 个配置；${keptDisabled.length > 0 ? `仅保留嫌疑插件 ${keptDisabled.join(', ')} 关闭` : ''}${failed.length > 0 ? `${keptDisabled.length > 0 ? '；' : ''}${failed.join(', ')} 管理器拒绝恢复，已留在名单待下轮重试` : ''}。确认安全后可用 reenable 手动开启。`
         : '已恢复全部配置。',
     }
   }
@@ -1243,12 +1260,23 @@ class Guard {
       }
     }
     await this.store.append({ kind: 'enable', bundle, result: safeJson(results) })
-    await this.store.updateState((s) => ({
-      ...s,
-      autoDisabled: s.autoDisabled.filter((d) => d.name !== bundle),
-    }))
+    // v0.11.2 白盒修复：**只有真的 applied 才算恢复成功**。
+    // 此前无条件返回 reenabled:true 并从 autoDisabled 里删掉 —— 实测
+    // 管理器返回 `application: 'failed'`（HMR 嵌套事务）时，state 仍记
+    // 「已恢复」，面板/工具显示成功而插件实际关闭：假绿比失败更糟。
+    const applied = results.some(
+      (r) => typeof r === 'object' && r !== null && (r as { application?: unknown }).application === 'applied',
+    )
+    if (applied) {
+      await this.store.updateState((s) => ({
+        ...s,
+        autoDisabled: s.autoDisabled.filter((d) => d.name !== bundle),
+      }))
+    } else {
+      this.ctx.logger.warn(`[recency-guard] ${bundle} 未能恢复（管理器未 applied），保留在自动关闭名单待下轮重试`)
+    }
     const backup = await this.store.readBackup(bundle)
-    return { bundle, reenabled: true, hasConfigBackup: backup !== null }
+    return { bundle, reenabled: applied, hasConfigBackup: backup !== null }
   }
 
   /**

@@ -27,6 +27,8 @@ function check(name: string, cond: boolean, detail?: unknown) {
 
 const disabledBundles: string[] = []
 const enabledBundles: string[] = []
+/** v0.11.2 回归开关：管理器拒绝 enable 时，诚实的 reenable 必须报失败。 */
+let failEnables = false
 const pluginRows: Array<{
   entryId: string
   moduleName: string
@@ -91,9 +93,11 @@ ctx.provide('pluginManager', {
   },
   async setBundleEnabled(name: string, enabled: boolean) {
     ;(enabled ? enabledBundles : disabledBundles).push(name)
+    if (enabled && failEnables) return { changed: false, application: 'failed' }
     return { changed: true, application: 'applied' }
   },
   async setPluginEnabled() {
+    if (failEnables) return { changed: false, application: 'failed' }
     return { changed: true, application: 'applied' }
   },
 })
@@ -197,6 +201,13 @@ check('recover calls the plugin manager', disabledBundles.includes('dsh-experime
 const reenable = (await tool.execute({ action: 'reenable', bundle: 'dsh-third-party' }, exec)) as any
 check('reenable reports success', reenable.reenabled === true, reenable)
 check('reenable calls the plugin manager', enabledBundles.includes('dsh-third-party'), enabledBundles)
+
+// v0.11.2 白盒回归：管理器拒绝（application=failed，实测 HMR 嵌套事务）时，
+// reenable 必须如实报 false —— 否则 state 记「已恢复」而插件实际仍关闭（假绿）。
+failEnables = true
+const refused = (await tool.execute({ action: 'reenable', bundle: 'dsh-experimental-thing' }, exec)) as any
+check('reenable reports failure when the manager rejects', refused.reenabled === false, refused)
+failEnables = false
 
 const backups = (await tool.execute({ action: 'backups' }, exec)) as any
 check('backups returns the list', Array.isArray(backups.backups), typeof backups.backups)
