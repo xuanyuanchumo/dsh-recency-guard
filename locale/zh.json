@@ -11,6 +11,8 @@
     "archive": "归档重置",
     "archiveConfirm": "归档当前产物并按最新事实重跑？",
     "archiveDefaultReason": "面板手动归档",
+    "conflictNotice": "状态已变化，上一次动作未执行。画面已刷新为最新事实，请据此重新决定。",
+    "conflictDismiss": "知道了",
     "recover": "立即恢复",
     "reenable": "重新启用",
     "empty": "暂无数据",
@@ -50,7 +52,9 @@
     "transitions": "迁移次数",
     "noTransitions": "尚无迁移记录",
     "autoDisabled": "自动关闭",
-    "restored": "已恢复"
+    "restored": "已恢复",
+    "moreTransitions": "还有 {count} 次更早的迁移未显示",
+    "fewerTransitions": "收起较早的迁移"
   },
   "metrics": {
     "crashRate": "崩溃率",
@@ -74,7 +78,9 @@
     "converged": "已收敛",
     "notConverged": "未收敛",
     "samples": "{count} 次迁移",
-    "empty": "尚无迁移记录，转移矩阵不可判定"
+    "empty": "尚无迁移记录，转移矩阵不可判定",
+    "stationaryMore": "其余 {count} 个阶段",
+    "stationaryAll": "共 {count} 个阶段有长期占比"
   },
   "dataflow": {
     "title": "数据流",
@@ -237,7 +243,19 @@
     "edgeTo": "消费方（终点）",
     "edgeKind": "语义",
     "edgeTransitions": "状态迁移",
-    "edgeRanks": "排序引用"
+    "edgeRanks": "排序引用",
+    "minimap": "小地图",
+    "minimapHint": "方框是当前可见区域；点击或拖动方框可把主视图移到该处。",
+    "arrowHint": "方向键换节点",
+    "linkRange": {
+      "label": "关联范围",
+      "hops1": "直接",
+      "hops2": "两跳",
+      "closure": "全连通"
+    },
+    "filteredEmpty": "当前过滤条件把图滤空了。",
+    "filteredEmptyReset": "恢复显示",
+    "searchMore": "其余 {count} 个匹配"
   },
   "events": {
     "title": "事件流",

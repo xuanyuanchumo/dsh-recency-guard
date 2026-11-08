@@ -41,19 +41,40 @@ export function watchPluginChanges(
     const onFn = (ctx as unknown as { on?: (name: string, listener: (payload: unknown) => void) => unknown }).on
     if (typeof onFn !== 'function') return () => {}
     let pending = false
+    // 防抖计时器要被**持有**：dispose 时不 clear，一次热重载/reload 就会留下
+    // 一个仍会跑 detect 的幽灵定时器（v0.12；compat-guardian 同款手法）。
+    // unref() 让它不阻止进程退出 —— 守护插件不该拥有让宿主退不出去的权利。
+    let timer: ReturnType<typeof setTimeout> | undefined
     const listener = (): void => {
-      if (pending) return
-      pending = true
-      setTimeout(() => {
+      if (pending) {
+        // 尾缘防抖：已排队的窗口内再来的事件**推后**执行，
+        // 而不是让它落在上一轮 detect 之前（install → enable 连发时，
+        // 早跑的那轮看到的还是半个世界）。
+        if (timer) clearTimeout(timer)
+      } else {
+        pending = true
+      }
+      timer = setTimeout(() => {
         pending = false
+        timer = undefined
         void detect().catch((err: unknown) => {
           onError?.(`[recency-guard] 事件触发的变更检测失败：${describeError(err)}`)
         })
       }, 500)
+      timer.unref?.()
     }
     const disposer = onFn.call(ctx, 'plugin-manager/changed', listener)
     onWatched?.('已订阅 plugin-manager/changed')
-    return typeof disposer === 'function' ? (disposer as () => void) : () => {}
+    return () => {
+      if (timer) clearTimeout(timer)
+      if (typeof disposer === 'function') {
+        try {
+          ;(disposer as () => void)()
+        } catch {
+          /* 取消订阅失败不拖垮 fiber 卸载 */
+        }
+      }
+    }
   } catch {
     // 事件面缺席：静默降级，启动时 diff 兜底。
     return () => {}

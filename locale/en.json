@@ -11,6 +11,8 @@
     "archive": "Archive & reset",
     "archiveConfirm": "Archive the current artifacts and restart from the latest facts?",
     "archiveDefaultReason": "manual archive from the panel",
+    "conflictNotice": "State changed, so the last action was not executed. The view now shows the latest facts — decide again from them.",
+    "conflictDismiss": "Got it",
     "recover": "Recover now",
     "reenable": "Re-enable",
     "empty": "No data",
@@ -50,7 +52,9 @@
     "transitions": "Transitions",
     "noTransitions": "No transitions recorded",
     "autoDisabled": "Auto-disabled",
-    "restored": "Restored"
+    "restored": "Restored",
+    "moreTransitions": "{count} earlier transitions hidden",
+    "fewerTransitions": "Show fewer transitions"
   },
   "metrics": {
     "crashRate": "Crash rate",
@@ -74,7 +78,9 @@
     "converged": "converged",
     "notConverged": "not converged",
     "samples": "{count} transitions",
-    "empty": "No transitions recorded yet — the matrix is not determinable"
+    "empty": "No transitions recorded yet — the matrix is not determinable",
+    "stationaryMore": "{count} more stages",
+    "stationaryAll": "{count} stages have a long-run share"
   },
   "dataflow": {
     "title": "Data flow",
@@ -181,7 +187,7 @@
   },
   "graph": {
     "title": "Capability production and consumption",
-    "hint": "Ctrl/⌘+scroll to zoom · drag to pan · drag a node to rearrange · click to highlight · double-click to centre · Esc to exit",
+    "hint": "ctrl/⌘ + wheel zoom · drag to pan · drag a node to nudge it · click to highlight · double-click to centre · Esc to exit",
     "zoomGroup": "Zoom",
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",
@@ -237,7 +243,19 @@
     "edgeTo": "Consumes (to)",
     "edgeKind": "Semantics",
     "edgeTransitions": "transition",
-    "edgeRanks": "ranking"
+    "edgeRanks": "ranking",
+    "minimap": "Minimap",
+    "minimapHint": "the box is what you can see right now; click or drag it to move the main view",
+    "arrowHint": "arrow keys move between nodes",
+    "linkRange": {
+      "label": "Link range",
+      "hops1": "direct",
+      "hops2": "2 hops",
+      "closure": "all linked"
+    },
+    "filteredEmpty": "The current filters hid every node.",
+    "filteredEmptyReset": "Show everything",
+    "searchMore": "{count} more matches"
   },
   "events": {
     "title": "Event stream",

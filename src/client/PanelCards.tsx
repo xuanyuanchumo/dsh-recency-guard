@@ -186,9 +186,28 @@ function StabilityRing({ score }: { score: number }): ReactElement {
 
 /* ---------- 生命周期 ---------- */
 
+/**
+ * 迁移列表的渲染层初始条数（与事件流/风险卡同一纪律：截断只发生在渲染层，
+ * 且必须显式给出「省略 N 条 + 展开按钮」）。
+ */
+const TRANSITIONS_INITIAL = 8
+
 export function LifecycleBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
   const rail = stageRail(snapshot.stage, snapshot.transitions)
   const verdict = snapshot.lastRecoveryVerdict
+  // 迁移列表的渲染层上限 + 显式「还有 N 次」按钮。
+  // 此前是静默 `slice(-8)`：崩溃 20 次的 profile 只露出最后 8 条，且没有任何
+  // 提示说「还有更早的」—— 与 risks 卡当年同款缺陷（CLAUDE.md 已记录过一次）。
+  // useState 在任何提前 return 之前调用（Rules of Hooks；本函数没有早退，
+  // 但把它写在顶部让「加早退」不会悄悄破坏 hook 顺序）。
+  const [showAllTransitions, setShowAllTransitions] = useState(false)
+  // 保留**原始下标**而不是切片后的下标：切片后取 key 会让「展开」这一步
+  // 把已渲染的行整体重新挂载（key 变了），列表闪一下且滚动位置丢。
+  const transitionsIndexed = snapshot.transitions.map((transition, index) => ({ transition, index }))
+  const visibleTransitions = showAllTransitions
+    ? transitionsIndexed
+    : transitionsIndexed.slice(-TRANSITIONS_INITIAL)
+  const omittedTransitions = transitionsIndexed.length - visibleTransitions.length
   return (
     <>
       {/* 恢复判定条（v0.9.1）：有判定才渲染 —— undefined（从未崩溃过）
@@ -232,17 +251,30 @@ export function LifecycleBody({ snapshot }: { snapshot: PanelSnapshot }): ReactE
       {snapshot.transitions.length === 0 ? (
         <p className="rg-empty">{t('state.noTransitions')}</p>
       ) : (
-        <ol className="rg-transitions">
-          {snapshot.transitions.slice(-8).map((transition, index) => (
-            <li key={`${transition.at}-${index}`} className="rg-transition">
-              <span className={`rg-badge rg-badge-${transition.to}`}>{stageLabelOf(transition.to)}</span>
-              <span className="rg-transition-reason" title={transition.reason}>
-                {transition.reason}
-              </span>
-              <time className="rg-transition-time">{formatClock(transition.at)}</time>
-            </li>
-          ))}
-        </ol>
+        <>
+          <ol className="rg-transitions">
+            {visibleTransitions.map(({ transition, index }) => (
+              <li key={`${transition.at}-${index}`} className="rg-transition">
+                <span className={`rg-badge rg-badge-${transition.to}`}>{stageLabelOf(transition.to)}</span>
+                <span className="rg-transition-reason" title={transition.reason}>
+                  {transition.reason}
+                </span>
+                <time className="rg-transition-time">{formatClock(transition.at)}</time>
+              </li>
+            ))}
+          </ol>
+          {omittedTransitions > 0 && (
+            <button type="button" className="rg-link rg-risks-expand" onClick={() => setShowAllTransitions(true)}>
+              {t('state.moreTransitions', { count: omittedTransitions })}
+            </button>
+          )}
+          {/* 展开后给一条收起路径 + 总数：收起按钮不该是唯一线索。 */}
+          {showAllTransitions && snapshot.transitions.length > TRANSITIONS_INITIAL && (
+            <button type="button" className="rg-link" onClick={() => setShowAllTransitions(false)}>
+              {t('state.fewerTransitions')} · {snapshot.transitions.length}
+            </button>
+          )}
+        </>
       )}
     </>
   )
@@ -345,6 +377,12 @@ export function BackupPolicyBody({ snapshot }: { snapshot: PanelSnapshot }): Rea
 
 /* ---------- 能力清单（注册 / 生产 / 消费） ---------- */
 
+/**
+ * 能力表初始行数（渲染层截断，与 risks / events 卡同款纪律）。
+ * 真相在 `capabilityRows` 的全量返回里 —— 这里只决定先画几行。
+ */
+const CAPABILITY_INITIAL = 8
+
 export function CapabilityBody({
   snapshot,
   graph,
@@ -358,7 +396,13 @@ export function CapabilityBody({
 }): ReactElement {
   const capability = snapshot.capability
   const [expanded, setExpanded] = useState(false)
-  const rows = capabilityRows(graph, expanded ? 200 : 8)
+  // 全量表只算**一次**：此前判断条件与展开态各调一次 `capabilityRows(graph, 200)`，
+  // 一次渲染算两遍全表（每行都要扫一遍边表 ⇒ O(N·E)），而 200 本身是
+  // **数据层**截断 —— 能力超过 200 项就会静默消失（CLAUDE.md 明令禁止的那条：
+  // 数据给全量，截断只发生在渲染层）。这里默认取全量，显示层再切。
+  const allRows = capabilityRows(graph, Number.POSITIVE_INFINITY)
+  const rows = expanded ? allRows : allRows.slice(0, CAPABILITY_INITIAL)
+  const omittedRows = allRows.length - rows.length
   const exposedCount = graph ? graph.nodes.filter((node) => node.kind === 'capability' && (node.weight ?? 0) > 0).length : capability.exposed
 
   return (
@@ -427,9 +471,15 @@ export function CapabilityBody({
               ))}
             </tbody>
           </table>
-          {capabilityRows(graph, 200).length > 8 && (
-            <button type="button" className="rg-button rg-button-small" onClick={() => setExpanded((current) => !current)} aria-expanded={expanded}>
-              {expanded ? t('capabilities.collapse') : t('capabilities.expand', { count: capabilityRows(graph, 200).length })}
+          {omittedRows > 0 && (
+            <button type="button" className="rg-button rg-button-small" onClick={() => setExpanded(true)} aria-expanded={expanded}>
+              {t('capabilities.expand', { count: allRows.length })}
+            </button>
+          )}
+          {/* 展开后仍要说清总数：只写「收起」会让人不知道刚才漏了几行。 */}
+          {expanded && allRows.length > CAPABILITY_INITIAL && (
+            <button type="button" className="rg-button rg-button-small" onClick={() => setExpanded(false)} aria-expanded={expanded}>
+              {t('capabilities.collapse')} · {allRows.length}
             </button>
           )}
         </>

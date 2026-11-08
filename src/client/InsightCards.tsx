@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react'
+import { useState, type ReactElement } from 'react'
 import { t } from './i18n.ts'
 import type { PanelSnapshot } from '../../src/snapshot.ts'
 import { dataFlowStages, diagnosticsRows, markovView, stageLabelOf } from './panel-model.ts'
@@ -16,8 +16,19 @@ import { dataFlowStages, diagnosticsRows, markovView, stageLabelOf } from './pan
 
 /* ---------- 转移矩阵 ---------- */
 
+/** 平稳分布的显示条数上限：**只截渲染层**（见 CLAUDE.md「数据层不做显示截断」）。
+ *  view.stationary 是完整事实，这里只是「先给最占优的几档」，并且必须把
+ *  省略了多少说出来 —— 静默 slice(0,4) 会让用户以为长期占比只有这 4 个阶段。 */
+const STATIONARY_VISIBLE = 4
+
 export function MarkovBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+  // useState 必须在**任何**提前 return 之前调用：Rules of Hooks 不是风格问题 ——
+  // 早退时少调一个 hook，下一次渲染的 hook 槽位会整体错位，症状是
+  // 「切换数据后状态串到别的卡上」，比报错更难查。
+  const [showAllStationary, setShowAllStationary] = useState(false)
   const view = markovView(snapshot)
+  const stationaryVisible = showAllStationary ? view.stationary : view.stationary.slice(0, STATIONARY_VISIBLE)
+  const stationaryOmitted = view.stationary.length - stationaryVisible.length
   if (!view.available) {
     return <p className="rg-empty">{t('markov.empty')}</p>
   }
@@ -54,13 +65,32 @@ export function MarkovBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElem
       {view.stationary.length > 0 && (
         <div className="rg-markov-stationary">
           <h4 className="rg-subhead">{t('markov.stationary')}</h4>
+          {/* 为什么不静默 slice(0,4)：长期占比的第 5、6 档可能正是「崩溃后
+              未恢复」那一档 —— 被藏起来的恰恰是最该看的。省略必须计数、
+              必须给展开按钮（CLAUDE.md「数据层不做显示截断」的渲染层半边）。 */}
           <div className="rg-chip-row" role="list">
-            {view.stationary.slice(0, 4).map((entry) => (
+            {stationaryVisible.map((entry) => (
               <span key={entry.stage} className="rg-chip" role="listitem" title={`${entry.stage} ${entry.percent}%`}>
                 {stageLabelOf(entry.stage as never, entry.stage)} {entry.percent}%
               </span>
             ))}
+            {stationaryOmitted > 0 && (
+              <button
+                type="button"
+                className="rg-chip rg-chip-more"
+                onClick={() => setShowAllStationary(true)}
+                aria-label={t('markov.stationaryMore', { count: stationaryOmitted })}
+              >
+                {t('markov.stationaryMore', { count: stationaryOmitted })}
+              </button>
+            )}
           </div>
+          {/* 展开后仍给出总数：收起按钮本身不携带「一共几个」的信息。 */}
+          {showAllStationary && view.stationary.length > STATIONARY_VISIBLE && (
+            <button type="button" className="rg-link" onClick={() => setShowAllStationary(false)}>
+              {t('markov.stationaryAll', { count: view.stationary.length })}
+            </button>
+          )}
         </div>
       )}
     </>

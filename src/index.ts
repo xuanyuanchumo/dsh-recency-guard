@@ -1,6 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
-import { defineTool } from '@deepseek-ai/dsh-tools'
 import { readSelfPackage, readHostVersion, safeJson, safeVersion } from './self-describe.js'
 // The runtime version is a detail, not a hard dependency: the import is
 // resolved lazily so a missing optional peer can never stop the plugin from
@@ -27,7 +26,6 @@ import { assessConfidence, environmentChanged, reconcilePrepared, type CrashHist
 import { StageMachine, type LifecycleStepName } from './lifecycle.js'
 import { buildCapabilityGraph, verifyCapabilityContract } from './capability-specs.js'
 import { currentRegistrationSurface, verifySurfaceAlignment } from './capability-specs.js'
-import { TOOL_SURFACE } from './capability.js'
 import { buildPanelSnapshot, buildGraphDataFor, type PanelSnapshot } from './snapshot.js'
 import { buildPartitionSnapshot } from './partition-snapshot.js'
 import {
@@ -39,8 +37,9 @@ import {
   writePartitionIndex,
 } from './isolation.js'
 import { archiveAndReset, listArchives, readArchiveManifest } from './archive.js'
+import { computeRevision } from './change-guard.js'
 import { wireRoutes } from './routes-plugin.js'
-import { dispatchToolAction, renderToolOutcome } from './tool-dispatch.js'
+import { registerGuardTool } from './tool-registration.js'
 import type { Observation } from './observability.js'
 export const name = 'dsh-recency-guard'
 
@@ -214,8 +213,13 @@ export function apply(ctx: Context, config: Config) {
         recover: () => guard.recoverNow(),
         isolation: async () => guard.isolationView(),
         lifecycle: async () => guard.lifecycleView(),
+        // 动作路由的乐观并发基准（v0.12）：只算那枚哈希，不重跑快照投影。
+        currentRevision: () => guard.currentRevision(),
         // 路由**真的**注册成功时回报（含 webServer 缺席时的沉默 —— 那也是事实）。
         onRegister: (name) => guard.noteRegistered(name),
+        // 路由面是独立子 fiber，拿不到 ctx.logger —— 由父插件桥一条错误通道，
+        // 否则注册失败只进 console（宿主日志视图看不见 = 等于没报）。
+        logError: (message) => ctx.logger.warn(message),
       })
       // The disposer must be a function (not undefined): cordis treats an
       // undefined return as "no effect", which is fine — but the TYPE has to
@@ -284,55 +288,17 @@ export function apply(ctx: Context, config: Config) {
     if (config.enabled) guard.publishDecisionOnCrash(exitCode)
   })
 
-  ctx.tools.register(
-    defineTool({
-      // 工具名与 action 枚举来自**注册表**（`TOOL_SURFACE`）：注册处不写字面量，
-      // 因此「清单声明的名称」与「实际注册的名称」不可能各自漂移。
-      name: TOOL_SURFACE.name,
-      description:
-        '插件崩溃恢复守护：记录第三方/实验性插件的安装、更新日期与配置备份；崩溃后按“最近更新”自动关闭嫌疑插件（先关最近 1 个，仍崩溃则关最近 2 个），稳定后自动恢复需要的配置。' +
-        'action=status 查看崩溃状态、嫌疑排名与自动关闭列表；action=history 查看安装更新日志；action=recover 立即按最近更新执行一次恢复关闭；' +
-        'action=restore 重新启用被自动关闭的非嫌疑插件；action=reenable 手动重新启用某个插件；action=backups 列出配置备份；' +
-        'action=archive 归档当前产物并重置（按最新事实重新开始）；action=archives 列出历史归档。',
-      parameters: {
-        action: {
-          type: 'string',
-          required: true,
-          enum: [...TOOL_SURFACE.actions],
-          description: '要执行的操作。',
-        },
-        bundle: { type: 'string', description: 'reenable 的目标插件名（包名）。' },
-        limit: { type: 'number', description: 'history 返回的事件条数，默认 40。' },
-        reason: { type: 'string', description: 'archive 的归档原因（可选）。' },
-      },
-      // 规范输出：模型消费结构化事实；人读文本由 output.render 投影
-      // （会话里的命令窗口显示的就是它，而不是满屏转义的 JSON）。
-      output: {
-        schema: {
-          type: 'object',
-          additionalProperties: true,
-        },
-        render: (_args, value) => [{ type: 'text', text: renderToolOutcome(value) }],
-      },
-      async execute(args, exec) {
-        exec.signal.throwIfAborted()
-        // action 分派见 tool-dispatch.ts（表驱动；契约测试从表里对账 enum）。
-        return dispatchToolAction(
-          {
-            status: () => guard.status(),
-            recoverNow: () => guard.recoverNow(),
-            restore: () => guard.restore(),
-            reenable: (bundle) => guard.reenable(bundle),
-            archiveReset: (reason) => guard.archiveReset(reason),
-            archives: () => guard.archives(),
-            store,
-          },
-          String(args.action),
-          { bundle: args.bundle, limit: args.limit, reason: args.reason },
-        )
-      },
-    }),
-  )
+  // 工具注册整体在 tool-registration.ts：那里一次接完「名字/action 枚举 +
+  // 文本投影 + 三个展示投影」，漏接任何一条都在这个小文件里肉眼可见。
+  registerGuardTool(ctx.tools, {
+    status: () => guard.status(),
+    recoverNow: () => guard.recoverNow(),
+    restore: () => guard.restore(),
+    reenable: (bundle) => guard.reenable(bundle),
+    archiveReset: (reason) => guard.archiveReset(reason),
+    archives: () => guard.archives(),
+    store,
+  })
 
   // Loader 四件套走完：这一轮的「加载」步骤到此闭合（含耗时）。
   guard.endStep('loader', true, 'Loader 四件套就绪（name/inject/Config/apply）')
@@ -1342,6 +1308,31 @@ class Guard {
    * 纯读：观测面不写任何状态。所有视图渲染同一份快照，
    * 保证界面上的事实互相一致（不会出现「状态是 A 时刻、指标是 B 时刻」）。
    */
+  /**
+   * 当前写状态凭证（v0.12 乐观并发）。
+   *
+   * 为什么不复用 panelSnapshot：快照要投影指标、风险排名、能力图与马尔可夫
+   * 矩阵（几十毫秒），而动作路由**每次 POST** 都要核对一次。这里只读派生
+   * revision 必需的三样事实（state / decision / journal 尾），一次同步
+   * readState + 一次 readDecisionSync + 一次 journal 尾巴读，开销小一个量级。
+   *
+   * 与 panelSnapshot 里的 revision **同源同式**（同一个 computeRevision、
+   * 同一组事实字段），所以「面板看到的那枚」与「宿主核对的那枚」不可能
+   * 各自漂移 —— 这是整条门可用的前提。
+   */
+  async currentRevision(): Promise<string> {
+    const state = await this.store.readState()
+    const tail = this.store.readJournalSync(1)
+    return computeRevision({
+      crashSeq: state.crashSeq,
+      stabilized: state.stabilized,
+      decisionDisable: this.store.readDecisionSync()?.disable ?? [],
+      journalTail: tail.length > 0 ? tail[tail.length - 1].t : '',
+      autoDisabled: state.autoDisabled.map((d) => d.name),
+      restored: state.restored,
+    })
+  }
+
   async panelSnapshot(): Promise<PanelSnapshot> {
     const state = await this.store.readState()
     // 事件流快照：journal 尾部直接投影（时间升序），面板据此画「流动」。
@@ -1364,8 +1355,7 @@ class Guard {
         reason: d.reason,
         crashSeq: d.crashSeq,
         disabledAt: d.disabledAt,
-      })),
-      partitions: readPartitionIndex(this.profileDir),
+      })),      partitions: readPartitionIndex(this.profileDir),
       backupPolicy: {
         versionedBackups: this.config.versionedBackups,
         retain: this.config.backupRetain,
@@ -1378,6 +1368,16 @@ class Guard {
       },
       registeredExposedAs: [...this.actuallyRegistered],
       recentEvents,
+      // revision 的事实基座（v0.12 乐观并发）：全部取自上面已经读过的状态，
+      // 只多一次 readDecisionSync —— 决策文件是几十十字节的小 JSON，
+      // 而它是「下次启动会不会拦住插件」的真值，不读它就等于用一份
+      // 可能过期的名单派生凭证。journal 尾复用 recentEvents（同一份读盘结果）。
+      revisionFacts: {
+        crashSeq: state.crashSeq,
+        stabilized: state.stabilized,
+        decisionDisable: this.store.readDecisionSync()?.disable ?? [],
+        journalTail: recentEvents.length > 0 ? recentEvents[recentEvents.length - 1].t : '',
+      },
       diagnostics: {
         pluginVersion: this.selfPackage.version,
         hostVersion: readHostVersion(),

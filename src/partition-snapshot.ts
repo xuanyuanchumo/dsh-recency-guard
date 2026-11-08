@@ -77,6 +77,20 @@ export async function buildPartitionSnapshot(
     })),
     lastRecoveryVerdict: state.lastRecoveryVerdict ?? null,
     partitions: index.partitions.map((p) => ({ ...p })),
+    /**
+     * 跨分区视图**不提供**乐观并发凭证（v0.12，恒 null）。
+     *
+     * 为什么是 null 而不是照算一枚对方的 revision：凭证的用途是「我按这份
+     * 事实发起动作，宿主核对事实有没有变」。但这个视图是只读的，动作路由
+     * 只作用于**当前**分区 —— 把对方的凭证发给宿主核对，结果必然 409，
+     * 而那次冲突是假的（当前分区什么都没变）。null 让调用方走「不带凭证」
+     * 分支，语义诚实；配合 readonly:true，面板据此禁用动作按钮。
+     *
+     * 用 null 而不是省略字段：省略会让「这个版本没有凭证」与「跨分区没有
+     * 凭证」两种事实共用同一个 undefined，前端无法区分（本插件纪律：
+     * 缺席要可归因）。
+     */
+    revision: null,
     eventFlow: [],
     recentEvents: events,
     markov: null,

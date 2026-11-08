@@ -1,6 +1,6 @@
 {
   "name": "dsh-recency-guard",
-  "version": "0.11.4",
+  "version": "0.12.0",
   "description": "Crash-recovery guard for DeepSeek Harness: records third-party/experimental plugin install & update recency, backs up their config, and after a crash auto-disables the most-recently-updated plugin(s) so the profile boots again, then restores stable config.",
   "license": "MIT",
   "type": "module",
@@ -60,13 +60,20 @@
         "@deepseek-ai/dsh-client-ui-sidebar",
         "@deepseek-ai/dsh-client-ui-layout"
       ]
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.1-rc.5+": "compatible",
+        "0.2.2-rc.1+": "compatible",
+        "0.2.3-rc.1+": "compatible"
+      }
     }
   },
   "dependencies": {
-    "@deepseek-ai/dsh-atomic-write": "0.2.1-rc.5"
+    "@deepseek-ai/dsh-atomic-write": "0.2.2-rc.1"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "~4.0.5",
+    "@deepseek-ai/cordis": ">=4.0.5 <5.0.0",
     "@deepseek-ai/dsh-app-boot": ">=0.2.1-rc.5 <0.2.2-0 || >=0.2.2-rc.1 <0.2.3-0 || >=0.2.3-rc.1 <0.3.0-0",
     "@deepseek-ai/dsh-config-editor": ">=0.2.1-rc.5 <0.2.2-0 || >=0.2.2-rc.1 <0.2.3-0 || >=0.2.3-rc.1 <0.3.0-0",
     "@deepseek-ai/dsh-plugin-manager": ">=0.2.1-rc.5 <0.2.2-0 || >=0.2.2-rc.1 <0.2.3-0 || >=0.2.3-rc.1 <0.3.0-0",
@@ -98,26 +105,28 @@
     "undici": "^8.12.2"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.5",
-    "@deepseek-ai/dsh-agent": "0.2.1-rc.5",
-    "@deepseek-ai/dsh-app-boot": "0.2.1-rc.5",
-    "@deepseek-ai/dsh-config-editor": "0.2.1-rc.5",
-    "@deepseek-ai/dsh-llm": "0.2.1-rc.5",
-    "@deepseek-ai/dsh-plugin-manager": "0.2.1-rc.5",
-    "@deepseek-ai/dsh-ptc-runtime": "0.2.1-rc.5",
-    "@deepseek-ai/dsh-sandbox": "0.2.1-rc.5",
-    "@deepseek-ai/dsh-sandbox-policy": "0.2.1-rc.5",
-    "@deepseek-ai/dsh-scope": "0.2.1-rc.5",
-    "@deepseek-ai/dsh-session": "0.2.1-rc.5",
-    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.5",
-    "@deepseek-ai/dsh-tools": "0.2.1-rc.5",
-    "@deepseek-ai/dsh-user-approval": "0.2.1-rc.5",
-    "@deepseek-ai/dsh-working-directory": "0.2.1-rc.5",
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-app-boot": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-config-editor": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-plugin-manager": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-ptc-runtime": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-sandbox": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-sandbox-policy": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-scope": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-user-approval": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-working-directory": "0.2.2-rc.1",
     "@deepseek-ai/schemastery": "3.18.5",
     "@types/node": "^24.0.0",
     "@types/react": "^18.3.12",
+    "@types/semver": "^7.8.0",
     "esbuild": "^0.25.0",
     "react": "^18.3.1",
+    "semver": "^7.8.5",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"
   },

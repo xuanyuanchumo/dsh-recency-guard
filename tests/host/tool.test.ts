@@ -237,6 +237,104 @@ try {
   check('reenable without a bundle throws', true)
 }
 
+// ---------- v0.12 命令窗口显示回归（接线，而不是只有纯函数） ----------
+// 踩过的坑：tool-presentation.ts 的三个投影函数**写好了却没接进 defineTool**，
+// 于是纯函数单测全绿、宿主却仍落到通用回退（标题是裸工具名、正文是整坨参数
+// JSON）。所以这道门必须断言「注册出来的工具对象上真的有这三个方法」，
+// 并且走**宿主同一条数据流**：execute 的规范值 → presentationMeta → presentResult。
+check('the tool wires presentCall', typeof tool?.presentCall === 'function')
+check('the tool wires presentResult', typeof tool?.presentResult === 'function')
+check('the tool wires output.presentationMeta', typeof tool?.output?.presentationMeta === 'function')
+
+const callView = tool.presentCall({ action: 'history', limit: 40 })
+check('presentCall returns a generic card', callView?.card === 'generic', callView)
+check(
+  'presentCall titles with the action in human words (not the bare tool name)',
+  typeof callView?.title === 'string' && callView.title.includes('日志') && !/^recency_guard$/.test(callView.title),
+  callView,
+)
+check(
+  'presentCall summarizes args instead of dumping raw JSON',
+  typeof callView?.rawInput === 'string' && callView.rawInput.includes('最多 40') && !callView.rawInput.includes('{'),
+  callView?.rawInput,
+)
+// 宿主契约：args 不合法时 presentCall 必须回退（defineTool 内部 validate 后返回 undefined）。
+check(
+  'presentCall falls back on invalid args',
+  tool.presentCall({ action: 'nope' }) === undefined,
+  tool.presentCall({ action: 'nope' }),
+)
+
+// 全链路：规范值 → presentationMeta（宿主持久化在 tool/result 的 meta 上）→ presentResult。
+const meta = tool.output.presentationMeta({ action: 'status' }, status)
+check('presentationMeta projects a display model with a title', typeof meta?.title === 'string' && meta.title.length > 0, meta?.title)
+check('presentationMeta carries facts and sections', Array.isArray(meta?.facts) && Array.isArray(meta?.sections))
+check(
+  'presentationMeta quantifies display completeness',
+  meta?.truncation?.defined === true && typeof meta?.truncation?.value === 'number',
+  meta?.truncation,
+)
+const resultView = tool.presentResult({ action: 'status' }, { isError: false, content: [{ type: 'text', text: 'x' }], meta })
+check('presentResult returns a generic card', resultView?.card === 'generic', resultView?.card)
+check(
+  'presentResult title names the plugin and the action',
+  typeof resultView?.title === 'string' && resultView.title.includes('插件崩溃守护') && resultView.title.includes('崩溃守护状态'),
+  resultView?.title,
+)
+check(
+  'presentResult content is host vocabulary (ContentBlock[]), not a raw string',
+  Array.isArray(resultView?.content) && resultView.content[0]?.type === 'text' && typeof resultView.content[0]?.text === 'string',
+  resultView?.content,
+)
+// meta 缺席（旧版本写入的回放记录）时仍要有标题有正文，不能白屏。
+const legacyView = tool.presentResult({ action: 'status' }, { isError: false, content: [] })
+check(
+  'presentResult degrades honestly when meta is absent (replay of an old record)',
+  typeof legacyView?.title === 'string' && legacyView.title.length > 0 && Array.isArray(legacyView?.content),
+  legacyView,
+)
+
+// ---------- v0.12 L4 审计线回归 ----------
+// L4 全自主 = 人类只在事后审计；审计线要能回答「谁、以什么理由、动了什么」。
+// 钉死三点：写动作**先落审计行**（崩溃发生在中间时，理由已在盘上）、
+// 读动作不产生审计噪声（面板轮询不该刷满 journal）、
+// 审计行走 journal 的 note 通道（词汇表不扩容 ⇒ 既有事件流消费链全兼容）。
+//
+// 读 journal 用工具**自己的** history 动作，而不是再 import 一个 Store：
+// 测试经由公开面取证，公开面坏了测试就红 —— 直接桩 Store 会让「history
+// 读不到审计行」这类真缺陷被测不出来。
+{
+  const auditLines = async (limit: number): Promise<Array<Record<string, unknown>>> => {
+    const outcome = (await tool.execute({ action: 'history', limit }, exec)) as {
+      data?: { events?: unknown }
+    }
+    const events = Array.isArray(outcome.data?.events) ? (outcome.data.events as Array<Record<string, unknown>>) : []
+    return events.filter((e) => String(e.detail ?? '').startsWith('审计 ·'))
+  }
+
+  const before = await auditLines(400)
+  await tool.execute({ action: 'recover' }, exec)
+  const after = await auditLines(400)
+  check('mutating action writes exactly one audit line', after.length === before.length + 1, {
+    before: before.length,
+    after: after.length,
+  })
+  const last = after[after.length - 1] as { detail?: string; audit?: { actor?: string; action?: string } }
+  check(
+    'audit line carries actor=tool and action=recover as machine-readable data',
+    last.audit?.actor === 'tool' && last.audit?.action === 'recover',
+    last.audit,
+  )
+  check('audit detail is human readable', typeof last.detail === 'string' && last.detail.includes('tool/recover'), last.detail)
+
+  // 读动作不产审计行：否则面板每 5s 一次轮询会把崩溃因果链冲掉。
+  const readBefore = (await auditLines(500)).length
+  await tool.execute({ action: 'status' }, exec)
+  await tool.execute({ action: 'archives' }, exec)
+  const readAfter = (await auditLines(500)).length
+  check('read actions produce no audit noise', readAfter === readBefore, { readBefore, readAfter })
+}
+
 await rm(profileDir, { recursive: true, force: true })
 
 console.log(`\n${failures === 0 ? 'ALL TOOL CHECKS PASS' : `${failures} FAILURE(S)`}\n`)

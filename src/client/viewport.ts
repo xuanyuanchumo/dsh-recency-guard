@@ -439,11 +439,16 @@ export function parallelCurvature(parallelIndex: number, unit = 18): number {
  *
  * 返回按「id 精确 → 前缀 → 子串」优先级排序的节点列表：输入 `panel`
  * 时精确 id 优先于标签里碰巧含 panel 的节点，避免「定位」跳到错误的节点。
+ *
+ * `limit` 缺省是 `Infinity` 而不是 8：此前的 8 是**数据层**截断 ——
+ * 匹配 20 个时界面说「第 1/8 个」、回车只在前 8 个里循环，
+ * 剩下 12 个既看不见也跳不到（CLAUDE.md 记过的「报 N 只列 5」同款缺陷）。
+ * 显示上限交给 `searchSummary`（渲染层），这里只负责「全部命中」。
  */
 export function matchNodes<T extends { id: string; label: string; ref?: string }>(
   nodes: readonly T[],
   query: string,
-  limit = 8,
+  limit = Number.POSITIVE_INFINITY,
 ): T[] {
   const q = query.trim().toLowerCase()
   if (q === '') return []
@@ -460,7 +465,94 @@ export function matchNodes<T extends { id: string; label: string; ref?: string }
     if (rank !== null) scored.push({ node, rank })
   }
   scored.sort((a, b) => a.rank - b.rank || a.node.id.localeCompare(b.node.id))
-  return scored.slice(0, limit).map((s) => s.node)
+  const cap = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : scored.length
+  return scored.slice(0, cap).map((s) => s.node)
+}
+
+/**
+ * 搜索结果摘要 —— 全量命中与「先显示几条」分离（截断只发生在渲染层）。
+ *
+ * 为什么需要一个显式的摘要对象而不是让组件自己 slice：组件里 `slice(0,8)`
+ * 与「总数是 20」这两件事一旦由两处代码各算各的，就会出现「指示器说 1/20、
+ * 列表只有 8 行、回车跳到第 9 个时列表里根本没有这一行」这类自相矛盾的 UI
+ * （此前 limit=8 同时扮演「显示上限」和「循环范围」，第 9~20 个既看不见也跳不到）。
+ * 一次成型 ⇒ 三个数必然同源。
+ *
+ * 显示的是**窗口**而不是固定前缀：游标在前 cap 个之内时窗口就是前缀
+ * （常见情形，看到的仍是相关度最高的几条）；游标越界时窗口**刚好滑动到
+ * 容得下当前命中**，于是当前行永远在列表里可见，而排序不被打乱。
+ *
+ * 游标（cursor）是**单调递增的跳转计数**，不是数组下标 —— 取模由这里做，
+ * 组件只管 +1，所以「删过节点导致下标超界」不会跳到 undefined。
+ */
+export interface SearchSummary<T> {
+  /** 全部命中（**不截断**：回车要能循环到每一个）。 */
+  all: T[]
+  /** 当前显示的行（排名连续的窗口，含当前命中）。 */
+  visible: T[]
+  /** 命中总数（= all.length，冗余保留是为了让调用方不必再算一次）。 */
+  total: number
+  /** 被省略的行数（>0 时渲染层必须给出「省略 N 条 + 展开」）。 */
+  omitted: number
+  /** 取模后的真实下标（跳转目标，也用于高亮当前行）。 */
+  cycleIndex: number
+  /** 当前命中在 `visible` 里的位置（-1 只可能出现在空结果）。 */
+  indexInVisible: number
+}
+
+export function searchSummary<T>(
+  all: readonly T[],
+  displayLimit: number,
+  cursor: number,
+): SearchSummary<T> {
+  const total = all.length
+  if (total === 0) {
+    return { all: [], visible: [], total: 0, omitted: 0, cycleIndex: 0, indexInVisible: -1 }
+  }
+  // 负数（还没跳过）与超界（节点被过滤掉）都要落回合法下标。
+  // NaN 必须显式兜住：`Math.floor(NaN) % total` 还是 NaN，NaN 一路传到
+  // `all[cycleIndex]` 就是 undefined —— 症状是「搜索结果列表空白但计数说 24」，
+  // 而组件里不会报错（下标越界只给 undefined）。
+  const raw = Number.isFinite(cursor) ? Math.floor(cursor) : 0
+  const cycleIndex = ((raw % total) + total) % total
+  const cap = Number.isFinite(displayLimit) ? Math.max(0, Math.floor(displayLimit)) : total
+  const shown = Math.min(total, cap)
+  // 窗口起点：能不动就不动（保持前缀）；必须动时只动到刚好容下当前命中。
+  const start = Math.min(Math.max(0, cycleIndex - shown + 1), Math.max(0, total - shown))
+  const visible = all.slice(start, start + shown)
+  return {
+    all: [...all],
+    visible,
+    total,
+    omitted: Math.max(0, total - visible.length),
+    cycleIndex,
+    indexInVisible: cycleIndex - start,
+  }
+}
+
+/**
+ * 世界点在当前可见区里吗（含一圈容差）。
+ *
+ * 为什么需要它而不是每次都居中：键盘方向键若每一步都 `centerOn`，画面
+ * 会跟着每一次按键平移 —— 用户失去「我从哪走到哪」的连续参照，
+ * 比不动更糟。只有目标**真的跑出可见区**时才移动视野才是对的。
+ * 容差取「一个卡片尺寸」：焦点节点整张卡片可见，才看得见焦点环。
+ * 非有限输入一律算「不可见」（宁可多移动一次，也不把焦点丢到看不见的地方）。
+ */
+export function isWorldPointVisible(
+  viewport: Viewport,
+  size: Size,
+  world: Point,
+  margin = 0,
+): boolean {
+  const scale = viewport.scale
+  if (!Number.isFinite(scale) || !(scale > 0)) return false
+  if (!Number.isFinite(world.x) || !Number.isFinite(world.y)) return false
+  const x = world.x * scale + viewport.tx
+  const y = world.y * scale + viewport.ty
+  return (
+    x >= margin && y >= margin && x <= finite(size.width, 0) - margin && y <= finite(size.height, 0) - margin
+  )
 }
 
 /**

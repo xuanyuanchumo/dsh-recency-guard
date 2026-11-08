@@ -97,6 +97,14 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
   const [requestedKey, setRequestedKey] = useState<string | null>(null)
   /** 数据面实际返回的分区与请求不一致时的诚实提示。 */
   const [partitionMismatch, setPartitionMismatch] = useState<{ requested: string; actual: string } | null>(null)
+  /**
+   * 上一次动作因状态已变（409）被拦下。
+   *
+   * 为什么单独一个 state 而不是复用 failure：两者的**下一步**不同 ——
+   * failure 要说「数据面有问题」，409 要说「世界变了，请看新事实再决定」。
+   * 混在一起会让用户对着一条其实执行成功了读取失败的错误去怀疑守护本身。
+   */
+  const [conflictNotice, setConflictNotice] = useState(false)
   const rootRef = useRef<HTMLElement | null>(null)
   const mounted = useRef(true)
 
@@ -160,18 +168,48 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
     return () => observer?.disconnect()
   }, [])
 
+  /**
+   * 面板动作（v0.12 乐观并发闭环的客户端最后一米）。
+   *
+   * 为什么要在这里补 `expectedRevision`：宿主已经会核对凭证并回 409，
+   * 但面板此前不带凭证 ⇒ 那道门对 GUI 用户永远是空转。面板每 5s 轮询一次，
+   * 用户点击时依据的地图最长可能已经陈旧 5 秒，这正是「过期按钮」的窗口。
+   *
+   * 两个刻意的例外：
+   * - **跨分区查看**时不携带：对方的 `revision` 恒 null（只读视图没有可改的
+   *   事实），且动作只作用于当前分区 —— 拿对方的凭证去核对必然假冲突。
+   * - 快照还没到位时不携带：没有基准就不要假装核对过（宿主会走「未带」分支，
+   *   并在响应里如实标记 unchecked）。
+   *
+   * 409 的处理是**提示 + 重读**，不是静默重试：自动重放等于替用户决定
+   * 「世界变了你也照做」，那正是这道门要防的事。
+   */
   const runAction = useCallback(
     async (action: PanelAction, payload: Record<string, unknown> = {}): Promise<void> => {
       setBusy(true)
       try {
-        const result = await props.postAction(action, payload)
-        if (!result.ok) setFailure(result.reason)
+        const inspectingOther = requestedKey !== null
+        const body =
+          !inspectingOther && snapshot?.revision
+            ? { ...payload, expectedRevision: snapshot.revision }
+            : payload
+        const result = await props.postAction(action, body)
+        if (!result.ok) {
+          // conflict 是机器可读判别（不挂 reason 文案 —— 文案会改，分支不能跟着坏）。
+          if (result.conflict === 'stale-revision') setConflictNotice(true)
+          else {
+            setConflictNotice(false)
+            setFailure(result.reason)
+          }
+        } else {
+          setConflictNotice(false)
+        }
         await load(requestedKey)
       } finally {
         if (mounted.current) setBusy(false)
       }
     },
-    [props.postAction, load, requestedKey],
+    [props.postAction, load, requestedKey, snapshot?.revision],
   )
 
   const toggleCollapse = useCallback((card: string): void => {
@@ -280,6 +318,14 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
       </header>
 
       {/* 分区提示：切换查看 ≠ 切换数据面。宿主不支持时必须说出来。 */}
+      {conflictNotice && (
+        <p className="rg-notice" role="status">
+          {t('panel.conflictNotice')}{' '}
+          <button type="button" className="rg-link" onClick={() => setConflictNotice(false)}>
+            {t('panel.conflictDismiss')}
+          </button>
+        </p>
+      )}
       {partitionMismatch !== null && (
         <p className="rg-notice" role="status">
           {t('partitions.mismatch', {

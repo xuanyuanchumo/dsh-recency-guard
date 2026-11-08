@@ -112,20 +112,15 @@ export function describeCallArgs(args: unknown): string {
   return parts.join(' · ')
 }
 
-/** `ToolCallView`（generic 分支）——只声明本插件用到的字段，避免耦合宿主全部词汇。 */
-export interface GenericCallView {
-  card: 'generic'
-  title: string
-  kind: 'other'
-  rawInput: string
-}
-
-/** `ToolResultView`（generic 分支）。 */
-export interface GenericResultView {
-  card: 'generic'
-  title: string
-  content: string
-}
+/** `ToolCallView`（generic 分支）——直接复用宿主词汇。
+ *
+ * 为什么不再自己声明（v0.12 接线时改的）：此前这里的本地 `GenericCallView`
+ * 与宿主 `@deepseek-ai/dsh-tools` 的导出类型**各自漂移**（宿主 content 是
+ * `ContentBlock[]`，本地是 `string`），而函数没接线所以没人发现 ——
+ * 「声明了第二真相源 + 不消费 = 必然漂移」的实证。类型 import 编译期即擦除，
+ * 不引入运行面依赖（dsh-tools 是 optional peer）。
+ */
+import type { ToolCallView, ToolResultView } from '@deepseek-ai/dsh-tools'
 
 /**
  * `presentCall` 的实现体：待执行状态怎么显示。
@@ -133,7 +128,7 @@ export interface GenericResultView {
  * 纯且只依赖 args —— 宿主会在回放路径上重新调用它，依赖 value 会得到
  * 与实时不同的卡片（回放时还没有结果）。
  */
-export function presentCallOf(args: unknown): GenericCallView {
+export function presentCallOf(args: unknown): ToolCallView {
   const action = actionOf(args)
   return {
     card: 'generic',
@@ -141,6 +136,38 @@ export function presentCallOf(args: unknown): GenericCallView {
     kind: 'other',
     rawInput: describeCallArgs(args),
   }
+}
+
+/**
+ * 从 `output.presentationMeta` 的**产物**重建显示模型。
+ *
+ * 为什么需要一个独立的读取器（而不是复用 `displayModelOf`）：
+ * `displayModelOf` 面向的是**规范值**（`ToolOutcome`，模型字段嵌在 `.display` 下）；
+ * 而宿主传给 `presentResult` 的是 `result.meta` —— 那正是 `presentationMeta`
+ * 的返回值本身，字段**平铺在顶层**（title/ok/summary/facts/sections）。
+ * 用 `displayModelOf` 读它会永远拿到 null：v0.12 接线时实测到这一点
+ * （卡片标题退化成「（无输出）」），所以两个形状各有一个读取器，
+ * 而不是让一个函数猜两种形状。
+ *
+ * 两种形状都试（先平铺后嵌套）：回放在旧版本写入的记录时 meta 可能缺字段，
+ * 退化路径必须仍然给出有标题的卡片而不是空白。
+ */
+export function displayModelFromMeta(meta: unknown): DisplayModel | null {
+  if (typeof meta !== 'object' || meta === null) return null
+  const flat = meta as Partial<DisplayModel>
+  if (typeof flat.summary === 'string') {
+    return {
+      title: typeof flat.title === 'string' ? flat.title : flat.summary,
+      ok: flat.ok === true,
+      summary: flat.summary,
+      facts: Array.isArray(flat.facts) ? flat.facts : [],
+      sections: Array.isArray(flat.sections) ? flat.sections : [],
+      omitted: typeof flat.omitted === 'number' ? flat.omitted : 0,
+      truncation: flat.truncation ?? truncationMetric(0),
+    }
+  }
+  // 退化：meta 里嵌着规范值（宿主策略替换过投影时可能出现）。
+  return displayModelOf((meta as { value?: unknown }).value ?? meta)
 }
 
 /** 安全读取 `presentationMeta` 落在 `result.meta` 上的显示模型。 */
@@ -191,16 +218,20 @@ function textOf(result: unknown): string {
  * （Web 卡片）会消费 `meta` 渲染折叠分区，因此这里不做额外截断 ——
  * 文本层已经在 `renderOutcome` 里有界。
  */
-export function presentResultOf(args: unknown, result: unknown): GenericResultView {
+export function presentResultOf(args: unknown, result: unknown): ToolResultView {
   const action = actionOf(args)
-  const model = displayModelOf(safeMeta(result) ?? { display: undefined })
+  const model = displayModelFromMeta(safeMeta(result))
   const body = textOf(result)
+  // content 的形状由宿主词汇决定（`ContentBlock[]`）：这里用判别类型取回，
+  // 而不是自己声明一个 string —— 后者正是「本地类型漂移成 string」的那处。
+  const content: Extract<ToolResultView, { card: 'generic' }>['content'] =
+    body.length > 0 ? [{ type: 'text', text: body }] : [{ type: 'text', text: model?.summary ?? '（无输出）' }]
   return {
     card: 'generic',
     title: `${TOOL_TITLE} · ${titleForAction(action)}`,
     // 正文优先用宿主已经渲染好的 content（与命令窗口文本同源）；
     // 它缺席（流水线失败绕过 render）时才退化为摘要。
-    content: body.length > 0 ? body : `${model?.summary ?? '（无输出）'}`,
+    content,
   }
 }
 

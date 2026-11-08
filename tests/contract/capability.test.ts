@@ -10,6 +10,7 @@ import { ROUTE_PREFIX, ROUTE_PATHS, ROUTE_SURFACE } from '../../src/routes.ts'
 import { PANEL_ID, NAMESPACE } from '../../src/client/index.ts'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import semver from 'semver'
 
 /**
  * 契约层 —— 清单 ↔ 注册处的**双向**比对。
@@ -58,6 +59,9 @@ function main() {
   const graph = buildCapabilityGraph()
   const specsById = new Map(CAPABILITY_SPECS.map((s) => [s.id, s]))
   const indexSource = readFileSync(join(process.cwd(), 'src', 'index.ts'), 'utf8')
+  // 工具注册的**真实位点**（v0.12 抽出）：契约要核对注册处，而不是某个恰好
+  // 曾经是注册处的文件。核对目标跟着真值走，门才有意义。
+  const toolRegistrationSource = readFileSync(join(process.cwd(), 'src', 'tool-registration.ts'), 'utf8')
   const routesSource = readFileSync(join(process.cwd(), 'src', 'routes.ts'), 'utf8')
   const routesPluginSource = readFileSync(join(process.cwd(), 'src', 'routes-plugin.ts'), 'utf8')
   const injected = [...new Set([...readInjectedServices(indexSource), ...readInjectedServices(routesPluginSource)])].sort()
@@ -133,12 +137,19 @@ function main() {
   check('the tool surface declares actions', TOOL_SURFACE.actions.length > 0)
   check(
     'the registration site uses the surface name (no literal drift)',
-    indexSource.includes('name: TOOL_SURFACE.name'),
+    toolRegistrationSource.includes('name: TOOL_SURFACE.name'),
   )
   check(
     'the registration site uses the surface actions (no literal drift)',
-    indexSource.includes('enum: [...TOOL_SURFACE.actions]'),
+    toolRegistrationSource.includes('enum: [...TOOL_SURFACE.actions]'),
   )
+  // v0.12 反漂移门：展示投影必须**接线**，不是只写好纯函数。
+  // 踩过的坑：tool-presentation.ts 三函数齐备但 defineTool 没接 ——
+  // 纯函数测试全绿、命令窗口却仍是裸 JSON。这道源码门把「接线」
+  // 变成契约：漏一条 = 契约层失败，而不是等用户截图发现。
+  check('the registration wires presentCall', toolRegistrationSource.includes('presentCall:'))
+  check('the registration wires presentResult', toolRegistrationSource.includes('presentResult:'))
+  check('the registration wires presentationMeta', toolRegistrationSource.includes('presentationMeta:'))
   check(
     'the tool parameter schema enum matches the surface',
     JSON.stringify([...TOOL_SURFACE.actions]) === JSON.stringify(
@@ -339,6 +350,56 @@ function main() {
       // 只有 @deepseek-ai/dsh-* 与 dsh 同版本线；cordis 走 4.x、schemastery 走 3.x。
       if (!name.startsWith('@deepseek-ai/dsh-')) continue
       check(`${name} covers 0.2.2-rc host prereleases`, String(range).includes('>=0.2.2-rc.1'), range)
+    }
+  }
+
+  // ── v0.12 「测试代际 ≠ 装机代际」反漂移门 ──
+  // 踩过的坑（INC-2026-11-08-01 的深层形态）：上面的文本式断言只证明范围
+  // **写着** 0.2.2-rc 分支，不证明它**放行**宿主实际版本；而 devDependencies
+  // 停在 0.2.1-rc.5 时，测试跑在一个从未有人装过机器的代际上 —— 绿灯不代表装机绿。
+  // 这道门用真实宿主事实（runtime/dsh/package.json，由 extract-runtime 从
+  // app.asar 解出）对每条声明范围做 semver.satisfies 判定：范围写了却不放行，
+  // 或 devDep 版本与被测宿主不一致，都在这里响亮失败（无 runtime 记 FAIL，
+  // 而不是「无法评估 = 通过」）。
+  console.log('== declared ranges satisfy the REAL host (runtime facts as witness) ==')
+  {
+    const hostManifestPath = join(process.cwd(), 'runtime', 'dsh', 'package.json')
+    if (existsSync(hostManifestPath)) {
+      const hostVersion = String(JSON.parse(readFileSync(hostManifestPath, 'utf8')).version ?? '')
+      check('the extracted runtime names a host version', hostVersion.length > 0, hostVersion)
+      const enginesRange = String(manifest.engines?.dsh ?? '')
+      check('engines.dsh admits the real host version', semver.satisfies(hostVersion, enginesRange), { hostVersion, enginesRange })
+      const devDeps = manifest.devDependencies ?? {}
+      for (const [name, range] of Object.entries(manifest.peerDependencies ?? {})) {
+        if (!name.startsWith('@deepseek-ai/dsh-')) continue
+        // 宿主服务 peer 的“装机版本”就在 runtime/ 里：用它验证范围真的放行。
+        const pkgJsonPath = join(process.cwd(), 'runtime', name.replace('@deepseek-ai/', ''), 'package.json')
+        if (!existsSync(pkgJsonPath)) continue
+        const installed = String(JSON.parse(readFileSync(pkgJsonPath, 'utf8')).version ?? '')
+        check(`${name}: host-installed ${installed} satisfies the declared range`, semver.satisfies(installed, String(range)), {
+          installed,
+          range: String(range),
+        })
+        // devDep 必须与宿主同代际：测试跑的代际 = 装机代际（否则测的是空气）。
+        const dev = devDeps[name]
+        if (typeof dev === 'string' && !dev.startsWith('^') && !dev.startsWith('~')) {
+          check(`devDependency ${name}@${dev} matches the host-installed ${installed}`, dev === installed, { dev, installed })
+        }
+      }
+      // cordis 单独核：4.1.0 不满足旧的 ~4.0.5（v0.12 实测发现的阻断级缺口 ——
+      // 桌面端用 link: 直连源码，兼容闸门从不参与，所以这个洞一直没被暴露）。
+      const cordisPath = join(process.cwd(), 'runtime', 'cordis', 'package.json')
+      if (existsSync(cordisPath)) {
+        const cordisVersion = String(JSON.parse(readFileSync(cordisPath, 'utf8')).version ?? '')
+        const cordisRange = String(manifest.peerDependencies?.['@deepseek-ai/cordis'] ?? '')
+        check(
+          `cordis range admits the host cordis ${cordisVersion}`,
+          semver.satisfies(cordisVersion, cordisRange),
+          { cordisVersion, cordisRange },
+        )
+      }
+    } else {
+      check('runtime/ present for host-fact verification (run: npm run extract-runtime)', false, hostManifestPath)
     }
   }
 

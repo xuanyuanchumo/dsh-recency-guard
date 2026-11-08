@@ -80,6 +80,8 @@ async function main() {
     recover: async () => ({ disabled: [] }),
     isolation: async () => ({ current: null, others: [] }),
     lifecycle: async () => ({ stage: 'monitoring' }),
+    // v0.12 乐观并发基准：桩里固定一枚 revision，冲突分支用带错值的请求打。
+    currentRevision: async () => 'deadbeefcafe',
   }
   const webServer = {
     register(route: { path: string; handler: (req: NodeRequest, res: NodeResponse) => void | Promise<void> }) {
@@ -133,6 +135,56 @@ async function main() {
     const res = stubResponse()
     await byPath.get(ROUTE_PATHS.reenable)!(stubRequest('POST', ROUTE_PATHS.reenable, ['{}']), res)
     check('reenable 缺 bundle 是 400', res.status === 400, res.status)
+  }
+  {
+    // ---------- v0.12 乐观并发 revision ----------
+    // 钉死三件事：相符⇒执行、过期⇒409 且**未执行**、缺席⇒放行。
+    // 「409 时动作未执行」是这条门的全部意义：冲突了还照做，等于没有门。
+    const okRes = stubResponse()
+    await byPath.get(ROUTE_PATHS.archive)!(
+      stubRequest('POST', ROUTE_PATHS.archive, ['{"reason":"测试","expectedRevision":"deadbeefcafe"}']),
+      okRes,
+    )
+    check('revision 相符时动作正常执行', okRes.status === 200 && okRes.body.includes('"ok":true'), okRes.body)
+
+    const staleRes = stubResponse()
+    await byPath.get(ROUTE_PATHS.archive)!(
+      stubRequest('POST', ROUTE_PATHS.archive, ['{"reason":"测试","expectedRevision":"stale0000000"}']),
+      staleRes,
+    )
+    check('revision 过期是 409', staleRes.status === 409, staleRes.status)
+    check('409 回传当前 revision 供重读', staleRes.body.includes('deadbeefcafe'), staleRes.body)
+    check('409 时动作未执行（响应体不含 ok:true）', !staleRes.body.includes('"ok":true'), staleRes.body)
+
+    const bareRes = stubResponse()
+    await byPath.get(ROUTE_PATHS.reenable)!(stubRequest('POST', ROUTE_PATHS.reenable, ['{"bundle":"dsh-x"}']), bareRes)
+    check('不带 revision 时放行（agent 主动修复路径）', bareRes.status === 200 && bareRes.body.includes('"ok":true'), bareRes.body)
+
+    // 顺序语义：请求本身不合法（缺参数）优先于「世界变了」—— 必错的请求
+    // 不该占用冲突判定，否则调用方会以为刷新一下就能成功。
+    const orderRes = stubResponse()
+    await byPath.get(ROUTE_PATHS.reenable)!(
+      stubRequest('POST', ROUTE_PATHS.reenable, ['{"expectedRevision":"stale0000000"}']),
+      orderRes,
+    )
+    check('缺参数的 400 优先于 revision 的 409', orderRes.status === 400, orderRes.status)
+
+    // currentRevision 缺席（无 webServer 的回落形态 / 旧桩）⇒ 跳过核对，
+    // 而不是把动作打成 500：可选能力缺席不拖垮主流程（本插件一贯纪律）。
+    const noRev = { ...ctx, currentRevision: undefined } as RouteContext
+    const byPathNoRev = new Map<string, (req: NodeRequest, res: NodeResponse) => Promise<void>>()
+    registerRoutes(noRev, {
+      register(route) {
+        byPathNoRev.set(route.path, route.handler as never)
+        return () => {}
+      },
+    })
+    const degradedRes = stubResponse()
+    await byPathNoRev.get(ROUTE_PATHS.archive)!(
+      stubRequest('POST', ROUTE_PATHS.archive, ['{"expectedRevision":"whatever"}']),
+      degradedRes,
+    )
+    check('currentRevision 缺席时动作照常执行（降级不失效）', degradedRes.status === 200, degradedRes.body)
   }
   {
     const failing = {

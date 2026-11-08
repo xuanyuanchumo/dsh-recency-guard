@@ -1,5 +1,6 @@
 import { renderOutcome, formatStatus, formatHistory, formatRecover, formatRestore, formatReenable, formatBackups, formatArchive, formatArchives, type ToolOutcome } from './tool-render.js'
-import type { Store } from './store.js'
+import type { Store, JournalEvent } from './store.js'
+import { auditEnvelope } from './change-guard.js'
 
 /**
  * `recency_guard` 工具的 action 分派（v0.8.1 从 index.ts 抽出）。
@@ -25,11 +26,45 @@ export interface ToolDispatchDeps {
   reenable(bundle: string): Promise<unknown>
   archiveReset(reason: string): Promise<unknown>
   archives(): Promise<unknown>
-  store: Pick<Store, 'readJournal' | 'listBackups' | 'listVersionedBackupBundles'>
+  store: Pick<Store, 'readJournal' | 'listBackups' | 'listVersionedBackupBundles' | 'append'>
 }
 
 /** handler 统一签名：args 已由调用方按 action 收窄。 */
 type Handler = (deps: ToolDispatchDeps, args: { bundle?: string; limit?: number; reason?: string }) => Promise<ToolOutcome>
+
+/** 会改变宿主状态的 action（v0.12 审计面）。
+ *
+ * 为什么只审计这几个：L4 全自主模式下人类只在**事后**看审计线，
+ * 所以要被记录的是「改了什么」，不是「读了什么」。把 status/history
+ * 也记进去会淹没信号（面板每 5s 轮询一次 = 频繁写日志），
+ * 而真正的崩溃因果链反而被冲掉。
+ */
+const MUTATING_ACTIONS = new Set(['recover', 'restore', 'reenable', 'archive'])
+
+/** 只读 action（不写 journal）。 */
+export function isMutatingAction(action: string): boolean {
+  return MUTATING_ACTIONS.has(action)
+}
+
+/**
+ * 审计行的 journal kind 选择：复用既有的 `note`，而不是新开 `'audit'`。
+ *
+ * 为什么：journal 的 kind 是一张**跨层词汇表**（store 的 JournalKind、
+ * observations 的 FlowAction、eventFlow 的渲染映射、面板的着色分组都要
+ * 跟着改）。新开一个 kind 而漏掉任一处，审计行就在事件流里**消失** ——
+ * 那条线比「少一个语义标签」危险得多。复用 note 保证它已经在所有
+ * 消费链路上；审计语义靠 detail 前缀 + 结构化 `audit` 字段表达。
+ * 真要独立成 kind，应当作为一次完整的词汇表演进单独做。
+ */
+function auditJournalEvent(action: string, args: { bundle?: string; reason?: string }): JournalEvent {
+  const envelope = auditEnvelope('tool', action, args.reason ?? args.bundle)
+  return {
+    kind: 'note',
+    detail: `审计 · ${envelope.actor}/${envelope.action} · ${envelope.justification}`,
+    // 结构化字段供后续按 actor/action 过滤（detail 是人读的，data 是机器读的）。
+    audit: { ...envelope, bundle: args.bundle ?? null },
+  }
+}
 
 /** action → handler 表。键的集合必须与工具 schema 的 enum 一致（契约测试核对）。 */
 export const TOOL_ACTIONS: Record<string, Handler> = {
@@ -53,11 +88,28 @@ export const TOOL_ACTIONS: Record<string, Handler> = {
 /**
  * 分派入口：未知 action 抛错（工具层语义：调用错误不是业务失败）。
  *
+ * 写动作先落一条**审计行再执行**（v0.12）：顺序是有意的 —— 崩溃发生在
+ * 执行中间时，「谁以什么理由发起了这件事」已经在盘上。反过来（先执行
+ * 后记录）会让最需要审计的那次失败恰好没有审计。
+ *
  * @returns 规范 ToolOutcome；渲染由 output.render 投影（命令窗口显示文本）。
  */
-export async function dispatchToolAction(deps: ToolDispatchDeps, action: string, args: { bundle?: string; limit?: number; reason?: string }): Promise<ToolOutcome> {
+export async function dispatchToolAction(
+  deps: ToolDispatchDeps,
+  action: string,
+  args: { bundle?: string; limit?: number; reason?: string },
+): Promise<ToolOutcome> {
   const handler = TOOL_ACTIONS[action]
   if (handler === undefined) throw new Error(`未知操作：${String(action)}`)
+  if (isMutatingAction(action)) {
+    // 审计行写失败**不阻塞**动作：它是可观测性设施，不该有否决守护动作的权力
+    // （CLAUDE.md：观测设施不拖垮守护流程）。
+    try {
+      await deps.store.append(auditJournalEvent(action, args))
+    } catch {
+      /* 降级：无审计行，但动作照做 */
+    }
+  }
   return handler(deps, args)
 }
 

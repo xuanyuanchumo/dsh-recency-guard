@@ -137,11 +137,37 @@ export function hitNodesOf(nodes: readonly GraphNode[]): Array<{ id: string; x: 
  * 再拿原边表过滤」的写法都会漏掉「端点是被隐藏类型」的情形，于是图上出现
  * 指向空气的箭头（v0.4 实测：隐藏缺口三角后仍有边连过去）。
  */
+/**
+ * 「只看关联」的范围档位。
+ *
+ * 为什么把档位做成枚举而不是数字输入框：数字输入要处理空值/负数/超大值，
+ * 而用户的真实问题只有两个 —— 「谁直接连着我」（1 跳）与
+ * 「我在这张图的哪个连通块里」（闭包）。2 跳是常用的中间档（链路排错）。
+ * 档位到跳数的映射在 `linkRangeHops`，UI 只显示档位文案。
+ */
+export type LinkRange = 'hops1' | 'hops2' | 'closure'
+
+/** 档位 → 跳数（闭包 = null，交给 `filterGraph` 走传递闭包）。 */
+export function linkRangeHops(range: LinkRange): number | null {
+  return range === 'closure' ? null : range === 'hops2' ? 2 : 1
+}
+
 export interface GraphFilter {
   /** 被隐藏的节点类型（空集 = 全显示）。 */
   hidden: ReadonlySet<string>
   /** 只保留与该节点双向可达的子图（null = 不过滤）。 */
   onlyConnectedWith: string | null
+  /**
+   * 「只看关联」的跳数上界（省略或 null = 传递闭包，即原有行为）。
+   *
+   * 为什么要上限：闭包在一张 40 节点的连通图上等于**不做任何过滤** ——
+   * 用户点「只看关联」却看到整张图，那个开关就成了摆设。BFS 的
+   * 「最少跳数」正好对应「直接相关」（1 跳＝邻居，2 跳＝邻居的邻居），
+   * 所以 UI 缺省给 1 跳而不是闭包；闭包保留成一个显式档位。
+   * 字段本身是**可选**的：省略 = 闭包 = 老行为，这样新增档位不会悄悄改变
+   * 任何没有传该字段的调用方（旧测试与旧组件因此零改动仍然成立）。
+   */
+  maxHops?: number | null
 }
 
 export function filterGraph(
@@ -151,13 +177,64 @@ export function filterGraph(
 ): { nodes: GraphNode[]; edges: GraphEdge[] } {
   // 可达集用**全部边**计算：关联性是图的客观事实，不该被当前的类型过滤改变，
   // 否则「只看关联」会在用户切换图例时改变含义（同一个开关两种语义）。
-  const linked = filter.onlyConnectedWith === null ? null : traceFrom(filter.onlyConnectedWith, edges, 'both')
+  // 档位缺省（省略 = undefined）走**闭包**，与新增该字段前的行为逐字节一致。
+  const hops = filter.maxHops ?? null
+  const linked =
+    filter.onlyConnectedWith === null
+      ? null
+      : hops === null
+        ? traceFrom(filter.onlyConnectedWith, edges, 'both')
+        : kHopNeighborhood(filter.onlyConnectedWith, edges, hops)
   const keptNodes = nodes.filter(
     (node) => !filter.hidden.has(node.kind) && (linked === null || linked.has(node.id)),
   )
   const keptIndex = buildNodeIndex(keptNodes)
   const keptEdges = edges.filter((edge) => keptIndex.has(edge.from) && keptIndex.has(edge.to))
   return { nodes: keptNodes, edges: keptEdges }
+}
+
+/**
+ * k 跳邻域 —— 从起点出发、双向、跳数不超过 k 的节点集（含起点自己）。
+ *
+ * 为什么不是 `traceFrom`（传递闭包）：闭包没有「远近」概念，在连通图上
+ * 会把整张图收进来；分层 BFS 天然给出跳数，能按 k 截断。
+ * 复杂度 **O(V + E)**：每个节点最多入队一次（visited 在入队时标记，
+ * 不是出队时 —— 否则同一节点会按不同路径重复入队，退化成 O(E)×队列）。
+ */
+export function kHopNeighborhood(
+  startId: string,
+  edges: ReadonlyArray<{ from: string; to: string }>,
+  hops: number,
+): Set<string> {
+  const visited = new Set<string>([startId])
+  const depth = Math.floor(hops)
+  if (!(depth > 0)) return visited
+  const adjacency = new Map<string, string[]>()
+  const push = (from: string, to: string): void => {
+    const list = adjacency.get(from)
+    if (list) list.push(to)
+    else adjacency.set(from, [to])
+  }
+  for (const edge of edges) {
+    // 双向：「谁生产给我」和「我生产给谁」都是关联，方向已由边粗细与箭头表达。
+    push(edge.from, edge.to)
+    push(edge.to, edge.from)
+  }
+  let frontier: string[] = [startId]
+  for (let d = 0; d < depth; d += 1) {
+    const next: string[] = []
+    for (const id of frontier) {
+      for (const neighbor of adjacency.get(id) ?? []) {
+        if (visited.has(neighbor)) continue
+        visited.add(neighbor)
+        next.push(neighbor)
+      }
+    }
+    frontier = next
+    // 提前收敛：图比 k 小，继续循环只是空转（几十节点规模上也省下分配）。
+    if (frontier.length === 0) break
+  }
+  return visited
 }
 
 /** 世界边界（供 fit / 平移钳制）。空图返回零矩形而不是 ±Infinity。 */
@@ -213,6 +290,101 @@ export function degreeOf(id: string, edges: readonly Pick<GraphEdge, 'from' | 't
     if (edge.from === id) outgoing += 1
   }
   return { in: incoming, out: outgoing }
+}
+
+/**
+ * 全图度数表（id → 总度数），**一次遍历** O(V + E)。
+ *
+ * 为什么不要在渲染循环里逐条调 `degreeOf`：`degreeOf` 每次都是 O(E) 的扫描，
+ * 在「每条边都要查端点度数」的循环里就是 O(V·E) —— 本仓库已为同款问题
+ * 写过两次实测债注释（`connectedComponents` 的孤立判定、`buildNodeIndex`）。
+ */
+export function degreeTally(edges: readonly Pick<GraphEdge, 'from' | 'to'>[]): Map<string, number> {
+  const tally = new Map<string, number>()
+  for (const edge of edges) {
+    tally.set(edge.from, (tally.get(edge.from) ?? 0) + 1)
+    // 自环两端都记：度数表达「这条边连着谁」，与 `degreeOf` 的口径一致。
+    tally.set(edge.to, (tally.get(edge.to) ?? 0) + 1)
+  }
+  return tally
+}
+
+/**
+ * 一条边的「连接强度」= 两端点度数之和。
+ *
+ * 为什么不用单边（恒为 1）或只取一端的度数：一条边的重要程度由**两端合计**
+ * 决定 —— 连到枢纽的那条线承载的关系，和两个孤立节点之间的线不是一回事。
+ * 两端都是度 1 的叶子 ⇒ 和为 2，这正是本编码的下界（见 `maxEdgeDegreeSum`）。
+ */
+export function edgeDegreeSum(tally: ReadonlyMap<string, number>, edge: Pick<GraphEdge, 'from' | 'to'>): number {
+  return (tally.get(edge.from) ?? 0) + (tally.get(edge.to) ?? 0)
+}
+
+/** 度数之和的下界：两个叶子（度各 1）相连。 */
+export const EDGE_DEGREE_SUM_MIN = 2
+
+/**
+ * 视觉编码的参考上界（度数之和）。
+ *
+ * 为什么用**固定**参考而不是取「当前图上的最大值」：相对刻度会让每条边的
+ * 粗细随数据变化整体重排 —— 轮询多来一条边，所有既有边的视觉含义都变了
+ * （「粗线」不再对应「20 度枢纽」，而是「本图恰好最粗的那条」）。
+ * 这与本仓库「布局必须是确定性投影」的同一条纪律冲突。
+ * 固定刻度下「粗」在任何一张图上说的是同一件事；超过参考值的部分
+ * 饱和在最粗档，这是**诚实的饱和**（精确度数仍在 tooltip 与详情侧栏里）。
+ */
+export const EDGE_DEGREE_SUM_MAX = 20
+
+/**
+ * 对数刻度归一化：`log1p(value) / log1p(domainMax)`，落在 [0,1]。
+ *
+ * 为什么必须对数而不是线性：枢纽节点（`guard.observe` 这种）度数能到 20+，
+ * 而多数节点只有 1~2。线性映射下「最粗的那条线」会把其余全部压成细线，
+ * 视觉差异恰好落在用户要看的那一段（1 与 2 的差别）上消失；
+ * log1p 让 1→2 与 10→20 的视觉增量可比。
+ *
+ * 边界契约（两条都对应可测的缺陷形态）：
+ * - `value ≤ 0` ⇒ 0：下界，绝不返回负数（负 stroke-width 在 SVG 里不渲染）。
+ * - `domainMax ≤ 0` ⇒ 0：没有可比性时**不制造假差异**。
+ * - 超出 domainMax ⇒ 1（饱和），由调用方负责把饱和说出来。
+ */
+export function logScale(value: number, domainMax: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0
+  if (!Number.isFinite(domainMax) || domainMax <= 0) return 0
+  return Math.min(1, Math.log1p(value) / Math.log1p(domainMax))
+}
+
+/** 边宽的下界（不得细过中性边的既有观感）与上界（粗到能压住卡片就是噪声）。 */
+export const EDGE_WIDTH_MIN = 1.2
+export const EDGE_WIDTH_MAX = 3.4
+
+/**
+ * 一条边的视觉宽度：强度**超出下界的部分** → 固定参考刻度 → [min,max] 像素。
+ *
+ * 两个设计决定，各自对应一个真实缺陷形态：
+ * 1. **减去下界**而不是直接用原始值：归一化的自变量必须是「比最弱的连接强
+ *    多少」。否则全图只有一条边时那条叶子线就是「最大值」，会被画成最粗
+ *    （假信号 —— 用户会以为它是最重要的链路）。
+ * 2. **参考上界固定**（`EDGE_DEGREE_SUM_MAX`）而不是取当前图最大值：相对刻度
+ *    会让每条边的粗细随数据整体重排，轮询多一条边就改变所有既有线的含义。
+ *    超过参考值的部分饱和在最粗档；精确度数在 tooltip 与详情侧栏始终可读，
+ *    所以饱和丢失的不是事实，只是视觉分辨率。
+ */
+export function edgeWidthOf(
+  tally: ReadonlyMap<string, number>,
+  edge: Pick<GraphEdge, 'from' | 'to'>,
+  referenceMax = EDGE_DEGREE_SUM_MAX,
+  minPx = EDGE_WIDTH_MIN,
+  maxPx = EDGE_WIDTH_MAX,
+): number {
+  const excess = edgeDegreeSum(tally, edge) - EDGE_DEGREE_SUM_MIN
+  const domainExcess = referenceMax - EDGE_DEGREE_SUM_MIN
+  const raw = minPx + (maxPx - minPx) * logScale(excess, domainExcess)
+  // 显式夹回区间：`min + (max-min) * 1` 在浮点下会溢出上界
+  // （1.2 + 2.2*1 = 3.4000000000000004）。差 4e-16 肉眼看不见，但「声明
+  // 了上界就可能越界」这件事本身会让任何对上界做断言/取 max 的下游代码
+  // 出错 —— 契约要在位的级别成立，否则它就不是契约。
+  return Math.min(maxPx, Math.max(minPx, raw))
 }
 
 /**
@@ -422,6 +594,57 @@ export function withLayout(
       y: offset ? base.y + offset.y : base.y,
     }
   })
+}
+
+/**
+ * 邻格候选 —— 键盘方向键的落点。
+ *
+ * 为什么不是「图上的邻居」：这是**二维**导航（Tab 是一维的，走不完一张
+ * 有行的网格），方向键必须在画布坐标上找下一个节点。规则是
+ * 「方向半平面里、垂直偏移最小者」，再拿垂直容差筛掉「斜得离谱」的候选：
+ * - 只按欧氏距离选，长图里「向右」会跳到下一列的第一行（哪怕它在最上面）；
+ * - 只按行匹配选，行与行之间高度不齐时会跳不动（找不到同行的邻居）。
+ * 两者取交集：优先「同一横带里最近的」，横带里没有人再退到半平面最近。
+ * 返回 null 表示该方向到头了（焦点留在原地，绝不把焦点丢回容器）。
+ */
+export function directionalCandidate(
+  from: { x: number; y: number },
+  direction: 'left' | 'right' | 'up' | 'down',
+  candidates: ReadonlyArray<{ id: string; x: number; y: number }>,
+): string | null {
+  const horizontal = direction === 'left' || direction === 'right'
+  // 屏幕坐标系 y 轴向下：右 / 下 是正方向，左 / 上 是负方向。
+  // （写成「left || down」是本类缺陷的高发点 —— 直觉上「下」像负方向，
+  //  但在屏幕坐标里它恰恰是正方向；搞反会让方向键整体反向且只有一半人发现。）
+  const sign = direction === 'left' || direction === 'up' ? -1 : 1
+  // 只有严格在「前方」的节点才算候选；同坐标（重叠卡片）不算前进。
+  const ahead = candidates.filter((node) => {
+    const delta = horizontal ? node.x - from.x : node.y - from.y
+    return delta * sign > 0
+  })
+  if (ahead.length === 0) return null
+  // 垂直偏移：横向移动时看 dy，纵向移动时看 dx。
+  const crossOf = (node: { x: number; y: number }): number =>
+    Math.abs(horizontal ? node.y - from.y : node.x - from.x)
+  const alongOf = (node: { x: number; y: number }): number =>
+    Math.abs((horizontal ? node.x - from.x : node.y - from.y) * sign)
+  const bestCross = Math.min(...ahead.map(crossOf))
+  // 容差：一个卡片厚度（横向）/ 行间距的一半（纵向）。够宽才能「跨行找人」，
+  // 又不至于把整条对角线当成同一带。
+  const tolerance = Math.max(bestCross, horizontal ? NODE_HEIGHT : NODE_WIDTH / 2)
+  const band = ahead.filter((node) => crossOf(node) <= tolerance)
+  const pool = band.length > 0 ? band : ahead
+  let best = pool[0]
+  if (!best) return null
+  let bestScore = alongOf(best) * 4 + crossOf(best)
+  for (const node of pool) {
+    const score = alongOf(node) * 4 + crossOf(node)
+    if (score < bestScore) {
+      best = node
+      bestScore = score
+    }
+  }
+  return best?.id ?? null
 }
 
 /* ---------- 展示辅助 ---------- */

@@ -20,6 +20,21 @@ export const API_PREFIX = '/recency-guard/api'
 export interface FetchFailure {
   ok: false
   reason: string
+  /**
+   * HTTP 状态码（网络异常/解析失败时缺席）。
+   * 有它面板才能区分「数据面没起来」和「你的请求被拒了」。
+   */
+  status?: number
+  /**
+   * 宿主的机器可读拒绝原因（v0.12：目前只有 `stale-revision`）。
+   *
+   * 为什么要单独一个字段而不是塞进 reason 文案：面板要据此决定
+   * **下一步动作**（重读快照 vs 显示错误），而文案是给人读的、随时会改。
+   * 分支逻辑挂在文案上 = 一次改文案就悄悄退化成一个 bug。
+   */
+  conflict?: string
+  /** 冲突时宿主回传的当前凭证（供调用方带新值重试）。 */
+  current?: string
 }
 
 /** 拉取成功的结果。 */
@@ -63,7 +78,26 @@ async function fetchJson(url: string, init?: RequestInit): Promise<FetchResult<u
       headers: { accept: 'application/json', ...(init?.headers ?? {}) },
     })
     if (!response.ok) {
-      return { ok: false, reason: `HTTP ${response.status}` }
+      // 409 的冲突语义在**响应体**里（reason/current/conflict）—— 此前这里
+      // 直接写死 `HTTP ${status}` 把 body 丢了，面板就只能看到「请求失败了」
+      // 而拿不到「当前 revision 是什么」，乐观并发的「重读再决定」闭环断在客户端。
+      // 非 2xx 也要尽力解析 body：解析失败才退回状态码文案。
+      let detail: Record<string, unknown> | null = null
+      try {
+        const parsed: unknown = await response.json()
+        if (typeof parsed === 'object' && parsed !== null) detail = parsed as Record<string, unknown>
+      } catch {
+        detail = null
+      }
+      const reason =
+        typeof detail?.reason === 'string' && detail.reason.length > 0 ? detail.reason : `HTTP ${response.status}`
+      return {
+        ok: false,
+        reason,
+        status: response.status,
+        ...(typeof detail?.conflict === 'string' ? { conflict: detail.conflict } : {}),
+        ...(typeof detail?.current === 'string' ? { current: detail.current } : {}),
+      }
     }
     const payload: unknown = await response.json()
     // 宿主在拿不到数据时返回 `{available:false, reason}`。

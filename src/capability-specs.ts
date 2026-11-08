@@ -53,6 +53,8 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
       'guard.recover.evidence',
       'guard.decide.suspects',
       'guard.govern.archive',
+      // 凭证派生要读 journal 尾部（同一份事实变化 ⇒ 同一枚 revision）。
+      'guard.govern.revision',
     ],
     stage: 'monitoring',
     exposed: false,
@@ -84,6 +86,8 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
       'guard.govern.isolation',
       'guard.govern.archive',
       'guard.tool.status',
+      // 凭证的两个输入之一（crashSeq / stabilized / restored 都在 state 里）。
+      'guard.govern.revision',
     ],
     stage: 'monitoring',
     exposed: false,
@@ -139,6 +143,8 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
       'guard.present.panel',
       'guard.tool.status',
       'guard.decide.risk',
+      // 决策文件的 disable 名单是凭证的输入（拦截真值变了 ⇒ 凭证必须变）。
+      'guard.govern.revision',
     ],
     stage: 'deciding',
     exposed: false,
@@ -187,7 +193,7 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
     summary: '稳定后重新启用非首要嫌疑插件',
     produces: 'state',
     carrier: 'tool',
-    consumes: ['guard.recover.evidence'],
+    consumes: ['guard.recover.evidence', 'guard.govern.revision'],
     // 方向铁律（CLAUDE.md）：consumes = 我消费谁；consumedBy = 谁消费我。
     // 管理面板会展示并触发 restore，所以「我」被面板消费 —— 这条必须写在
     // consumedBy 上。清单原文两侧都要写全：buildCapabilityGraph 会补镜像，
@@ -208,7 +214,7 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
     summary: '把某个插件重新打开，并报告是否存在配置备份',
     produces: 'state',
     carrier: 'tool',
-    consumes: ['guard.recover.evidence'],
+    consumes: ['guard.recover.evidence', 'guard.govern.revision'],
     consumedBy: [],
     stage: 'recovered',
     exposed: true,
@@ -223,7 +229,7 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
     summary: '立即按最近更新执行一次恢复关闭',
     produces: 'decision',
     carrier: 'tool',
-    consumes: ['guard.decide.suspects'],
+    consumes: ['guard.decide.suspects', 'guard.govern.revision'],
     consumedBy: [],
     stage: 'deciding',
     exposed: true,
@@ -255,7 +261,7 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
     summary: '归档产物后按最新事实重跑自举（不继承旧结论）',
     produces: 'state',
     carrier: 'tool',
-    consumes: ['guard.govern.archive', 'guard.observe.state'],
+    consumes: ['guard.govern.archive', 'guard.observe.state', 'guard.govern.revision'],
     consumedBy: [],
     stage: 'recovered',
     exposed: true,
@@ -277,6 +283,28 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
     exposedAs: 'recency-guard.isolation',
     hostServices: ['webServer', 'profileContext'],
   },
+  {
+    id: 'guard.govern.revision',
+    title: '乐观并发凭证',
+    summary: '从写状态派生 revision；动作携带过期凭证时被 409 拦下，不执行',
+    // produces 'state'：revision 不是新事实，而是 state + decision + journal 尾部
+    // 的**投影**（哈希）。把它登记成独立事实种类会让「谁生产了状态」这个问题
+    // 出现两个答案，契约层的过度生产判定也就失去意义。
+    produces: 'state',
+    carrier: 'remote',
+    // 内部能力（exposed:false）：它没有自己的 HTTP 面 —— 凭证随面板快照下发，
+    // 核对发生在**别人的**动作路由里。因此它靠消费关系表达，而不是靠暴露名。
+    consumes: ['guard.observe.state', 'guard.observe.journal', 'guard.decide.suspects'],
+    consumedBy: [
+      'guard.present.panel',
+      'guard.recover.restore',
+      'guard.recover.reenable',
+      'guard.recover.manual',
+      'guard.govern.reset',
+    ],
+    stage: 'monitoring',
+    exposed: false,
+  },
 
   // ---------- 展示面 ----------
   {
@@ -295,6 +323,8 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
       'guard.recover.restore',
       'guard.govern.archive',
       'guard.govern.isolation',
+      // 面板显示 revision 并在动作请求里回传它 —— 凭证的消费方之一。
+      'guard.govern.revision',
     ],
     consumedBy: [],
     stage: 'monitoring',

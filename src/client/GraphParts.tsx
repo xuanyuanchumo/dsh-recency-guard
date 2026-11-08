@@ -1,7 +1,20 @@
 import type { ReactElement } from 'react'
+import { useRef } from 'react'
 import { t } from './i18n.ts'
 import type { GraphNode } from '../../src/graph-data.ts'
-import { KIND_ORDER, kindKey, legendColorOf, legendShapeOf, shapePath, type ColorMode, type LayoutMode, type EdgeDetail } from './graph-model.ts'
+import {
+  KIND_ORDER,
+  kindKey,
+  legendColorOf,
+  legendShapeOf,
+  shapePath,
+  type ColorMode,
+  type LayoutMode,
+  type EdgeDetail,
+  type LinkRange,
+} from './graph-model.ts'
+// 小地图类型来自 minimap-model（v0.12 拆分，保持 graph-model 在复杂度预算内）。
+import type { MinimapNodeRect, MinimapViewportRect } from './minimap-model.ts'
 
 /**
  * 图谱的**展示层**部件 —— 只接收已经算好的事实，不含任何派生逻辑。
@@ -26,11 +39,20 @@ export interface GraphToolbarProps {
   canReset: boolean
   query: string
   onQuery: (value: string) => void
+  /** 结果列表的**当前窗口**（排名连续，且必定容得下当前命中）。 */
   matches: GraphNode[]
+  /** 全部命中数（指示器的分母；`matches.length` 只是窗口大小，不能当总数）。 */
+  matchTotal: number
+  /** 被省略的命中数（>0 ⇒ 必须给出「省略 N 条 + 展开」，不许静默截断）。 */
+  matchOmitted: number
+  /** 当前命中的**真实序数**（1 基；0 = 无命中）。窗口会滑动，用窗口下标就会
+   *  把「第 12 个」报成「第 8 个」—— 数字必须来自全量而非窗口。 */
+  matchOrdinal: number
+  /** 当前命中的 id（比下标更稳：窗口滑动、类型过滤、节点增减都不会让高亮错位）。 */
+  currentMatchId: string | null
+  onToggleResults: () => void
   onLocate: (id: string) => void
-  /** 当前遍历游标（回车循环跳转的第 n 个匹配）。 */
-  matchIndex: number
-  /** 请求下一个匹配（回车；循环取模由面板/图谱侧完成）。 */
+  /** 请求下一个匹配（回车；取模与窗口滑动在图谱侧由 searchSummary 完成）。 */
   onMatchNext: () => void
   counts: Record<string, number>
   hidden: ReadonlySet<string>
@@ -38,12 +60,19 @@ export interface GraphToolbarProps {
   onlyConnected: boolean
   onToggleConnected: () => void
   connectedAvailable: boolean
+  /** 「只看关联」的跳数档位（仅在开关打开时显示；见 GraphToolbar 里的档位条）。 */
+  linkRange: LinkRange
+  onLinkRange: (range: LinkRange) => void
+  /** 小地图开关（概览导航）。 */
+  minimapVisible: boolean
+  onToggleMinimap: () => void
   /** 全部可见节点（图例的代表形状从实际数据导出，不复制映射 —— 单一真相源）。 */
   allNodes: GraphNode[]
 }
 
 const LAYOUT_MODES: readonly LayoutMode[] = ['layered', 'radial']
 const COLOR_MODES: readonly ColorMode[] = ['tone', 'kind', 'stage']
+const LINK_RANGES: readonly LinkRange[] = ['hops1', 'hops2', 'closure']
 
 export function GraphToolbar(props: GraphToolbarProps): ReactElement {
   return (
@@ -70,7 +99,10 @@ export function GraphToolbar(props: GraphToolbarProps): ReactElement {
           onKeyDown={(event) => {
             // 回车循环遍历（v0.11）：多匹配时依次跳转而不是永远停在第一个。
             // 游标由面板持有（locateMatch），这里只报告「用户又要下一个」。
-            if (event.key === 'Enter' && props.matches.length > 0) {
+            // 守卫用 matchTotal 而不是 matches.length：matches 是**窗口**，
+            // 窗口为 0（显示上限被改成 0，或结果全部被折叠）时全量命中依然存在，
+            // 用窗口长度会把 Enter 悄悄禁用 —— 快捷键失效比少一行列表严重。
+            if (event.key === 'Enter' && props.matchTotal > 0) {
               event.preventDefault?.()
               props.onMatchNext()
             }
@@ -83,28 +115,43 @@ export function GraphToolbar(props: GraphToolbarProps): ReactElement {
         />
         {props.query.trim() !== '' && (
           <ul className="rg-search-results" role="listbox" aria-label={t('graph.searchResults')}>
-            {props.matches.length === 0 ? (
+            {/* 空态判定同样用 matchTotal：matches 是窗口，窗口空但全量非空时
+                说「没有匹配的节点」是一句假话（而它是唯一会被用户读到的结论）。 */}
+            {props.matchTotal === 0 ? (
               <li className="rg-search-noresult">{t('graph.noResults')}</li>
             ) : (
-              props.matches.map((node, index) => (
-                <li key={node.id}>
-                  <button
-                    type="button"
-                    onClick={() => props.onLocate(node.id)}
-                    aria-current={index === props.matchIndex}
-                  >
-                    <span className={`rg-dot rg-dot-${node.tone}`} aria-hidden />
-                    {node.label}
-                  </button>
-                </li>
-              ))
+              <>
+                {props.matches.map((node) => (
+                  <li key={node.id}>
+                    <button
+                      type="button"
+                      onClick={() => props.onLocate(node.id)}
+                      aria-current={node.id === props.currentMatchId}
+                    >
+                      <span className={`rg-dot rg-dot-${node.tone}`} aria-hidden />
+                      {node.label}
+                    </button>
+                  </li>
+                ))}
+                {/* 省略计数 + 展开：此前数据层就只给 8 条，用户永远不会知道
+                    还有第 9 个匹配存在（「报 N 只列 5」的同款缺陷）。 */}
+                {props.matchOmitted > 0 && (
+                  <li className="rg-search-omitted">
+                    <button type="button" className="rg-link" onClick={props.onToggleResults}>
+                      {t('graph.searchMore', { count: props.matchOmitted })}
+                    </button>
+                  </li>
+                )}
+              </>
             )}
           </ul>
         )}
-        {/* 第 n/m 指示：多匹配时用户必须知道自己在遍历的第几个。 */}
-        {props.query.trim() !== '' && props.matches.length > 1 && (
+        {/* 第 n/m 指示：分母必须是**全量命中数**、分子必须是**真实序数**。
+            用 matches.length 会把「匹配 20 个」显示成「第 1/8 个」—— 一句可验证
+            的假话；用窗口下标则会在窗口滑动后把第 12 个报成第 8 个。 */}
+        {props.query.trim() !== '' && props.matchTotal > 1 && (
           <span className="rg-search-index" role="status">
-            {t('graph.matchIndex', { index: props.matchIndex + 1, total: props.matches.length })}
+            {t('graph.matchIndex', { index: props.matchOrdinal, total: props.matchTotal })}
           </span>
         )}
       </span>
@@ -122,6 +169,19 @@ export function GraphToolbar(props: GraphToolbarProps): ReactElement {
         onSelect={(value) => props.onColorMode(value as ColorMode)}
       />
 
+      {/* 「只看关联」的范围档位（v0.11.5）。
+          此前这个开关只有二值且语义是传递闭包：在一张连通的 40 节点图上，
+          闭包 = 整张图，于是按钮按下后画面毫无变化 —— 它是个摆设。
+          档位把「直接相关 / 链路 / 全连通」三种真实问题分开，切换才看得见差别。 */}
+      {props.onlyConnected && (
+        <Segmented
+          label={t('graph.linkRange.label')}
+          options={LINK_RANGES.map((range) => ({ value: range, label: t(`graph.linkRange.${range}`) }))}
+          active={props.linkRange}
+          onSelect={(value) => props.onLinkRange(value as LinkRange)}
+        />
+      )}
+
       <button
         type="button"
         className={`rg-button rg-button-small${props.onlyConnected ? ' rg-button-active' : ''}`}
@@ -131,6 +191,16 @@ export function GraphToolbar(props: GraphToolbarProps): ReactElement {
         title={t('graph.onlyConnectedHint')}
       >
         {t('graph.onlyConnected')}
+      </button>
+
+      <button
+        type="button"
+        className={`rg-button rg-button-small${props.minimapVisible ? ' rg-button-active' : ''}`}
+        onClick={props.onToggleMinimap}
+        aria-pressed={props.minimapVisible}
+        title={t('graph.minimapHint')}
+      >
+        {t('graph.minimap')}
       </button>
 
       <button
@@ -328,6 +398,133 @@ export function edgeKindKey(kind: EdgeDetail['kind']): string {
     default:
       return 'graph.edgeRanks'
   }
+}
+
+/**
+ * 小地图（Overview + 缩略导航）—— 纯展示：所有矩形由 graph-model 的投影算好传来。
+ *
+ * 为什么值得有它：图谱能缩到 0.25，一张 60 节点的图缩到底之后用户只剩
+ * 「一团」，没有任何参照回答「我在哪、还有多少没看」。小地图把这件事
+ * 变成一块 152×96 的常驻画面，并且**可点可拖** —— 拖框即平移，不需要先放大再找。
+ *
+ * 三条实现纪律：
+ * - 只做投影不做逻辑：矩形、视口框都来自 graph-model 的纯函数（可单测）。
+ * - 交互走 pointer capture：否则指针滑出小地图就断掉拖拽，框会「粘住」。
+ * - 键盘可达性**不靠它**：小地图是鼠标捷径（`role="img"` + 说明文字），
+ *   等价的键盘路径是画布上的方向键 + 搜索定位。把 SVG 做成可 Tab 的
+ *   「控件」反而更糟：读屏会播报一个只能说出坐标、不能用键操作的假按钮。
+ *   这条边界要说清楚，别在注释里写「aria-hidden 的都有等价入口」这种
+ *   本组件并不成立的话。
+ */
+export interface GraphMinimapProps {
+  width: number
+  height: number
+  /** 节点矩形（已投影到小地图坐标）。 */
+  rects: MinimapNodeRect[]
+  /** 当前视口框（已投影）。 */
+  view: MinimapViewportRect
+  /** 导航请求：参数是**小地图本地坐标**（换算成世界坐标由调用方用闭式逆投影完成）。 */
+  onNavigate: (point: { x: number; y: number }) => void
+  /** 选中节点在小地图里的方块（null = 没有选中；用户仍想知道它在整张图的哪个方向）。
+   *  只取几何：小地图上的焦点环不携带 fill（颜色通道已由节点方块用掉）。 */
+  focusRect: Pick<MinimapNodeRect, 'x' | 'y' | 'w' | 'h'> | null
+}
+
+export function GraphMinimap({ width, height, rects, view, focusRect, onNavigate }: GraphMinimapProps): ReactElement {
+  const svgRef = useRef<SVGSVGElement | null>(null)
+  const draggingRef = useRef(false)
+
+  /** 客户端坐标 → 小地图坐标（svg 等比缩放，用 getBoundingClientRect 换算）。 */
+  const localPoint = (clientX: number, clientY: number): { x: number; y: number } => {
+    const box = svgRef.current?.getBoundingClientRect()
+    if (!box || box.width === 0 || box.height === 0) return { x: 0, y: 0 }
+    return { x: ((clientX - box.left) / box.width) * width, y: ((clientY - box.top) / box.height) * height }
+  }
+
+  // 事件**必须**拦在这里往外冒泡：小地图渲染在 .rg-graph-viewport 内部，
+  // 而那个容器上有 onPointerDown（拖画布平移）与 onClick（点空白清选中）。
+  // 不拦的结果是两个都发生：拖小地图的同时画布也被拖着平移（两套坐标系
+  // 互相拉扯，框会抖动漂移），抬手那一刻还会触发容器 click ⇒ 刚选中的节点
+  // 被清空。这类「子控件被父容器的通用手势吃掉」是嵌套交互控件的头号缺陷。
+  return (
+    <svg
+      ref={svgRef}
+      className="rg-minimap"
+      viewBox={`0 0 ${width} ${height}`}
+      width={width}
+      height={height}
+      role="img"
+      aria-label={t('graph.minimap')}
+      onPointerDown={(event) => {
+        event.stopPropagation()
+        draggingRef.current = true
+        event.currentTarget.setPointerCapture?.(event.pointerId)
+        onNavigate(localPoint(event.clientX, event.clientY))
+      }}
+      onPointerMove={(event) => {
+        event.stopPropagation()
+        if (!draggingRef.current) return
+        onNavigate(localPoint(event.clientX, event.clientY))
+      }}
+      onPointerUp={(event) => {
+        event.stopPropagation()
+        draggingRef.current = false
+        event.currentTarget.releasePointerCapture?.(event.pointerId)
+      }}
+      onPointerCancel={(event) => {
+        event.stopPropagation()
+        draggingRef.current = false
+      }}
+      onClick={(event) => {
+        // 小地图的点击不是「画布空白」：不能让容器的清选中逻辑跟着跑。
+        event.stopPropagation()
+      }}
+      onDoubleClick={(event) => event.stopPropagation()}
+    >
+      {rects.map((rect) => (
+        <rect
+          key={rect.id}
+          x={rect.x}
+          y={rect.y}
+          width={rect.w}
+          height={rect.h}
+          rx={1}
+          fill={rect.fill}
+          fillOpacity={0.75}
+        />
+      ))}
+      {/* 视口框：描边不加填充 —— 填充会把底下的节点方块盖成一片，
+          而「哪块没被框住」正是用户要看的信息。
+          全览态（zoomedOut）由模型层返回「铺满整块画布」的框，因此这里
+          不需要条件渲染：不画框会让用户以为小地图坏了，铺满才是诚实表达。 */}
+      <rect
+        className={`rg-minimap-view${view.zoomedOut ? ' rg-minimap-view-all' : ''}`}
+        x={view.x}
+        y={view.y}
+        width={Math.max(4, view.w)}
+        height={Math.max(4, view.h)}
+        rx={2}
+        fill="none"
+        stroke="var(--dsw-alias-brand-primary)"
+        strokeWidth={1.5}
+      />
+      {/* 选中节点的方块：小地图同时回答「我选中了什么、它在整张图的哪里」——
+          此前这个问题只在主画布可见区内有答案（选中的节点被滚出视野就消失了）。 */}
+      {focusRect !== null && (
+        <rect
+          className="rg-minimap-focus"
+          x={focusRect.x}
+          y={focusRect.y}
+          width={Math.max(3, focusRect.w)}
+          height={Math.max(2, focusRect.h)}
+          rx={1}
+          fill="none"
+          stroke="var(--dsw-alias-state-warn-primary)"
+          strokeWidth={1.5}
+        />
+      )}
+    </svg>
+  )
 }
 
 /** 悬停浮层 —— 鼠标停在节点上时显示被卡片截断的完整事实。 */

@@ -4,6 +4,7 @@ import type { GuardStage, StageTransition } from './lifecycle.js'
 import { ALL_STAGES } from './lifecycle.js'
 import { computeMetrics, rankHazards, type MetricsSnapshot, type Observation, type RankedRisk } from './observability.js'
 import { deriveEventFlow, type FlowEvent } from './observations.js'
+import { computeRevision } from './change-guard.js'
 import { markovAnalysis, type MarkovAnalysis } from './markov.js'
 import { STAGE_LABELS, buildGraphData, connectedComponents, type GraphData, type GraphNode } from './graph-data.js'
 import { readPartitionIndex, type PartitionIndex } from './isolation.js'
@@ -83,6 +84,16 @@ export interface PanelSnapshot {
   }
   /** 项目分区列表（隔离可见性）。 */
   partitions: Array<{ key: string; label: string; workspace: string; lastSeenAt: string }>
+  /**
+   * 写状态的乐观并发凭证（v0.12）。
+   *
+   * 为什么放在快照里：面板每 5s 轮询一次快照，用户点「重新启用」时依据的
+   * 就是这张快照。带上 revision，动作请求才能回传「我是按哪份事实做的决定」；
+   * 宿主比对不符就 409，而不是按一张过期地图执行破坏性动作。
+   * 由 change-guard.computeRevision 从 state+decision+journal 尾部派生
+   * （哈希而非计数器 ⇒ 崩溃重启后同一事实必得同一枚 revision）。
+   */
+  revision: string
   /** 已恢复的插件。 */
   restored: string[]
   /** 自动关闭的插件。 */
@@ -185,6 +196,21 @@ export interface SnapshotInput {
     repositoryUrl: string | null
     issuesUrl: string | null
   }
+  /**
+   * revision 派生所需的写状态事实（v0.12）。
+   *
+   * 为什么给输入而不是给输出：`revision` 必须是**派生值**（投影），
+   * 而不是调用方随手传进来的字符串 —— 否则「快照说 revision=X
+   * 但事实早已变」这种漂移就无法在结构上排除。
+   * autoDisabled / restored 已经在输入里，这里只补三样：
+   * 崩溃计数、决策名单真值、journal 尾部时间戳。
+   */
+  revisionFacts: {
+    crashSeq: number
+    stabilized: boolean
+    decisionDisable: readonly string[]
+    journalTail: string
+  }
 }
 
 /**
@@ -249,6 +275,16 @@ export function buildPanelSnapshot(input: SnapshotInput, now = Date.now()): Pane
     })),
     restored: [...input.restored],
     autoDisabled: input.autoDisabled.map((d) => ({ ...d })),
+    // revision 是**派生**的：从同一份事实重算必得同一枚值（哈希而非计数器），
+    // 所以它不需要持久化位点，也不会在崩溃后说谎。
+    revision: computeRevision({
+      crashSeq: input.revisionFacts.crashSeq,
+      stabilized: input.revisionFacts.stabilized,
+      decisionDisable: input.revisionFacts.decisionDisable,
+      journalTail: input.revisionFacts.journalTail,
+      autoDisabled: input.autoDisabled.map((d) => d.name),
+      restored: input.restored,
+    }),
     recentEvents: input.recentEvents.slice(-24).map((e) => ({ ...e })),
     eventFlow: deriveEventFlow(input.recentEvents, input.transitions, EVENT_FLOW_LIMIT),
     markov: markovAnalysis(input.transitions),

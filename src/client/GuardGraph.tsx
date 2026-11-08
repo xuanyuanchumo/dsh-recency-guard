@@ -7,10 +7,12 @@ import {
   centerOn,
   clampPan,
   fitToView,
+  isWorldPointVisible,
   matchNodes,
   panBy,
   pinchViewport,
   screenToWorld,
+  searchSummary,
   traceFrom,
   zoomBy,
   type Point,
@@ -19,20 +21,27 @@ import {
 } from './viewport.ts'
 import {
   DRAG_THRESHOLD,
+  EDGE_WIDTH_MAX,
   NODE_HEIGHT,
   NODE_WIDTH,
+  VIEWPORT_HEIGHT_NARROW,
   VIEWPORT_HEIGHT_WIDE,
   buildNodeIndex,
   colorOf,
+  directionalCandidate,
+  degreeTally,
   edgeColor,
   edgeCurvatures,
   edgeDetailOf,
   edgeGeometry,
+  edgeWidthOf,
   filterGraph,
   graphBounds,
   hitNodesOf,
+  kHopNeighborhood,
   kindCounts,
   layoutPositionsOf,
+  linkRangeHops,
   neighborsOf,
   degreeOf,
   shapePath,
@@ -40,9 +49,38 @@ import {
   zoomLabel,
   type ColorMode,
   type LayoutMode,
+  type LinkRange,
 } from './graph-model.ts'
-import { EdgeDetails, GraphDetails, GraphToolbar, GraphTooltip, edgeKindKey } from './GraphParts.tsx'
+// 小地图几何在 minimap-model.ts（v0.12 拆分：graph-model 的复杂度热点越预算）。
+import {
+  minimapNodeRects,
+  minimapProjection,
+  minimapViewportRect,
+  minimapToWorld,
+  type MinimapCanvas,
+} from './minimap-model.ts'
+import { EdgeDetails, GraphDetails, GraphMinimap, GraphToolbar, GraphTooltip, edgeKindKey } from './GraphParts.tsx'
 import type { GraphData, GraphNode } from '../../src/graph-data.ts'
+
+/**
+ * 小地图画布尺寸（模块级常量，而不是每次渲染新建对象）。
+ *
+ * 为什么钉成常量：小地图的视口框尺寸**就是**它的比例尺 —— 每次渲染都换
+ * 一个新对象会让 useMemo 的依赖抖动（虽然值相同），更重要的是窄形态
+ * 下面板宽度不足时，152px 会顶掉图谱本身，所以由形态决定档位。
+ */
+const MINIMAP_CANVAS: MinimapCanvas = { width: 152, height: 96 }
+const MINIMAP_CANVAS_NARROW: MinimapCanvas = { width: 112, height: 72 }
+
+/**
+ * 搜索结果下拉的初始行数（**渲染层**截断）。
+ *
+ * 为什么与「回车循环的范围」必须是两个数：此前 matchNodes 的 limit=8 同时
+ * 扮演这两个角色，于是匹配 20 个时第 9~20 个既看不见也跳不到，而指示器
+ * 报的总数还是 8 —— 一句假陈述。显示截断见 GraphParts（带展开按钮），
+ * 循环范围用全量（见 locateMatchNext）。
+ */
+const SEARCH_RESULTS_INITIAL = 8
 
 /**
  * 可交互图谱 —— 能力之间的生产/消费关系。
@@ -103,9 +141,23 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
   const [query, setQuery] = useState('')
   // 搜索遍历游标（v0.11）：回车在匹配列表里循环前进；查询变化时归零。
   const [matchIndex, setMatchIndex] = useState(0)
+  /** 搜索结果列表的展开态（截断只在渲染层，展开按钮见 GraphParts）。
+   *  与 query/matchIndex 声明在一起：它和这两者属于**同一件事**（这次搜索），
+   *  分散在两处会让「查询变化要重置哪些状态」这个问题只在一半的地方被回答。 */
+  const [showAllResults, setShowAllResults] = useState(false)
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('layered')
   const [colorMode, setColorMode] = useState<ColorMode>('tone')
   const [onlyConnected, setOnlyConnected] = useState(false)
+  /**
+   * 「只看关联 / 聚焦」的跳数档位（v0.11.5）。
+   *
+   * 为什么缺省 1 跳而不是闭包：此前聚焦态的高亮集是**传递闭包**
+   * （`traceFrom`），在一连通图上等于全图 —— 于是「选中节点」什么都不改变，
+   * 用户以为点击没生效。1 跳才是「直接相关」的默认含义，闭包留给显式档位。
+   */
+  const [linkRange, setLinkRange] = useState<LinkRange>('hops1')
+  /** 小地图开关（概览导航）。缺省开：缩到 0.25 时没有参照物就是「迷失」本身。 */
+  const [minimapVisible, setMinimapVisible] = useState(true)
   // 布局切换的显式计数：只有用户点「布局」才允许重新 fit（铁律：轮询不得重置缩放）。
   const [layoutEpoch, setLayoutEpoch] = useState(0)
   // 触摸/笔指针的快照（v0.11.4）：两个指针同时按下即进入捏合缩放。
@@ -142,8 +194,9 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
       filterGraph(positionedNodes, graph.edges, {
         hidden,
         onlyConnectedWith: onlyConnected ? focusId : null,
+        maxHops: linkRangeHops(linkRange),
       }),
-    [positionedNodes, graph.edges, hidden, onlyConnected, focusId],
+    [positionedNodes, graph.edges, hidden, onlyConnected, focusId, linkRange],
   )
   const visibleNodes = view.nodes
   const visibleEdges = view.edges
@@ -386,9 +439,13 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
    * （声明位置在 `matches` 之后 —— useCallback 依赖块级作用域变量。）
    */
 
-  // 查询文本变化 ⇒ 游标归零（新搜索从第一个匹配开始）。
+  // 查询文本变化 ⇒ 游标归零（新搜索从第一个匹配开始）+ 收起结果列表。
+  // 为什么收起也要一起：上一次搜索按了「展开全部 40 条」，换一个只有 2 个
+  // 命中的词，那个展开态还留着 ⇒ 用户看到一个空的「展开」按钮和一个
+  // 比命中数还长的列表容器。视图状态属于**这一次**搜索。
   useEffect(() => {
     setMatchIndex(0)
+    setShowAllResults(false)
   }, [query])
 
   /** 面板发起的居中请求：nonce 变化才执行（同一个节点被再次请求也要真的居中）。 */
@@ -403,7 +460,157 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locateRequest])
 
-  /** Esc 一次退出全部观察态（高亮 + 搜索 + 悬停）。 */  const onKeyDown = useCallback(
+  // 高亮集：聚焦节点沿边双向追溯。**跳数由档位决定**（v0.11.5）。
+  // 为什么不再是「至少 2 跳的 BFS 闭包」：闭包在一连通图上等于全图，
+  // 于是选中节点什么都不改变（「点了没反应」的实测根源）。
+  // BFS 的最少跳数正好是「直接相关」，缺省 1 跳才有可见的聚焦效果。
+  const highlighted = useMemo(() => {
+    if (focusId === null) return new Set<string>()
+    const hops = linkRangeHops(linkRange)
+    return hops === null ? traceFrom(focusId, visibleEdges, 'both') : kHopNeighborhood(focusId, visibleEdges, hops)
+  }, [focusId, visibleEdges, linkRange])
+
+  /**
+   * 边宽的事实源：一次遍历全边的度数表。
+   *
+   * 为什么不能按边调 `degreeOf`：那是 O(V·E)（本仓库已在孤立判定上踩过一次）。
+   * 也为什么不直接用 `node.weight`：weight 只投影了「是否暴露」（0/1），
+   * 用它做视觉编码等于把「暴露」和「连接度」塞进同一个通道 —— 这里要的是度数。
+   * 刻度的参考上界是**常量**（`EDGE_DEGREE_SUM_MAX`），不随当前数据变化：
+   * 相对刻度会让轮询改变所有既有边的视觉含义。
+   */
+  const edgeDegrees = useMemo(() => degreeTally(visibleEdges), [visibleEdges])
+
+  /**
+   * 小地图：投影 + 节点矩形 + 视口框。
+   *
+   * 为什么在模型层算而不是在 GraphMinimap 里算：小地图与主视口必须共用
+   * **同一个 bounds**（`graphBounds(visibleNodes)`）。若小地图自己再算一遍
+   * 边界，主图上被拖拽偏移的节点不会同步（偏移是视图事实），框就会
+   * 与真实视野错位 —— 一个「说谎的指南针」比没有指南针更糟。
+   *
+   * 画布尺寸按**视口高度**选档：窄形态（侧栏/分屏，340px）挂一块 152×96
+   * 会吃掉近三分之一画面，参照物反而遮住了要看的东西。
+   */
+  const minimapCanvas = height <= VIEWPORT_HEIGHT_NARROW ? MINIMAP_CANVAS_NARROW : MINIMAP_CANVAS
+  const minimapProj = useMemo(() => minimapProjection(bounds, minimapCanvas), [bounds])
+  const minimapRects = useMemo(
+    () => minimapNodeRects(visibleNodes, minimapProj, (node) => colorOf(node, colorMode, (column) => stageOfColumn.get(column))),
+    [visibleNodes, minimapProj, colorMode, stageOfColumn],
+  )
+  // 视口框只需 proj + viewport + size：画布尺寸已经进了 proj（figureWidth/Height），
+  // 再传一次 canvas 会诱导「拿画布尺寸当阈值」的那个全览判定错误。
+  const minimapView = useMemo(
+    () => minimapViewportRect(minimapProj, viewport, size),
+    [minimapProj, viewport, size],
+  )
+  /**
+   * 选中节点在小地图里的方块。
+   *
+   * 为什么单独画：主画布一滚，选中节点就离开可见区 —— 那一刻用户唯一的
+   * 问题是「我选的东西在哪」。小地图上的焦点环让这个问题**始终**有答案，
+   * 而不需要先把视野调回去。
+   */
+  const minimapFocusRect = useMemo(() => {
+    if (focusId === null) return null
+    const rect = minimapRects.find((candidate) => candidate.id === focusId)
+    return rect === undefined ? null : { x: rect.x, y: rect.y, w: rect.w, h: rect.h }
+  }, [minimapRects, focusId])
+
+  /**
+   * 拖/点小地图 = 把该处的**世界点**放到主视口中心。
+   *
+   * 参数是小地图本地坐标（组件不该知道世界系），这里用闭式逆投影换算 ——
+   * 正逆成对（worldToMinimap / minimapToWorld）才能被单测钉死往返误差。
+   */
+  const navigateFromMinimap = useCallback(
+    (point: Point): void => {
+      const world = minimapToWorld(minimapProj, point)
+      apply(centerOn(viewport, size, world))
+    },
+    [apply, minimapProj, viewport, size],
+  )
+
+  /**
+   * 方向键换焦点（v0.11.5 键盘可达性补齐）。
+   *
+   * 此前只有 Tab：60 个节点要按 60 次才走得完，且顺序是 DOM 顺序（= 布局列序），
+   * 与屏幕上的位置毫无关系 —— 键盘用户根本「看不到」图的结构。
+   * 方向键按**二维邻近**选下一个节点，走的是用户眼睛看到的网格。
+   * 落点不可达时保持原焦点（返回 null 不 blur —— 把焦点丢回容器会让
+   * 后续按键全部失效，用户以为键盘坏了）。
+   */
+  const moveFocusByArrow = useCallback(
+    (direction: 'left' | 'right' | 'up' | 'down'): void => {
+      const nodes = visibleNodes.map((node) => ({ id: node.id, x: node.x + NODE_WIDTH / 2, y: node.y + NODE_HEIGHT / 2 }))
+      if (nodes.length === 0) return
+      const current = focusId === null ? undefined : positionedById.get(focusId)
+      // 起点：已选中的节点；没有选中时以**当前视口中心**为原点 ——
+      // 「从屏幕中心朝右找最近的」才是键盘用户在无选中状态下的直觉，
+      // 用 nodes[0]（= 布局第一列第一个）会让第一次按键跳到看不见的地方。
+      const centreWorld = {
+        x: (size.width / 2 - viewport.tx) / viewport.scale,
+        y: (size.height / 2 - viewport.ty) / viewport.scale,
+      }
+      const from = current ? { x: current.x + NODE_WIDTH / 2, y: current.y + NODE_HEIGHT / 2 } : centreWorld
+      const targetId = directionalCandidate(from, direction, nodes)
+      // 返回 null = 该方向到头了。焦点留在原地，**不 blur** ——
+      // 把焦点丢回容器会让后续按键全部失效（用户会以为键盘坏了）。
+      if (targetId === null) return
+      onFocusChange(targetId)
+      // 焦点是**DOM**焦点：选中态变了但焦点还在画布上，键盘用户会失去位置感。
+      // 用 data 属性线性匹配而不是 CSS 选择器：能力 id 里全是 `.`（guard.observe），
+      // CSS.escape 给出的是标识符转义（`guard\.observe`），放进属性值里**匹配不上**，
+      // 这类「看起来对、实际选不中」的缺陷在浏览器里只会表现为「方向键时好时坏」。
+      const host = wrapRef.current
+      let element: Element | null = null
+      if (host) {
+        for (const candidate of host.querySelectorAll('[data-node-id]')) {
+          if (candidate.getAttribute('data-node-id') === targetId) {
+            element = candidate
+            break
+          }
+        }
+      }
+      // SVG 元素的 focus() 在 lib.dom 里挂在 SVGElement 上，但 querySelectorAll
+      // 返回的是 Element —— 显式窄化成「有 focus 方法的对象」而不是 as any，
+      // 这样严格模式仍能查出其它误用。
+      const focusable = element as (Element & { focus?: () => void }) | null
+      focusable?.focus?.()
+      // 只在目标**跑出可见区**时才移动视野：每次按键都居中会让画面一直跳，
+      // 反而看不清「走到了哪」—— 键盘导航要的是连续性。判定在 viewport.ts
+      // 里做纯函数（`isWorldPointVisible`），因此这条规则可单测而不是只能手点。
+      const node = positionedById.get(targetId)
+      if (node) {
+        const centre = { x: node.x + NODE_WIDTH / 2, y: node.y + NODE_HEIGHT / 2 }
+        // 容差 = 半张卡片的屏幕宽度：节点中心离边缘不足半张卡 ⇒ 焦点环已被裁掉。
+        const margin = (NODE_WIDTH * viewport.scale) / 2
+        if (!isWorldPointVisible(viewport, size, centre, margin)) apply(centerOn(viewport, size, centre))
+      }
+    },
+    [focusId, positionedById, visibleNodes, onFocusChange, apply, viewport, size],
+  )
+
+  // 搜索结果：**全量**命中 + 显示层切片 + 游标取模一次算清（searchSummary）。
+  // 为什么不能像以前那样让 matchNodes 默认只给 8 条：那 8 条同时被当成
+  // 「显示列表」和「回车循环的范围」，于是匹配 20 个时指示器说 1/8、
+  // 剩下 12 个根本跳不到（数据层截断）。现在 total 来自全量，
+  // 显示条数与循环范围各归各的源头，UI 不可能自相矛盾。
+  const allMatches = useMemo(() => matchNodes(visibleNodes, query), [visibleNodes, query])
+  const search = useMemo(
+    () =>
+      searchSummary(allMatches, showAllResults ? Number.POSITIVE_INFINITY : SEARCH_RESULTS_INITIAL, matchIndex),
+    [allMatches, showAllResults, matchIndex],
+  )
+  const matches = search.visible
+
+  /**
+   * 画布键盘面（Esc / +−0 / 方向键）。
+   *
+   * 声明位置在 `moveFocusByArrow` **之后**：useCallback 的依赖数组要引用它，
+   * 放在前面会拿到尚未初始化的块级变量（tsc 直接报 TDZ 错误，而不是运行时才炸）。
+   */
+  const onKeyDown = useCallback(
     (event: { key: string; preventDefault?: () => void }): void => {
       if (event.key === 'Escape') {
         event.preventDefault?.()
@@ -428,32 +635,38 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
       if (event.key === '0') {
         event.preventDefault?.()
         doFit()
+        return
+      }
+      // 方向键：在画布上按**二维邻近**换焦点（此前键盘只有 Tab 一条路）。
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        event.preventDefault?.()
+        moveFocusByArrow(event.key.slice(6).toLowerCase() as 'left' | 'right' | 'up' | 'down')
       }
     },
-    [doZoom, doFit, onFocusChange],
+    [doZoom, doFit, onFocusChange, moveFocusByArrow],
   )
 
-  // 高亮集：聚焦节点沿边双向追溯（BFS：最少跳数 = 用户心里的「直接相关」）。
-  const highlighted = useMemo(() => {
-    if (focusId === null) return new Set<string>()
-    return traceFrom(focusId, visibleEdges, 'both')
-  }, [focusId, visibleEdges])
-
-  const matches = useMemo(() => matchNodes(visibleNodes, query), [visibleNodes, query])
-
   /**
-   * 回车循环跳转（v0.11）：游标 +1 取模 → 定位到下一个匹配。
+   * 回车循环跳转（v0.11，v0.11.5 修范围）：游标 +1 取模 → 定位到下一个匹配。
+   *
+   * 关键修正：循环范围从 `matches`（**显示**的前 8 条）改成 `search.all`
+   * （全量命中）。此前匹配 20 个时，第 9~20 个根本跳不到，而指示器还显示
+   * 「第 1/8 个」—— 那不是「少显示几条」，是「有些结果不存在」的假陈述。
    */
   const locateMatchNext = useCallback((): void => {
-    if (matches.length === 0) return
-    const next = (matchIndex + 1) % matches.length
+    const all = search.all
+    if (all.length === 0) return
+    const next = (search.cycleIndex + 1) % all.length
     setMatchIndex(next)
-    const node = matches[next]
+    const node = all[next]
     if (!node) return
     apply(centerOn(viewport, size, centreOfNode(node)))
     onFocusChange(node.id)
-  }, [matches, matchIndex, apply, viewport, size, centreOfNode, onFocusChange])
-  const matchIds = useMemo(() => new Set(matches.map((node) => node.id)), [matches])
+  }, [search, apply, viewport, size, centreOfNode, onFocusChange])
+  // 画布上的命中描边用**全量**命中：下拉列表是「先显示几条」，而图上的
+  // 虚线框回答的是「我的搜索结果都在哪」—— 只描前 8 个会让第 9 个结果
+  // 在图上隐身（列表里也跳不到，用户会以为搜索没生效）。
+  const matchIds = useMemo(() => new Set(search.all.map((node) => node.id)), [search.all])
   const focusNode = focusId === null ? undefined : nodeById.get(focusId)
   const focusDegree = useMemo(() => (focusId === null ? { in: 0, out: 0 } : degreeOf(focusId, visibleEdges)), [focusId, visibleEdges])
   const focusNeighbors = useMemo(
@@ -524,8 +737,12 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
         query={query}
         onQuery={setQuery}
         matches={matches}
+        matchTotal={search.total}
+        matchOmitted={search.omitted}
+        matchOrdinal={search.cycleIndex + 1}
+        currentMatchId={search.all[search.cycleIndex]?.id ?? null}
+        onToggleResults={() => setShowAllResults((current) => !current)}
         onLocate={locateNode}
-        matchIndex={matchIndex}
         onMatchNext={locateMatchNext}
         counts={counts}
         hidden={hidden}
@@ -541,6 +758,10 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
         onlyConnected={onlyConnected}
         onToggleConnected={() => setOnlyConnected((current) => !current)}
         connectedAvailable={focusId !== null}
+        linkRange={linkRange}
+        onLinkRange={setLinkRange}
+        minimapVisible={minimapVisible}
+        onToggleMinimap={() => setMinimapVisible((current) => !current)}
       />
 
       <div className="rg-graph-body">
@@ -561,6 +782,10 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
           tabIndex={0}
           role="application"
           aria-label={t('graph.title')}
+          /* 键位声明给读屏：graph.hint 是**视觉**上的提示文字，
+             aria-keyshortcuts 才是辅助技术读的机读键位表（两者都要有 ——
+             一个给人看，一个给 AT 播报）。 */
+          aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight + - 0 Escape Enter"
         >
           <svg width="100%" height="100%" role="presentation">
             {/* 箭头 marker：produces 方向 = 生产方 → 消费方。
@@ -594,6 +819,8 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
                 const hoveredEdge = hoverEdgeId === edge.id
                 const selectedEdge = selectedEdgeId === edge.id
                 const geometry = edgeGeometry(from, to, curvatures[index] ?? 0)
+                // 粗细 = 两端度数之和的对数刻度（枢纽链路更粗，但不会被 20 度压扁）。
+                const baseWidth = edgeWidthOf(edgeDegrees, edge)
                 return (
                   <g key={edge.id}>
                     {/* 命中热区（v0.11.3）：细线无法点击，叠一条透明宽描边只做命中，
@@ -615,7 +842,15 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
                       stroke={
                         selectedEdge || hoveredEdge || active ? 'var(--dsw-alias-brand-primary)' : edgeColor(edge)
                       }
-                      strokeWidth={selectedEdge ? 2.6 : hoveredEdge ? 2.2 : active ? 2 : 1.2}
+                      strokeWidth={
+                        selectedEdge
+                          ? EDGE_WIDTH_MAX + 0.8
+                          : hoveredEdge
+                            ? baseWidth + 1
+                            : active
+                              ? baseWidth + 0.6
+                              : baseWidth
+                      }
                       strokeOpacity={focusId === null && selectedEdgeId === null ? 0.9 : selectedEdge || hoveredEdge || active ? 1 : 0.22}
                       markerEnd={selectedEdge || hoveredEdge || active ? 'url(#rg-arrow-active)' : 'url(#rg-arrow)'}
                     />
@@ -644,6 +879,9 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
                 return (
                   <g
                     key={node.id}
+                    /* 方向键导航的落点句柄：靠 id 查 DOM 会把选择器语法（`.` 是能力 id
+                       的常态）交给自己都不认得的 API，因此用一个 data 属性做纯字符串匹配。 */
+                    data-node-id={node.id}
                     /* v0.11.3：改用 style transform 以便布局切换有过渡；拖动时关闭过渡，
                        否则节点会「追不上指针」。prefers-reduced-motion 由全局 CSS 降级。 */
                     style={{
@@ -725,6 +963,41 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
           {tooltip && (
             <GraphTooltip node={tooltip.node} degree={degreeOf(tooltip.node.id, visibleEdges)} x={tooltip.x} y={tooltip.y} containerWidth={size.width} />
           )}
+          {/* 小地图：常驻右下角的「我在哪」。它的视口框跟着 scale/tx/ty 实时动，
+              所以它同时是缩放读数的**图形版**（百分比只说大小，不说位置）。 */}
+          {minimapVisible && (
+            <div className="rg-minimap-wrap">
+              <GraphMinimap
+                width={minimapCanvas.width}
+                height={minimapCanvas.height}
+                rects={minimapRects}
+                view={minimapView}
+                focusRect={minimapFocusRect}
+                onNavigate={navigateFromMinimap}
+              />
+              {/* 说明文字给读屏：小地图是鼠标捷径，键盘/读屏用户从这里得到
+                  「这块是什么、怎么用」的答案，而等价的定位入口在主画布
+                  （方向键换节点 + 搜索回车定位）。 */}
+              <span className="rg-sr-only">{t('graph.minimapHint')}</span>
+            </div>
+          )}
+          {/* 过滤把图滤空了：必须说出来，而不是留一块干净的空白 ——
+              「干净空白」与「什么都没显示出来」在观感上完全一样（假绿）。 */}
+          {visibleNodes.length === 0 && (hidden.size > 0 || onlyConnected) && (
+            <div className="rg-graph-filtered-empty" role="status">
+              {t('graph.filteredEmpty')}
+              <button
+                type="button"
+                className="rg-link"
+                onClick={() => {
+                  setHidden(new Set())
+                  setOnlyConnected(false)
+                }}
+              >
+                {t('graph.filteredEmptyReset')}
+              </button>
+            </div>
+          )}
         </div>
 
         {focusNode && (
@@ -753,7 +1026,9 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
             {t('graph.selected')}: <strong>{selectedLabel}</strong>
           </span>
         )}
-        <span className="rg-graph-hint">{t('graph.hint')}</span>
+        <span className="rg-graph-hint">
+          {t('graph.hint')} · {t('graph.arrowHint')}
+        </span>
       </div>
     </div>
   )

@@ -58,13 +58,36 @@ export interface RouteContext {
   /** 生命周期步骤与迁移（进入/退出/耗时/失败原因）。 */
   lifecycle: () => Promise<unknown>
   /**
+   * 当前写状态凭证（v0.12 乐观并发的比对基准）。
+   *
+   * 为什么单独一条回调而不是复用 `snapshot()`：快照要算指标、风险排名、
+   * 能力图与马尔可夫矩阵（几十毫秒级），而核对只需要那枚哈希。
+   * 动作路由在**每次** POST 上都要核对一次，用重投影换轻判定是错配。
+   *
+   * 声明为可选是诚实：回落路径（无 ctx.plugin 的直接注册形态）与测试桩
+   * 都可能不提供它，缺席时核对跳过、动作照常执行 —— 乐观并发是**加强项**，
+   * 不该成为动作的硬前提。
+   */
+  currentRevision?: () => Promise<string>
+  /**
    * 注册回调 —— 路由**真的**注册成功时按能力名回报。
    *
    * 存在的理由：契约自检要的是「实际注册面」，而不是「我们以为会注册什么」。
    * 回调让注册处自己说话（含 webServer 缺席时的沉默，那也是事实）。
    */
   onRegister?: (exposedName: string) => void
+  /**
+   * 错误日志出口（v0.12 新增）。
+   *
+   * 为什么由父插件注入而不是这里 `console.error`：路由面是**独立子 fiber**，
+   * 拿不到 `ctx.logger`；而 console.error 不进宿主的日志采集面（用户在
+   * 「日志」视图里看不到，等于没报）。父插件把 logger 桥进来，
+   * 路由注册失败才既响亮又可查。缺席时回落 console（测试环境无 logger）。
+   */
+  logError?: (message: string) => void
 }
+
+import { checkRevision } from './change-guard.js'
 
 /** 路由前缀。 */
 export const ROUTE_PREFIX = '/recency-guard/api'
@@ -236,6 +259,40 @@ function rejectWrongMethod(req: NodeRequest, res: NodeResponse): boolean {
 }
 
 /**
+ * 乐观并发核对（v0.12）。
+ *
+ * 动作路由在**执行前**比对请求携带的 `expectedRevision` 与当前真值：
+ * - body 没带 ⇒ 放行（agent 刚读过快照的主动路径）；
+ * - 带了但不符 ⇒ 409 + 当前 revision，动作**不执行**。调用方据此重读快照，
+ *   用新事实决定是否再按一次 —— 而不是按着一张 5 秒前的地图改宿主。
+ *
+ * 真值来自 `ctx.snapshot()`（面板轮询的同一份投影），所以「面板显示的
+ * revision」与「宿主核对用的 revision」结构上同源，不可能各自漂移。
+ *
+ * @returns 是否已写出 409（true = 调用方应停止，不要继续执行动作）
+ */
+async function rejectStaleRevision(ctx: RouteContext, res: NodeResponse, body: Record<string, unknown> | null): Promise<boolean> {
+  // 缺席即降级（本插件的一贯纪律：可选能力不在场不该让动作失效）。
+  // 类型上 currentRevision 是必填的，但回落路径（宿主无 webServer 时的
+  // 直接注册形态）与旧桩都可能不带它 —— 那种情况下跳过核对，
+  // 而不是抛 "is not a function" 把动作打成 500。
+  if (typeof ctx.currentRevision !== 'function') return false
+  const check = checkRevision(await ctx.currentRevision(), body?.expectedRevision)
+  if (check.ok) return false
+  sendJson(
+    res,
+    {
+      ok: false,
+      conflict: 'stale-revision',
+      reason: `状态已变化（面板快照的 revision=${check.expected}，当前=${check.current}），动作未执行。请重读快照后再决定。`,
+      current: check.current,
+    },
+    409,
+  )
+  return true
+}
+
+/**
  * 各路由的 handler。
  *
  * 键必须覆盖 `ROUTE_SURFACE` 的每个 `name`（契约测试核对）—— handler 表与
@@ -272,6 +329,7 @@ function handlerTable(ctx: RouteContext): Record<RouteName, RouteHandler> {
       if (rejectWrongMethod(req, res)) return
       try {
         const body = await readBody(req)
+        if (await rejectStaleRevision(ctx, res, body)) return
         const reason = typeof body?.reason === 'string' && body.reason.trim() !== '' ? body.reason : '手动归档重置'
         sendJson(res, await ctx.archive(reason))
       } catch (error) {
@@ -287,6 +345,9 @@ function handlerTable(ctx: RouteContext): Record<RouteName, RouteHandler> {
           sendJson(res, { ok: false, reason: '缺少 bundle 参数' }, 400)
           return
         }
+        // 顺序是语义问题：400 = 这个请求本身不合法，409 = 请求合法但世界变了。
+        // 参数不齐就先报 400，别让一个必错的请求去占用冲突判定。
+        if (await rejectStaleRevision(ctx, res, body)) return
         sendJson(res, await ctx.reenable(bundle))
       } catch (error) {
         sendJson(res, { ok: false, reason: describe(error) }, 500)
@@ -295,6 +356,8 @@ function handlerTable(ctx: RouteContext): Record<RouteName, RouteHandler> {
     restore: async (req, res) => {
       if (rejectWrongMethod(req, res)) return
       try {
+        const body = await readBody(req)
+        if (await rejectStaleRevision(ctx, res, body)) return
         sendJson(res, await ctx.restore())
       } catch (error) {
         sendJson(res, { ok: false, reason: describe(error) }, 500)
@@ -303,6 +366,8 @@ function handlerTable(ctx: RouteContext): Record<RouteName, RouteHandler> {
     recover: async (req, res) => {
       if (rejectWrongMethod(req, res)) return
       try {
+        const body = await readBody(req)
+        if (await rejectStaleRevision(ctx, res, body)) return
         sendJson(res, await ctx.recover())
       } catch (error) {
         sendJson(res, { ok: false, reason: describe(error) }, 500)
@@ -323,14 +388,29 @@ function handlerTable(ctx: RouteContext): Record<RouteName, RouteHandler> {
 export function registerRoutes(ctx: RouteContext, webServer: WebServerLike): () => void {
   const disposers: Array<() => void> = []
   const handlers = handlerTable(ctx)
+  // 日志出口：优先用父插件桥进来的宿主 logger（进采集面、用户在日志视图可查），
+  // 缺席时回落 console —— 测试里没桩 logger 也要能看见失败。
+  const reportError = (message: string): void => {
+    const line = `[recency-guard] ${message}`
+    if (typeof ctx.logError === 'function') {
+      try {
+        ctx.logError(message)
+        return
+      } catch {
+        /* 日志出口自身失败不拖垮注册：回落到 console */
+      }
+    }
+    console.error(line)
+  }
 
   const add = (route: WebRouteLike): void => {
     try {
       disposers.push(webServer.register(route))
     } catch (error) {
       // 路由注册失败不应拖垮插件主体（宿主可能没有 webServer，
-      // 或路径已被占用）。失败必须**响亮**：写进日志而不是静默。
-      console.error(`[recency-guard] 路由注册失败 ${route.path}:`, error)
+      // 或路径已被占用）。失败必须**响亮**：写进宿主日志而不是静默，
+      // 也不写 console.error —— 那条通道不进宿主日志采集（v0.12 修正）。
+      reportError(`路由注册失败 ${route.path}: ${String(error)}`)
     }
   }
 
@@ -339,7 +419,7 @@ export function registerRoutes(ctx: RouteContext, webServer: WebServerLike): () 
     if (typeof handler !== 'function') {
       // 路由表与 handler 表不一致：宁可少注册一条并响亮报错，
       // 也不要注册一个到不了实现的路径（那只会变成 404 或 500）。
-      console.error(`[recency-guard] 路由 ${entry.name} 没有 handler，跳过注册`)
+      reportError(`路由 ${entry.name} 没有 handler，跳过注册`)
       continue
     }
     add({ kind: 'exact', path: entry.path, handler })
