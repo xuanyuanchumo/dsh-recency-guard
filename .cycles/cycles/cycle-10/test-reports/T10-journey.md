@@ -173,3 +173,37 @@ note  异常终止判定：连续 2/2 轮 ⇒ 行动，本轮关闭 1 个（头�
 | 面板「归档重置」按钮的 GUI 点击 | 会搬走当前沙箱产物，与后续旅程冲突 | 路由/工具两处入口均有 Host 层行为测试；GUI 按钮是薄调用 |
 | 真正「第三方式插件崩溃」的完整闭环 | 沙箱无第三方插件可关（需先装夹具再注入崩溃） | 判定逻辑（第 1 轮观察 / 第 2 轮升级）已端到端验证；`recover()` 通道另有 Host 测试 |
 | 截图 | 浏览器工具的写入根是 DSH checkout，不在本仓库 | 面板文本事实已用 a11y 快照逐条取证（§1 J3/J5/J13/J15） |
+
+## 7. 发布与「从 registry 安装」验证（v0.12.1）
+
+命令窗口/面板的旅程在本地源码沙箱通过后，再做一次**发布产物**验证 ——
+这一步才能证明「别人装到的就是刚才验的那个东西」。
+
+| 步骤 | 结果 | 证据 |
+|---|---|---|
+| npm 发布 | 成功 | `+ dsh-recency-guard@0.12.1`；registry 现 `dist-tags.latest = 0.12.1` |
+| 产物一致性 | 一致 | registry `dist.shasum = 06ccf0c0e5b12ad1f5d7d8b4c21d3a390f03f2c4`，与 `npm pack` 输出相同 |
+| 市场关联 | 就绪 | registry 里 `repository.url = git+https://github.com/xuanyuanchumo/dsh-recency-guard.git`（市场据此关联下载量） |
+| 两条检测通道在产物内 | 在 | `dist/index.js` 命中 `abnormalExitSeq` / `哨兵缺席` |
+| cordis peer 修复生效 | 生效 | registry `peerDependencies["@deepseek-ai/cordis"] = ">=4.0.5 <5.0.0"` |
+| compatibility 声明 | 在 | registry `dsh.compatibility.dshReleases` 三条发布线 |
+| **从 registry 全新安装** | **通过兼容闸门** | 新建 profile `sb-rg-npm012`，`plugin add dsh-recency-guard@0.12.1` → `+ dsh-recency-guard` |
+| npm 产物实际运行 | 通过 | journal 落 `install dsh-recency-guard 0.12.1` + 15 条 `official-observe`；state/bootMarker 完整 |
+
+**为什么这一步而非本地源码沙箱是关键**：桌面端一直用 `link:` 直连源码，**从不经过
+兼容闸门**，所以 §6 记录的 cordis peer 阻断级缺陷在本机完全不可见。只有
+「从 registry 安装」这条路径才会真正跑闸门 —— 它通过了，说明该修复确实解决了
+「装不上」这个用户会遇到的场景。
+
+诚实边界：该沙箱的 web 端口在启动后没有监听（`journal` 已证明插件跑过，
+但 `netstat` 查不到端口），属启动参数解析问题，与插件无关；不影响本节结论
+（本节验证的是「装得上 + 插件能跑起来写盘」，两者都已有独立证据）。
+
+## 8. 桌面端更新说明
+
+桌面 profile 的 `dsh-recency-guard` 是 `link:D:/Projects/TraeProjects/dsh-recency-guard`，
+`dist/` 已重建为 0.12.1。桌面主进程（pid 50656 / 47552）由用户掌管，**本轮不重启它**
+（红线：主力重启由用户决定）。用户下次重启桌面端即生效。
+
+沙箱 `sb-rg-v012g` / `sb-rg-npm012` 本轮全部结束并清理进程；桌面分区
+（`cef7279163b43942`）复核仍为 `crashSeq=0 / bootMarker=null / autoDisabled=[]`，未被污染。
