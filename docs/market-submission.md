@@ -35,7 +35,9 @@ icon: https://raw.githubusercontent.com/xuanyuanchumo/dsh-recency-guard/main/ass
 - [x] `package.json` 声明 `dsh.bundle.patch`（不只 `dsh.client`）—— 被拒首因已避开。
 - [x] 仓库根有 `cordis.patch.yml`。
 - [x] 真实可用代码（13/13 分层测试、沙箱五段用户旅程）。
-- [x] 仓库满 1 天（创建 2026-11-07，投稿不早于 2026-11-08）。
+- [x] 仓库满 1 天：仓库创建于 **2026-11-07T07:44Z**，contributing 要求满 1 天，
+      **最早可投稿时间 2026-11-08T07:44Z（北京 15:44）之后** —— 提前提交会被
+      CI 的 repo-age 门禁拒绝（该结论已写入 INC-2026-11-08-01）。
 - [x] `dsh-plugin` topic 已加（另加 deepseek-harness / crash-recovery / plugin-guard）。
 - [x] 描述只说功能无营销词；每个数字与 API 名都与代码核对（8 个工具 action、
       9 条路由、五类数学模型均在仓库真实存在）。
