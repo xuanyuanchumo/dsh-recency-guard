@@ -403,6 +403,26 @@ function main() {
     }
   }
 
+
+  // ── v0.12.1 版本锚点门 ──
+  // conventions §6 要求 package.json ↔ README ↔ docs/agents 版本一致，但此前
+  // **只是文字约定**：发版时漏改一处不会有任何机器信号（本仓实测漏过：
+  // design.md 标题停在 v0.7 好几个月没人发现）。这里把它变成门。
+  console.log('\n== version anchors stay in sync (conventions §6, now machine-checked) ==')
+  {
+    const pkgVersion = String(manifest.version ?? '')
+    check('package.json declares a semver version', /^\d+\.\d+\.\d+$/.test(pkgVersion), pkgVersion)
+    const readme = readFileSync(join(process.cwd(), 'README.md'), 'utf8')
+    check(`README mentions the current version v${pkgVersion}`, readme.includes(`v${pkgVersion}`), pkgVersion)
+    for (const doc of ['api.md', 'design.md']) {
+      const text = readFileSync(join(process.cwd(), 'docs', 'agents', doc), 'utf8')
+      const firstLine = text.split('\n')[0] ?? ''
+      check(`${doc} title carries v${pkgVersion}`, firstLine.includes(`v${pkgVersion}`), firstLine.slice(0, 80))
+    }
+    // 市场投稿材料同样要跟版（否则投稿条目描述的是旧版本的行为）
+    const market = readFileSync(join(process.cwd(), 'docs', 'market-submission.md'), 'utf8')
+    check('market-submission.md title carries the current version', market.split('\n')[0]?.includes(pkgVersion) === true, market.split('\n')[0]?.slice(0, 60))
+  }
   console.log('\n' + (failures === 0 ? 'ALL PASS' : failures + ' FAILURE(S)') + '\n')
   process.exit(failures === 0 ? 0 : 1)
 }

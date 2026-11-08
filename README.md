@@ -416,11 +416,28 @@ dsh plugin --profile <profile名> add file:/绝对路径/dsh-recency-guard
 
 ### 插件市场
 
-本插件已提交 [awesome-dsh-plugin](https://github.com/xuanyuanchumo/awesome-dsh-plugin) 收录（`security` 分类），
-收录后即可在 dsh 0.2.1+ 的 **Plugins → Discover** 中搜索到（索引源
-`https://cdn.jsdelivr.net/npm/dsh-plugin-catalog/index.json`），也可通过
+已按 [awesome-dsh-plugin 的 contributing.md](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md)
+准备好投稿材料（`docs/market-submission.md`）：**一个文件**
+`data/plugins/xuanyuanchumo__dsh-recency-guard.yml`，`category: security`。
+收录后即可在 dsh 的 **Plugins → Discover** 中搜索到，也可通过
 [dsh-market](https://github.com/dsh-market/dsh-market#readme) 一键安装。
-npm 发布后市场索引会自动携带 npm 版本；GitHub-only 期间用上面的命令安装。
+
+投稿前置条件已逐条核实：
+
+| 条件 | 状态 |
+|---|---|
+| `dsh.bundle.patch` 声明（**被拒首因**：只声明 `dsh.client` 不可安装） | ✅ 两者都有 |
+| 仓库根有 `cordis.patch.yml` | ✅ |
+| 仓库满 1 天 / 真实可用代码 | ✅ |
+| `dsh-plugin` topic | ✅（GitHub API 复核） |
+| 官方 `@deepseek-ai/*` 走 peer 且**带显式预发布分支** | ✅ |
+| npm 已发布（`latest = 0.12.1`），`repository` 指回本仓库 | ✅ |
+| `icon` 为 GitHub 托管位图 | ✅ `assets/icon-256.png` |
+
+> 为什么强调「预发布分支」：contributing.md 专门警告 —— 不带预发布分支的 peer 范围
+> 会**静默排除**宿主的全部预发布版本，用户 `npm install` 直接撞 `ERESOLVE`。
+> 本插件因此把范围写成显式 `||` 分支，并把 `cordis` 范围修为 `>=4.0.5 <5.0.0`
+> （宿主实际是 4.1.0，旧值 `~4.0.5` 会让安装被兼容闸门整体拒绝）。
 
 ---
 
