@@ -216,6 +216,40 @@ export function degreeOf(id: string, edges: readonly Pick<GraphEdge, 'from' | 't
 }
 
 /**
+ * 边的详情投影（v0.11.3 图谱交互补齐）。
+ *
+ * 为什么要一个纯函数而不是在组件里直接拼：边的语义（生产/消费方向 +
+ * kind + label）在面板与测试里都要用同一套措辞；组件只负责把结果画出来，
+ * 断言可以逐字节比对。端点不可见（类型被过滤）时返回 null —— 与
+ * `neighborsOf` 的「不导航到幽灵节点」同一条纪律。
+ */
+export interface EdgeDetail {
+  /** 生产方（箭头起点）的可读标签。 */
+  fromLabel: string
+  /** 消费方（箭头终点）的可读标签。 */
+  toLabel: string
+  /** 边上声明的语义类型。 */
+  kind: GraphEdge['kind']
+  /** 边上可选的说明文字（数据里可能有；没有就是 undefined）。 */
+  label?: string
+}
+
+export function edgeDetailOf(
+  edge: Pick<GraphEdge, 'from' | 'to' | 'kind' | 'label'>,
+  index: ReadonlyMap<string, GraphNode>,
+): EdgeDetail | null {
+  const from = index.get(edge.from)
+  const to = index.get(edge.to)
+  if (!from || !to) return null
+  return {
+    fromLabel: from.label,
+    toLabel: to.label,
+    kind: edge.kind,
+    ...(edge.label === undefined ? {} : { label: edge.label }),
+  }
+}
+
+/**
  * 邻居派生 —— 上游（生产方）/ 下游（消费方）。
  *
  * 三条规则各自都有实测理由：

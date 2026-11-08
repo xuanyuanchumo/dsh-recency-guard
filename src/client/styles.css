@@ -1216,6 +1216,22 @@
   fill: var(--dsw-alias-brand-primary);
   font-size: 10px;
   font-weight: 600;
+  pointer-events: none;
+}
+
+/* 节点布局过渡（v0.11.3）：切换布局/拖拽回弹时不再硬跳变。
+   transform 由 style 提供；拖动中的节点在组件里把 transition 置 none。 */
+.rg-graph-node {
+  transition: transform var(--rg-motion-medium) var(--rg-ease, ease);
+}
+
+/* 边的命中热区：透明宽描边只做点击目标，视觉不参与。 */
+.rg-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: pointer;
 }
 
 /* 图例（类型过滤 chips，带计数）。 */

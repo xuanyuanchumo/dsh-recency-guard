@@ -231,7 +231,13 @@
       "bundle": "Bundle",
       "gap": "Gap"
     },
-    "matchIndex": "Match {index}/{total}"
+    "matchIndex": "Match {index}/{total}",
+    "edgeDetails": "Edge details",
+    "edgeFrom": "Produces (from)",
+    "edgeTo": "Consumes (to)",
+    "edgeKind": "Semantics",
+    "edgeTransitions": "transition",
+    "edgeRanks": "ranking"
   },
   "events": {
     "title": "Event stream",

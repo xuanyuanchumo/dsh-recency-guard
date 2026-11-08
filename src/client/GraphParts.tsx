@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import { t } from './i18n.ts'
 import type { GraphNode } from '../../src/graph-data.ts'
-import { KIND_ORDER, kindKey, legendColorOf, legendShapeOf, shapePath, type ColorMode, type LayoutMode } from './graph-model.ts'
+import { KIND_ORDER, kindKey, legendColorOf, legendShapeOf, shapePath, type ColorMode, type LayoutMode, type EdgeDetail } from './graph-model.ts'
 
 /**
  * 图谱的**展示层**部件 —— 只接收已经算好的事实，不含任何派生逻辑。
@@ -274,6 +274,60 @@ export function GraphDetails(props: GraphDetailsProps): ReactElement {
       </div>
     </aside>
   )
+}
+
+/**
+ * 边的详情侧栏（v0.11.3 图谱交互补齐）。
+ *
+ * 此前边完全不可交互：`edge.label` 是死数据、用户无法回答「这条边是谁
+ * 生产给谁、什么语义」。现在点击/hover 边后可读完整语义，且**不替代**
+ * 节点详情 —— 两者互斥（单一选中态），避免侧栏内容打架。
+ */
+export interface EdgeDetailsProps {
+  detail: EdgeDetail
+  onClose: () => void
+}
+
+export function EdgeDetails({ detail, onClose }: EdgeDetailsProps): ReactElement {
+  return (
+    <aside className="rg-graph-aside" aria-label={t('graph.edgeDetails')}>
+      <header className="rg-graph-aside-header">
+        <span className="rg-dot rg-dot-info" aria-hidden />
+        <strong className="rg-graph-aside-title">{t('graph.edgeDetails')}</strong>
+        <button type="button" className="rg-button rg-button-icon" onClick={onClose} aria-label={t('graph.closeDetails')}>
+          ✕
+        </button>
+      </header>
+      <dl className="rg-dl rg-dl-compact">
+        <dt>{t('graph.edgeFrom')}</dt>
+        <dd className="rg-ellipsis" title={detail.fromLabel}>
+          {detail.fromLabel}
+        </dd>
+        <dt>{t('graph.edgeTo')}</dt>
+        <dd className="rg-ellipsis" title={detail.toLabel}>
+          {detail.toLabel}
+        </dd>
+        <dt>{t('graph.edgeKind')}</dt>
+        <dd>{t(edgeKindKey(detail.kind))}</dd>
+      </dl>
+      {detail.label !== undefined && <p className="rg-graph-aside-detail">{detail.label}</p>}
+    </aside>
+  )
+}
+
+/** 边语义 → i18n 键。 */
+export function edgeKindKey(kind: EdgeDetail['kind']): string {
+  switch (kind) {
+    case 'produces':
+      return 'graph.edgeProduces'
+    case 'consumes':
+      return 'graph.edgeConsumes'
+    case 'transitions':
+      return 'graph.edgeTransitions'
+    case 'ranks':
+    default:
+      return 'graph.edgeRanks'
+  }
 }
 
 /** 悬停浮层 —— 鼠标停在节点上时显示被卡片截断的完整事实。 */

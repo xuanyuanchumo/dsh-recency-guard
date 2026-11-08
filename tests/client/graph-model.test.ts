@@ -5,6 +5,7 @@ import {
   TONE_COLOR,
   edgeColor,
   edgeCurvatures,
+  edgeDetailOf,
   filterGraph,
   graphBounds,
   kindCounts,
@@ -136,6 +137,12 @@ function main() {
     check('度数：生产方 out=2 in=0', deg.out === 2 && deg.in === 0, deg)
     const nb = neighborsOf('b', edges2, index)
     check('邻居：b 的上游是 a', nb.upstream.length === 1 && nb.upstream[0] === 'a' && nb.downstream.length === 0, nb)
+
+    // v0.11.3 边详情投影：端点可见才给详情；label 原样带出。
+    const detail = edgeDetailOf({ from: 'a', to: 'b', kind: 'produces', label: '示例标签' }, index)
+    check('edgeDetailOf 解析端点标签', detail?.fromLabel === 'a' && detail?.toLabel === 'b', detail)
+    check('edgeDetailOf 带出 kind 与 label', detail?.kind === 'produces' && detail?.label === '示例标签', detail)
+    check('edgeDetailOf 端点不可见时返回 null', edgeDetailOf({ from: 'a', to: 'ghost', kind: 'produces' }, index) === null)
   }
 
   console.log('\n== 杂项投影 ==')

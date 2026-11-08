@@ -25,6 +25,7 @@ import {
   colorOf,
   edgeColor,
   edgeCurvatures,
+  edgeDetailOf,
   edgeGeometry,
   filterGraph,
   graphBounds,
@@ -39,7 +40,7 @@ import {
   type ColorMode,
   type LayoutMode,
 } from './graph-model.ts'
-import { GraphDetails, GraphToolbar, GraphTooltip } from './GraphParts.tsx'
+import { EdgeDetails, GraphDetails, GraphToolbar, GraphTooltip, edgeKindKey } from './GraphParts.tsx'
 import type { GraphData, GraphNode } from '../../src/graph-data.ts'
 
 /**
@@ -93,6 +94,9 @@ export interface GuardGraphProps {
 export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFocusChange, locateRequest = null }: GuardGraphProps): ReactElement {
   const [viewport, setViewport] = useState<Viewport>(IDENTITY)
   const [hoverId, setHoverId] = useState<string | null>(null)
+  /** 悬停/选中的边（v0.11.3：边此前完全不可交互）。 */
+  const [hoverEdgeId, setHoverEdgeId] = useState<string | null>(null)
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set())
   const [size, setSize] = useState<Size>({ width: 0, height })
   const [query, setQuery] = useState('')
@@ -315,6 +319,8 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
       })
       const hit = grid.hit(world)
       onFocusChange(hit === null ? null : hit.id)
+      // 空白处点击 = 清空边选中（单一选中态：节点与边互斥）。
+      if (hit === null) setSelectedEdgeId(null)
     },
     [grid, viewport, onFocusChange],
   )
@@ -377,6 +383,9 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
         onFocusChange(null)
         setQuery('')
         setHoverId(null)
+        // v0.11.3：边选中也是观察态 —— Esc 一次退出全部（只清一半会让人以为键没生效）。
+        setSelectedEdgeId(null)
+        setHoverEdgeId(null)
         return
       }
       if (event.key === '+' || event.key === '=') {
@@ -432,6 +441,19 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
     [nodeById],
   )
 
+  /**
+   * 选中边的详情投影（v0.11.3）。
+   *
+   * 用**可见节点索引**解析端点：类型过滤后不再可见的边不应留下「幽灵详情」。
+   * 选中态与节点详情互斥：有节点聚焦时优先显示节点详情。
+   */
+  const selectedEdgeDetail = useMemo(() => {
+    if (selectedEdgeId === null) return null
+    const edge = visibleEdges.find((e) => e.id === selectedEdgeId)
+    if (!edge) return null
+    return edgeDetailOf(edge, nodeById)
+  }, [selectedEdgeId, visibleEdges, nodeById])
+
   // 悬停浮层的屏幕坐标（节点顶部中央）。世界坐标 → 屏幕坐标用当前视口一次算清。
   const hoverNode = hoverId === null ? undefined : nodeById.get(hoverId)
   const tooltip = hoverNode
@@ -465,6 +487,8 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
           onFocusChange(null)
           setQuery('')
           setHoverId(null)
+          setHoverEdgeId(null)
+          setSelectedEdgeId(null)
           // 拖拽偏移一并清零（v0.11）：「重置」若不还原用户拖乱的布局，
           // 节点拖飞后只能刷新页面 —— 那不是重置，是摆设。
           setOffsets({})
@@ -540,21 +564,45 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
                 const to = nodeById.get(edge.to)
                 if (!from || !to) return null
                 const active = focusId !== null && highlighted.has(edge.from) && highlighted.has(edge.to)
+                const hoveredEdge = hoverEdgeId === edge.id
+                const selectedEdge = selectedEdgeId === edge.id
                 const geometry = edgeGeometry(from, to, curvatures[index] ?? 0)
                 return (
                   <g key={edge.id}>
+                    {/* 命中热区（v0.11.3）：细线无法点击，叠一条透明宽描边只做命中，
+                        不参与视觉。pointerEvents='stroke' 让它只在线条附近响应。 */}
+                    <path
+                      d={geometry.path}
+                      className="rg-edge-hit"
+                      onPointerEnter={() => setHoverEdgeId(edge.id)}
+                      onPointerLeave={() => setHoverEdgeId((current) => (current === edge.id ? null : current))}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setSelectedEdgeId(edge.id)
+                        onFocusChange(null)
+                      }}
+                    />
                     <path
                       d={geometry.path}
                       fill="none"
-                      stroke={active ? 'var(--dsw-alias-brand-primary)' : edgeColor(edge)}
-                      strokeWidth={active ? 2 : 1.2}
-                      strokeOpacity={focusId === null ? 0.9 : active ? 1 : 0.22}
-                      markerEnd={active ? 'url(#rg-arrow-active)' : 'url(#rg-arrow)'}
+                      stroke={
+                        selectedEdge || hoveredEdge || active ? 'var(--dsw-alias-brand-primary)' : edgeColor(edge)
+                      }
+                      strokeWidth={selectedEdge ? 2.6 : hoveredEdge ? 2.2 : active ? 2 : 1.2}
+                      strokeOpacity={focusId === null && selectedEdgeId === null ? 0.9 : selectedEdge || hoveredEdge || active ? 1 : 0.22}
+                      markerEnd={selectedEdge || hoveredEdge || active ? 'url(#rg-arrow-active)' : 'url(#rg-arrow)'}
                     />
-                    {/* 方向文字只给高亮边：每条边都标会让图面变成文字噪声。 */}
-                    {active && geometry.labelAnchor !== null && (
+                    {/* 方向文字：高亮/悬停/选中任一时显示（只给被关注的边，
+                        每条都标会让图面变成文字噪声）。 */}
+                    {(active || hoveredEdge || selectedEdge) && geometry.labelAnchor !== null && (
                       <text x={geometry.labelAnchor.x} y={geometry.labelAnchor.y - 4} textAnchor="middle" className="rg-graph-edge-label">
-                        {edge.kind === 'produces' ? t('graph.edgeProduces') : t('graph.edgeConsumes')}
+                        {t(edgeKindKey(edge.kind))}
+                      </text>
+                    )}
+                    {/* 边自带 label 是数据事实（此前完全没被渲染）——与语义标签分开画。 */}
+                    {selectedEdge && geometry.labelAnchor !== null && edge.label !== undefined && (
+                      <text x={geometry.labelAnchor.x} y={geometry.labelAnchor.y + 12} textAnchor="middle" className="rg-graph-edge-label">
+                        {edge.label}
                       </text>
                     )}
                   </g>
@@ -569,7 +617,12 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
                 return (
                   <g
                     key={node.id}
-                    transform={`translate(${node.x},${node.y})`}
+                    /* v0.11.3：改用 style transform 以便布局切换有过渡；拖动时关闭过渡，
+                       否则节点会「追不上指针」。prefers-reduced-motion 由全局 CSS 降级。 */
+                    style={{
+                      transform: `translate(${node.x}px, ${node.y}px)`,
+                      transition: dragged ? 'none' : undefined,
+                    }}
                     opacity={dimmed ? 0.3 : 1}
                     className="rg-graph-node"
                     role="button"
@@ -580,6 +633,8 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
                       event.stopPropagation()
                       if (suppressClickRef.current) return
                       onFocusChange(node.id)
+                      // 节点与边互斥选中：点节点就退出边详情。
+                      setSelectedEdgeId(null)
                     }}
                     onDoubleClick={() => onNodeDoubleClick(node)}
                     onPointerDown={(event) => onNodePointerDown(event, node.id)}
@@ -655,6 +710,10 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
             onLocate={locateNode}
             onClose={() => onFocusChange(null)}
           />
+        )}
+        {/* 无节点聚焦时显示选中的边详情（两者互斥，侧栏不会打架）。 */}
+        {!focusNode && selectedEdgeDetail !== null && (
+          <EdgeDetails detail={selectedEdgeDetail} onClose={() => setSelectedEdgeId(null)} />
         )}
       </div>
 

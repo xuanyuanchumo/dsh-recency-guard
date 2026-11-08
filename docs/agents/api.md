@@ -13,6 +13,7 @@
 | 面板 i18n 新增 `panel.restore` / `panel.stale` / `graph.matchIndex` / `events.more` | zh/en 218+ 键同步 | 兼容 |
 | 图谱图例色跟随着色口径（`legendColorOf`）+ 形状图例（`legendShapeOf`） | graph-model 新导出两个纯函数；GraphToolbar props 新增 `allNodes` / `matchIndex` / `onMatchNext` | 内部接口 |
 | 新增 `tests/client/graph-model.test.ts` 与 `tests/host/routes.test.ts` | 测试 12→13 文件；HTTP 行为与图谱纯函数不再零覆盖 | 新文件 |
+| **v0.11.3**：图谱边可交互（悬停/点击 → 边详情侧栏）+ 布局 transform 过渡 | `edgeDetailOf` 纯函数（graph-model）；`EdgeDetails` 组件（GraphParts）；边选中与节点详情互斥 | 兼容（只增交互） |
 
 ## 0.0d v0.10 契约变更一句话清单
 

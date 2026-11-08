@@ -231,7 +231,13 @@
       "bundle": "插件",
       "gap": "缺口"
     },
-    "matchIndex": "第 {index}/{total} 个"
+    "matchIndex": "第 {index}/{total} 个",
+    "edgeDetails": "边详情",
+    "edgeFrom": "生产方（起点）",
+    "edgeTo": "消费方（终点）",
+    "edgeKind": "语义",
+    "edgeTransitions": "状态迁移",
+    "edgeRanks": "排序引用"
   },
   "events": {
     "title": "事件流",
