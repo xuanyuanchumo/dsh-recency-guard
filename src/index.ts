@@ -21,18 +21,20 @@ import { computeRevision, type RevisionFacts } from './change-guard.js'
 import { DECISION_RELATIVE_PATH, writePointer } from './decision.js'
 import { installGuardedRows, GUARD_PACKAGE_NAME } from './guarded-rows.js'
 import { deriveObservations, deriveRiskInputs } from './observations.js'
-import { installExitSentinel, readSentinel, clearSentinel, pidAlive } from './sentinel.js'
+import { installExitSentinel, readSentinel, clearSentinel } from './sentinel.js'
+import { assessAbnormalExit, abnormalRecoveryVerdict, holdReason } from './abnormal-boot.js'
+import { restoreDisabledExceptPrime, reenableOne, type RecoveryDeps } from './recovery-actions.js'
 import { observeOfficialExperimental } from './official-observe.js'
 import { watchPluginChanges } from './event-watch.js'
-import { assessConfidence, environmentChanged, reconcilePrepared, classifyAbnormalExit, abnormalExitDecision, shouldRestoreAfterBoot, type CrashHistoryEntry } from './recovery-policy.js'
+import { assessConfidence, environmentChanged, reconcilePrepared, shouldRestoreAfterBoot, type CrashHistoryEntry } from './recovery-policy.js'
 import { StageMachine, type LifecycleStepName } from './lifecycle.js'
 import { buildCapabilityGraph, verifyCapabilityContract } from './capability-specs.js'
 import { currentRegistrationSurface, verifySurfaceAlignment } from './capability-specs.js'
 import { buildPanelSnapshot, buildGraphDataFor, type PanelSnapshot } from './snapshot.js'
 import { buildPartitionSnapshot } from './partition-snapshot.js'
 import {
-  isolationView,
-  partitionArtifacts,
+  buildGuardIsolationView,
+  type GuardIsolationView,
   projectKey,
   readPartitionIndex,
   registerPartition,
@@ -482,44 +484,48 @@ class Guard {
   }
 
   /**
-   * 隔离视图 —— 当前分区 + 本 profile 下其它工作区的**引用**（不含它们的状态）。
+   * 两阶段对账（v0.9.0，v0.12.1 从 bootInner 抽出以收窄启动路径的分支数）。
    *
-   * `others` 只给出键/标签/工作区路径：面板据此回答「还有谁在用这个 profile」，
-   * 但绝不把对方的状态读进来 —— 隔离在数据结构上就成立，不靠调用方自觉。
-   * 同时给出对方分区的产物路径清单，作为「互不可见」可断言的对照面。
+   * 语义不变：上一轮可能留下 `phase: 'prepared'` 的决策（崩溃打断或退出没走到
+   * 升级）。按磁盘现状归类 —— `autoDisabled` 里有 ⇒ 关闭已走到 pluginManager
+   * ⇒ confirmed；不在 ⇒ reverted（证据链保留，重启后重试或人工 reenable）。
+   *
+   * 失败**绝不拖垮启动**：prepared 记录保持原样，下一轮再对。
    */
-  isolationView(): {
-    profile: string
-    workspace: string
-    projectKey: string
-    current: unknown
-    others: Array<Record<string, unknown>>
-    isolated: boolean
-    exclusive: boolean
-    artifacts: string[]
-    foreignArtifacts: Array<{ key: string; label: string; paths: string[] }>
-  } {
-    const view = isolationView(this.profileDir, this.workspace)
-    return {
-      profile: this.profileName,
+  private reconcilePreparedOnBoot(): void {
+    try {
+      const decision = this.store.readDecisionSync()
+      if (decision?.phase !== 'prepared' || decision.disable.length === 0) return
+      const stateNow = this.store.readStateSync()
+      const disabledNow = new Set(stateNow.autoDisabled.map((d) => d.name))
+      const reconciled = reconcilePrepared(
+        decision.disable.map((bundle) => ({ bundle, preparedAt: decision.capturedAt, crashSeq: decision.crashSeq ?? 0 })),
+        new Map(decision.disable.map((b) => [b, !disabledNow.has(b)] as const)),
+      )
+      for (const r of reconciled) {
+        this.store.appendSync({
+          kind: 'note',
+          detail: `两阶段对账：${r.bundle} → ${r.outcome === 'confirmed' ? '关闭已生效（confirmed）' : '未生效（reverted，重启后重试或人工 reenable）'}`,
+        })
+      }
+    } catch (err) {
+      this.ctx.logger?.warn?.(`[recency-guard] prepared 对账失败：${describeError(err)}`)
+    }
+  }
+
+  /**
+   * 隔离视图（投影实现在 isolation.ts 的 buildGuardIsolationView）。
+   *
+   * 这里只做参数绑定：复杂度按文件计分，把投影留在 Guard 里会撑高
+   * index.ts 的热点分（实测 14 分支），而它本身与守护流程无关。
+   */
+  isolationView(): GuardIsolationView {
+    return buildGuardIsolationView({
+      profileDir: this.profileDir,
+      profileName: this.profileName,
       workspace: this.workspace,
       projectKey: this.projectKey,
-      current: view.current,
-      others: view.others.map((p) => ({
-        key: p.key,
-        label: p.label,
-        workspace: p.workspace,
-        lastSeenAt: p.lastSeenAt,
-      })),
-      isolated: view.isolated,
-      exclusive: view.exclusive,
-      artifacts: partitionArtifacts(this.profileDir, this.projectKey),
-      foreignArtifacts: view.others.map((p) => ({
-        key: p.key,
-        label: p.label,
-        paths: partitionArtifacts(this.profileDir, p.key),
-      })),
-    }
+    })
   }
 
   // ---------- bundle facts ----------
@@ -937,79 +943,36 @@ class Guard {
     const crashedLastRun = sentinel !== null
 
     // ---------- 第二条检测通道：哨兵缺席的异常终止（v0.12.1） ----------
-    // 用户旅程实测出的 P0：强杀沙箱后 bootMarker 残留（pid 39576）而
-    // crashSeq 仍是 0，面板说「启动时未发现上次崩溃」。
-    // 根因是信号源的覆盖面：哨兵写在 `process.on('exit')` 里，而
-    // SIGKILL / OOM killer / 断电 / 原生段错误**根本不运行 exit 处理器**。
-    // 危险的不是少记一次，而是崩溃循环失去升级依据 —— 插件以原生方式
-    // 撞死宿主时，每一轮都只看到残留标记、每一轮都被当成干净启动清零计数，
-    // 于是永远停在「关 0 个」，正是本插件要防的那个场景。
-    const staleMarker = state.bootMarker
-    const exitClass = classifyAbnormalExit({
-      sentinelPresent: sentinel !== null,
-      staleBootMarker: staleMarker,
-      // pid 存活复核：残留标记不携带死因，「另一个实例还开着」不是崩溃。
-      stalePidAlive: staleMarker === null ? false : pidAlive(staleMarker.pid),
-      // 同一进程内的 boot 重入（热重载/HMR）也要认出来 —— 实测：装完新版后
-      // 那个 pid 又写了一条启动记录，若不识别就会被读成「另一个实例在跑」。
-      currentPid: process.pid,
-    })
-    // 上一轮的存活时长（人读用；判据不依赖它 —— 死亡时间无法从磁盘推出）。
-    const staleAgeMs = staleMarker === null ? 0 : Date.now() - Date.parse(staleMarker.startedAt)
-    const abnormalSeqNext = exitClass === 'abnormal' ? (state.abnormalExitSeq ?? 0) + 1 : 0
-    if (exitClass === 'abnormal') {
-      // 记成 crash-detected 而不是新 kind：journal 的 kind 是跨层词汇表
-      // （store / observations 的 FlowAction / 流动映射 / 面板着色四处），
-      // 漏改任一处这条事实就在事件流里静默消失。退出码缺席写在 detail 里。
+    // 判定集中在 abnormal-boot.ts：四种结局（clean / self-reload / concurrent /
+    // abnormal）+ 留痕文案 + 计数。留在这里的只有「按结果分流」这一层。
+    const abnormal = assessAbnormalExit(
+      {
+        sentinelPresent: sentinel !== null,
+        staleMarker: state.bootMarker,
+        currentPid: process.pid,
+      },
+      state.abnormalExitSeq ?? 0,
+    )
+    const abnormalSeqNext = abnormal.nextSeq
+    if (abnormal.abnormalDetail !== null) {
       this.store.appendSync({
         kind: 'crash-detected',
-        detail: `上次运行未留下退出码（哨兵缺席）—— 强杀/OOM/断电/原生崩溃之一；` +
-          `启动于 ${staleMarker?.startedAt ?? '?'}（约 ${Math.max(0, Math.round(staleAgeMs / 1000))}s 前），` +
-          `pid ${staleMarker?.pid ?? '?'} 已不存在，连续异常终止 ${abnormalSeqNext} 轮`,
+        detail: abnormal.abnormalDetail,
         exitCode: null,
         signal: 'unobserved',
       })
-    } else if (exitClass === 'concurrent') {
-      // 并发实例不是崩溃：如实留痕但计数归零，避免「有人开着另一个 dsh」
-      // 被读成「宿主崩了」进而误关插件。
-      this.store.appendSync({
-        kind: 'note',
-        detail: `检测到同 profile 的另一个实例仍在运行（pid ${staleMarker?.pid}）—— 不计为异常终止`,
-      })
-    } else if (exitClass === 'self-reload') {
-      // 同一进程内重跑 boot（热重载 / HMR reconcile）：不是崩溃，也不是并发实例。
-      // 这条分支存在的意义是**防假归因** —— 实测：装完新版后同一 pid 又写了
-      // 一条启动记录，若归到 concurrent 就会报「检测到另一个实例」，
-      // 用户会去查一个根本不存在的第二个进程。
-      this.store.appendSync({
-        kind: 'note',
-        detail: `同一进程内重新加载守护（pid ${process.pid}）—— 不计为异常终止`,
-      })
+    } else if (abnormal.concurrentDetail !== null) {
+      this.store.appendSync({ kind: 'note', detail: abnormal.concurrentDetail })
+    } else if (abnormal.selfReloadDetail !== null) {
+      this.store.appendSync({ kind: 'note', detail: abnormal.selfReloadDetail })
     }
+    const exitClass = abnormal.exitClass
 
     // 两阶段对账（v0.9.0）：上一轮可能留下 prepared 记录（崩溃打断或正常
     // 退出没走到升级）。按磁盘现状归类：autoDisabled 里有 = 关闭已走到
     // pluginManager ⇒ confirmed；不在 ⇒ reverted（证据链保留）。
-    try {
-      const decision = this.store.readDecisionSync()
-      if (decision?.phase === 'prepared' && decision.disable.length > 0) {
-        const stateNow = this.store.readStateSync()
-        const disabledNow = new Set(stateNow.autoDisabled.map((d) => d.name))
-        const reconciled = reconcilePrepared(
-          decision.disable.map((bundle) => ({ bundle, preparedAt: decision.capturedAt, crashSeq: decision.crashSeq ?? 0 })),
-          new Map(decision.disable.map((b) => [b, !disabledNow.has(b)] as const)),
-        )
-        for (const r of reconciled) {
-          this.store.appendSync({
-            kind: 'note',
-            detail: `两阶段对账：${r.bundle} → ${r.outcome === 'confirmed' ? '关闭已生效（confirmed）' : '未生效（reverted，重启后重试或人工 reenable）'}`,
-          })
-        }
-      }
-    } catch (err) {
-      // 对账失败不拖垮启动：prepared 记录保持原样，下轮再对。
-      this.ctx.logger?.warn?.(`[recency-guard] prepared 对账失败：${describeError(err)}`)
-    }
+    this.reconcilePreparedOnBoot()
+
     // A crash recovery already published the decision and recorded the
     // disabled bundles at the end of the crashed run.
     const recovering = state.autoDisabled.length > 0
@@ -1061,70 +1024,59 @@ class Guard {
       this.ctx.logger.warn(
         `[recency-guard] 上次崩溃已通过阻止加载 ${state.autoDisabled.map((d) => d.name).join(', ')} 恢复。`,
       )
-      if (this.config.autoRestore) {
-        // v0.11.2：恢复要经过插件管理器的 HMR 事务，而 boot 阶段 Loader
-        // 自己可能正在事务中（实测 enable 返回 `HMR transactions cannot be
-        // nested` 且 application=failed）。延后 1.5s 到事务之外执行；
-        // 定时器 unref 不拖住宿主退出。失败由 reenable 的诚实结果兜底
-        // （不谎报成功、留在 autoDisabled 下轮重试）。
-        const timer = setTimeout(() => {
-          void this.restore().catch((err) => {
-            try {
-              this.ctx.logger.warn(`[recency-guard] 自动恢复配置失败：${describeError(err)}`)
-            } catch {
-              /* 日志通道失败也不能抛出 */
-            }
-          })
-        }, 1500)
-        ;(timer as { unref?: () => void }).unref?.()
-      }
+      this.scheduleAutoRestore()
     } else if (recovering) {
       // 仍在崩溃循环里（哨兵在 / 上一轮异常终止 / 并发实例语义不明）：
       // 决策保持原样，恢复会把嫌疑插件重新放进来、把崩溃直接带回来。
-      const why =
-        crashedLastRun
-          ? '上次崩溃后启动'
-          : exitClass === 'abnormal'
-            ? `上一轮异常终止（连续 ${abnormalSeqNext} 轮）`
-            : exitClass === 'concurrent'
-              ? '同 profile 存在另一个运行中的实例'
-              : '守护在同一进程内重载'
-      this.ctx.logger.warn(`[recency-guard] ${why}，保持嫌疑插件关闭。`)
+      this.ctx.logger.warn(`[recency-guard] ${holdReason({ crashedLastRun, exitClass, abnormalSeqNext })}，保持嫌疑插件关闭。`)
     } else if (exitClass === 'abnormal') {
-      // 没有隔离记录 + 上一轮异常终止 ⇒ 走概率性通道：累计到 confirmRounds
-      // 轮才动手（沿用 v0.9 分级，不新造策略）。第一轮只观察不动手，
-      // 因为「标记残留」同样可由用户主动杀进程/关机产生。
-      const decision = abnormalExitDecision(abnormalSeqNext, this.config.confirmRounds, this.config.maxAutoDisable)
-      const ranked = this.rankedSuspectsSync()
-      const head = ranked.length === 0 ? null : ranked[0].bundle
-      this.store.appendSync({
-        kind: 'note',
-        detail: decision.act
-          ? `异常终止判定：连续 ${decision.rounds}/${decision.required} 轮 ⇒ 行动，本轮关闭 ${decision.targets} 个（头号嫌疑 ${head ?? '无'}）`
-          : `异常终止判定：观察中 ${decision.rounds}/${decision.required} 轮（残留标记也可能是人为杀进程，不动手）`,
-      })
-      await this.store.updateState((s) => ({
-        ...s,
-        lastRecoveryVerdict: {
-          at: new Date().toISOString(),
-          crashSeq: abnormalSeqNext,
-          evidence: 'probabilistic',
-          rounds: decision.rounds,
-          required: decision.required,
-          act: decision.act,
-          label: decision.act
-            ? `异常终止累计 ${decision.rounds} 轮 ⇒ 关闭 ${decision.targets} 个`
-            : `异常终止观察中（${decision.rounds}/${decision.required} 轮）`,
-          headSuspect: head,
-        },
-      }))
-      if (decision.act && head !== null) {
-        // 复用既有恢复通道：备份配置 + 关闭 + 发布决策（守护行据此拦截）。
-        // 不另写一套关闭逻辑，否则两条通道的隔离语义会各自漂移。
-        await this.recover(decision.targets)
-      }
+      await this.applyAbnormalRecovery(abnormalSeqNext)
     } else {
       await this.store.updateState((s) => ({ ...s, crashSeq: 0 }))
+    }
+  }
+
+  /**
+   * 延后执行自动恢复（v0.11.2 的时序约束，抽出来供两个调用点共用）。
+   *
+   * 为什么必须延后：恢复要经过插件管理器的 HMR 事务，而 boot 阶段 Loader
+   * 自己可能正在事务中（实测 enable 返回 `HMR transactions cannot be nested`
+   * 且 application=failed）。1.5s 后事务已结束；定时器 unref 不拖住宿主退出。
+   * 失败由 reenable 的诚实结果兜底（不谎报成功、留在 autoDisabled 下轮重试）。
+   */
+  private scheduleAutoRestore(): void {
+    if (!this.config.autoRestore) return
+    const timer = setTimeout(() => {
+      void this.restore().catch((err) => {
+        try {
+          this.ctx.logger.warn(`[recency-guard] 自动恢复配置失败：${describeError(err)}`)
+        } catch {
+          /* 日志通道失败也不能抛出 */
+        }
+      })
+    }, 1500)
+    ;(timer as { unref?: () => void }).unref?.()
+  }
+
+  /**
+   * 按累计轮数决定「观察还是动手」，并在动手时复用既有恢复通道。
+   *
+   * 为什么不另写一套关闭逻辑：两条检测通道若各写一套「备份 + 关闭 + 发布决策」，
+   * 隔离语义迟早各自漂移（一条加了备份、另一条忘了）。这里只做判定与留痕，
+   * 关闭动作一律交给 `recover()`。
+   */
+  private async applyAbnormalRecovery(abnormalSeqNext: number): Promise<void> {
+    const head = this.rankedSuspectsSync()[0]?.bundle ?? null
+    const judged = abnormalRecoveryVerdict(
+      abnormalSeqNext,
+      this.config.confirmRounds,
+      this.config.maxAutoDisable,
+      head,
+    )
+    this.store.appendSync({ kind: 'note', detail: judged.detail })
+    await this.store.updateState((s) => ({ ...s, lastRecoveryVerdict: judged.verdict }))
+    if (judged.act && head !== null) {
+      await this.recover(judged.targets)
     }
   }
 
@@ -1255,98 +1207,37 @@ class Guard {
     }
   }
 
-  /** Restore 的实现体（外层负责步骤计时与失败原因留痕）。 */
+  /**
+   * Restore 的实现体（投影实现在 recovery-actions.ts）。
+   *
+   * 这里只做依赖绑定：恢复的三条不变式（头号嫌疑不恢复、结果必须如实、
+   * 以决策文件为准不重算排名）都在那个模块里，与启动时机无关。
+   */
   private async restoreInner(): Promise<unknown> {
-    const state = await this.store.readState()
-    const auto = state.autoDisabled
-    this.machine.transition('stabilizing', '崩溃后成功启动，准备恢复配置')
-    if (auto.length === 0) {
-      await this.publishDecision([], [], 'none')
-      return { reenabled: [], keptDisabled: [], note: '没有自动关闭记录。' }
-    }
-
-    // The bundles the recovery disabled are the ones to keep off. The decision
-    // that produced them is the authority here — recomputing the ranking could
-    // rank a DIFFERENT bundle on top (the ranking changes as plugins are
-    // installed), and re-enabling the actual suspect would bring the crash back.
-    const disabled = new Set(auto.map((d) => d.name))
-    const reenabled: string[] = []
-    const keptDisabled: string[] = []
-    const failed: string[] = []
-
-    for (const d of auto) {
-      // The most recently disabled bundle is the prime suspect: it stays off
-      // until the user confirms it with the reenable action.
-      if (d.name === auto[auto.length - 1]?.name) {
-        keptDisabled.push(d.name)
-        continue
-      }
-      // v0.11.2 白盒修复：恢复结果必须如实区分「真的启用了」与「管理器拒绝」。
-      const result = (await this.reenable(d.name)) as { reenabled?: boolean }
-      if (result?.reenabled === true) reenabled.push(d.name)
-      else failed.push(d.name)
-    }
-
-    await this.store.updateState((s) => ({
-      ...s,
-      // 失败者留在 autoDisabled（下轮启动重试）；成功者与首要嫌疑移出。
-      autoDisabled: s.autoDisabled.filter((d) => keptDisabled.includes(d.name) || failed.includes(d.name)),
-      stabilized: true,
-      restored: [...s.restored, ...reenabled],
-    }))
-    this.machine.transition('recovered', `已恢复 ${reenabled.length} 个插件`)
-    await this.store.append({
-      kind: 'restore',
-      detail: `重新启用 ${reenabled.join(', ') || '无'}${failed.length > 0 ? `；未启用（管理器拒绝，保留待重试） ${failed.join(', ')}` : ''}`,
-    })
-    await this.publishDecision(
-      [...disabled].map((bundle) => ({ bundle, lastChangeAt: '', lastKind: 'install' as const })),
-      [...keptDisabled, ...failed],
-      keptDisabled.length || failed.length ? 'crash-recovery' : 'none',
-    )
-    return {
-      reenabled,
-      keptDisabled: [...keptDisabled, ...failed],
-      note: keptDisabled.length || failed.length
-        ? `已恢复 ${reenabled.length} 个配置；${keptDisabled.length > 0 ? `仅保留嫌疑插件 ${keptDisabled.join(', ')} 关闭` : ''}${failed.length > 0 ? `${keptDisabled.length > 0 ? '；' : ''}${failed.join(', ')} 管理器拒绝恢复，已留在名单待下轮重试` : ''}。确认安全后可用 reenable 手动开启。`
-        : '已恢复全部配置。',
-    }
+    return restoreDisabledExceptPrime(this.recoveryDeps())
   }
 
-  /** Manually re-enable one bundle, noting its backed-up config. */
+  /** Manually re-enable one bundle（实现见 recovery-actions.ts）。 */
   async reenable(bundle: string): Promise<unknown> {
-    const rows = await this.suspectRows([{ bundle, lastChangeAt: '', lastKind: 'install' }])
-    const results: unknown[] = []
-    try {
-      results.push(await this.pm.setBundleEnabled(bundle, true))
-    } catch (err) {
-      this.ctx.logger.warn(`[recency-guard] 启用组合包 ${bundle} 失败：${describeError(err)}`)
+    return reenableOne(this.recoveryDeps(), bundle)
+  }
+
+  /** 恢复动作的窄依赖（Guard 只交出能力，不交出自己）。 */
+  private recoveryDeps(): RecoveryDeps {
+    return {
+      store: this.store,
+      pluginManager: this.pm,
+      suspectRows: (entries) => this.suspectRows(entries),
+      publishDecision: (suspects, disable, reason) =>
+        this.publishDecision(
+          suspects.map((x) => ({ bundle: x.bundle, lastChangeAt: x.lastChangeAt, lastKind: x.lastKind })),
+          disable,
+          reason,
+        ),
+      transition: (stage, reason) => this.machine.transition(stage, reason),
+      warn: (message) => this.ctx.logger.warn(message),
+      toJson: (value) => safeJson(value),
     }
-    for (const row of rows) {
-      try {
-        results.push(await this.pm.setPluginEnabled(row.entryId, true))
-      } catch (err) {
-        this.ctx.logger.warn(`[recency-guard] 启用插件 ${row.moduleName} 失败：${describeError(err)}`)
-      }
-    }
-    await this.store.append({ kind: 'enable', bundle, result: safeJson(results) })
-    // v0.11.2 白盒修复：**只有真的 applied 才算恢复成功**。
-    // 此前无条件返回 reenabled:true 并从 autoDisabled 里删掉 —— 实测
-    // 管理器返回 `application: 'failed'`（HMR 嵌套事务）时，state 仍记
-    // 「已恢复」，面板/工具显示成功而插件实际关闭：假绿比失败更糟。
-    const applied = results.some(
-      (r) => typeof r === 'object' && r !== null && (r as { application?: unknown }).application === 'applied',
-    )
-    if (applied) {
-      await this.store.updateState((s) => ({
-        ...s,
-        autoDisabled: s.autoDisabled.filter((d) => d.name !== bundle),
-      }))
-    } else {
-      this.ctx.logger.warn(`[recency-guard] ${bundle} 未能恢复（管理器未 applied），保留在自动关闭名单待下轮重试`)
-    }
-    const backup = await this.store.readBackup(bundle)
-    return { bundle, reenabled: applied, hasConfigBackup: backup !== null }
   }
 
   /**

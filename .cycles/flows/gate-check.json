@@ -49,8 +49,20 @@
       "from": "RUNNING",
       "to": "PASSED",
       "at": "2026-11-08T17:15:15.704Z"
+    },
+    {
+      "trigger": "run",
+      "from": "PASSED",
+      "to": "RUNNING",
+      "at": "2026-11-08T23:10:15.291Z"
+    },
+    {
+      "trigger": "all-pass",
+      "from": "RUNNING",
+      "to": "PASSED",
+      "at": "2026-11-08T23:10:15.291Z"
     }
   ],
-  "updatedAt": "2026-11-08T17:15:15.704Z",
+  "updatedAt": "2026-11-08T23:10:15.291Z",
   "ledgerHead": null
 }

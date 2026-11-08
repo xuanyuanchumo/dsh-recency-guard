@@ -1,4 +1,4 @@
-# awesome-dsh-plugin 投稿材料（v0.11.0）
+# awesome-dsh-plugin 投稿材料（v0.12.1）
 
 > 依据 https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md
 > 「一个文件就是全部投稿」：向该仓库提交 PR，新增 `data/plugins/xuanyuanchumo__dsh-recency-guard.yml`，
@@ -20,13 +20,17 @@ description:
     pressure, CUSUM change point, Markov transition matrix, Weibull survival
     fit, Shewhart control band), an interactive capability graph, per-project
     partition isolation, archive-and-reset on the latest facts, and an
-    offline rescue CLI.
+    offline rescue CLI. Crash detection has two channels: an exit-code
+    sentinel plus a leftover-boot-marker check that catches SIGKILL, OOM
+    kills, power loss and native crashes, which never run exit handlers.
   zh: >-
     DeepSeek Harness 的插件崩溃恢复守护。记录第三方与实验性插件的安装更新
     时间线并备份配置；崩溃后按「最近更新优先」自动关闭嫌疑插件让 profile
     能再次启动，稳定后自动恢复非嫌疑。带量化可观测性管理面板（EWMA 崩溃
     压力、CUSUM 变点、马尔可夫转移矩阵、Weibull 生存拟合、休哈特控制带）、
     可交互能力图谱、按项目分区隔离、按最新事实归档重置与离线救援 CLI。
+    崩溃检测有两条通道：退出码哨兵 + 残留启动标记复核（覆盖强杀/OOM/断电/
+    原生崩溃 —— 这些死法不会运行 exit 处理器）。
 icon: https://raw.githubusercontent.com/xuanyuanchumo/dsh-recency-guard/main/assets/icon-256.png
 ```
 

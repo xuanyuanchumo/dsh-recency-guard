@@ -1,4 +1,4 @@
-# 对外面 API（dsh-recency-guard v0.11.0）
+# 对外面 API（dsh-recency-guard v0.12.1）
 
 ## 0.0e v0.11 契约变更一句话清单
 
@@ -66,6 +66,22 @@
 | 守护行文本改为全引号 | 落盘形态变化（`- id: 'x'`） | **YAML 语义兼容**，读取端已支持引号/裸值混排 |
 | `readPatchRows()` 只认「顶层或 `insert:` 子项」的 `- id:` | 嵌套 config 的 `id:` 不再被当作行 id | 修正假阳性，属 Bug 修复 |
 
+## 0.0e v0.12 契约变更一句话清单
+
+| 变更 | 对外契约影响 | 兼容性 |
+|---|---|---|
+| **展示投影接线**：`presentCall` / `presentResult` / `output.presentationMeta` 真正接进 `defineTool`（此前三个纯函数写好了但没接线） | 命令窗口不再是「裸工具名 + 整坨参数 JSON」，而是人话标题 + 摘要 + 可折叠分区 | 兼容（只改显示，不改规范值形状） |
+| 视图类型改用宿主词汇 `ToolCallView`/`ToolResultView`（`content` 是 `ContentBlock[]` 而非 `string`） | 消除本地第二真相源；宿主词汇演进时 tsc 阶段就失败 | 内部（对外 JSON 不变） |
+| **`PanelSnapshot.revision`**（12 hex 哈希，由 state+decision+journal 尾派生） | 面板动作可携带 `expectedRevision`；过期 ⇒ **409 且动作不执行** | 只增字段；不带凭证的请求行为不变 |
+| 跨分区只读快照 `revision: null` | 只读视图没有可改的事实，带凭证必然假冲突 ⇒ 显式 null 而非省略 | 兼容（消费方需区分 null 与 undefined） |
+| **写动作审计行**（recover/restore/reenable/archive 各一条 `kind:note` + 结构化 `audit{actor,action,justification}`） | journal 尾部多审计行；读动作零噪声 | 兼容（复用 note，未新增 kind ⇒ 事件流消费链无需改） |
+| 动作路由 `logError` 桥（子 fiber 的注册失败进宿主日志采集面） | 运维可见性提升 | 兼容 |
+| `cordis` peer `~4.0.5` → `>=4.0.5 <5.0.0` | **修阻断级缺陷**：宿主实为 4.1.0，旧范围被兼容闸门整体拒绝（桌面端 `link:` 不走闸门所以一直没暴露） | 必要修复 |
+| devDependencies 对齐装机代际 0.2.2-rc.1 | 测试跑的代际 == 装机的代际（INC-2026-11-08-01 深层形态） | 内部 |
+| 新增 `dsh.compatibility.dshReleases` 逐发布线声明 | 市场索引/兼容闸门可逐版本判定，而不是只看 engines 区间 | 兼容 |
+| 图谱：k 跳邻域聚焦（1/2/闭包三档）、小地图 Overview、边宽=连接度对数刻度、方向键二维导航 | 新增交互与档位；「只看关联」缺省从闭包改为 **1 跳** | 行为变更（闭包在连通图上等于不过滤，是缺陷修复而非回归） |
+| 小地图几何独立成 `minimap-model.ts` | 无对外影响（内部拆分，避免复杂度越预算与循环依赖） | 兼容 |
+
 ## 0. 工具输出契约（v0.7）——双形态同源，最容易踩的一条
 
 `recency_guard` 的 `execute()` 返回的是**规范 JSON 值**，不是字符串：
@@ -126,8 +142,39 @@ v0.4 起 `execute` 返回**规范 JSON 对象**（不再是字符串）：
 | `restore` | — | 重新启用非嫌疑插件，首要嫌疑保持关闭 |
 | `reenable` | `bundle` | 手动重新启用某个插件 |
 | `backups` | — | 配置备份清单 |
-| `archive` | `reason?` | **v0.4 新增**：归档产物并重置（按最新事实重新自举） |
+| `archive` | `reason?` | **v0.4 新增**：归档产物并重置（按最新事实重新自举）；**v0.12**：写动作先落审计行 |
 | `archives` | — | **v0.4 新增**：历史归档清单；**v0.6**：每份归档带 `summary`（crashSeq/autoDisabled/journalEvents，取自 manifest —— 举他对照的事实基线） |
+
+### 1.1 v0.12 命令窗口显示契约（最容易被漏掉的一层）
+
+工具注册（`src/tool-registration.ts`）必须同时接上**四条**显示通道，少接一条
+宿主就退回通用回退卡片：
+
+| 通道 | 位置 | 显示什么 | 缺席时的表现（就是曾经的缺陷） |
+|---|---|---|---|
+| `output.render` | tool-registration | 模型可见的人读文本（命令窗口正文） | 满屏转义 JSON |
+| `output.presentationMeta` | tool-registration | 规范值 → **可回放**的 UI 卡片模型；宿主持久化在 `tool/result` 的 `meta` 上 | 卡片无标题无分区，回放时无法重建 |
+| `presentCall(args)` | tool-registration | PENDING 卡片：人话标题（`崩溃守护状态`）+ 参数摘要（`history · 最多 40 条`） | 标题是裸工具名 `recency_guard`、正文是整坨原始参数 JSON |
+| `presentResult(args, result)` | tool-registration | COMPLETED 卡片：`插件崩溃守护 · <动作>` + 与命令窗口同源的正文 | 完成态没有语义标题，只剩 raw content |
+
+三条纪律（都有测试钉住）：
+
+1. **类型必须用宿主词汇**。本地曾自声明 `GenericResultView { content: string }`，
+   而宿主是 `content?: ContentBlock[]` —— 函数没接线时 tsc 碰不到它，
+   漂移就长期潜伏。接线当场撞出来，改为 `import type { ToolCallView, ToolResultView }
+   from '@deepseek-ai/dsh-tools'`（纯类型 import，编译期擦除，不引入运行面依赖）。
+2. **`presentCall` 只依赖 args**：宿主在「实时流式」与「会话日志回放」两条路径上
+   调用同一个投影；依赖结果值会让两条路径给出不同卡片。
+3. **args 不合法时返回 undefined**（宿主 `defineTool` 先 `validate` 再调用），
+   让 UI 走通用回退而不是渲染一张错卡片。
+
+反漂移两道门（缺任何一道，「写好纯函数但没接线」这类缺陷都能全绿过关）：
+
+- 源码门 `tests/contract/capability.test.ts`：核对注册文件里出现
+  `presentCall:` / `presentResult:` / `presentationMeta:` 三条接线。
+- 行为门 `tests/host/tool.test.ts`：对**注册出来的工具对象**断言三个方法是函数，
+  并走宿主同一条数据流 `execute → presentationMeta → presentResult`，
+  含 meta 缺席（旧版本记录回放）的诚实降级。
 
 ## 2. HTTP 路由（面板数据面）
 
@@ -140,12 +187,47 @@ v0.4 起 `execute` 返回**规范 JSON 对象**（不再是字符串）：
 | `/isolation` | GET | 项目隔离视图（分区列表 + 当前分区 + 产物路径对照） |
 | `/lifecycle` | GET | 生命周期步骤流 + 迁移史 + 被拒迁移 |
 | `/archives` | GET | 历史归档清单 |
-| `/action/archive` | POST | `{reason}` → 归档重置；**v0.11**：非 POST 一律 405 |
-| `/action/reenable` | POST | `{bundle}` → 重新启用；缺 bundle 400 |
-| `/action/restore` | POST | **v0.11 新增**：恢复非嫌疑插件（面板按钮） |
-| `/action/recover` | POST | 手动恢复；**v0.11**：非 POST 一律 405 |
+| `/action/archive` | POST | `{reason, expectedRevision?}` → 归档重置；**v0.11**：非 POST 一律 405；**v0.12**：凭证过期 409 |
+| `/action/reenable` | POST | `{bundle, expectedRevision?}` → 重新启用；缺 bundle 400；**v0.12**：400 优先于 409 |
+| `/action/restore` | POST | **v0.11 新增**：恢复非嫌疑插件（面板按钮）；**v0.12**：`{expectedRevision?}` 过期 409 |
+| `/action/recover` | POST | 手动恢复；**v0.11**：非 POST 一律 405；**v0.12**：`{expectedRevision?}` 过期 409 |
 
 缺席即诚实：数据不可用时返回 `{available:false, reason}`，不返回空数组假装没问题。
+
+### 2.1 v0.12 动作路由的乐观并发（409 语义）
+
+面板每 5s 轮询一次快照，用户点击时依据的地图最长可能陈旧 5 秒。动作路由
+因此在**执行前**核对 `body.expectedRevision` 与当前真值（`Guard.currentRevision()`）：
+
+| 请求 | 判定 | 响应 | 动作 |
+|---|---|---|---|
+| 不带 `expectedRevision` | 放行（结构上标记 `unchecked`） | 200 + 结果 | **执行** |
+| 带了且等于当前值 | 相符 | 200 + 结果 | **执行** |
+| 带了但不等 | 状态已变 | **409** `{ok:false, conflict:'stale-revision', reason, current}` | **不执行** |
+| 缺必填参数（如 reenable 无 bundle） | 请求本身不合法 | 400 | 不执行（**400 优先于 409**） |
+
+四条设计取舍：
+
+- **409 时动作绝不执行**：冲突了还照做，等于没有这道门。
+- **400 优先于 409**：必错的请求不该占用冲突判定 —— 否则调用方会以为
+  「刷新一下就能成功」，而实际上参数永远不对。
+- **`currentRevision` 缺席时降级放行**：回落路径（无 `ctx.plugin` 的直接注册形态）
+  与旧桩都可能不带它；可选能力缺席不该让动作失效（本插件一贯纪律）。
+- **`currentRevision()` 而不是复用 `snapshot()`**：快照要算指标/风险排名/能力图/
+  马尔可夫矩阵（几十毫秒），而核对只需要那枚哈希；每次 POST 都重跑投影是错配。
+  两处用**同一个** `computeRevision` 与同一组事实字段 ⇒ 「面板看到的那枚」与
+  「宿主核对的那枚」结构上同源，不可能各自漂移。
+
+`revision` 是**哈希而不是计数器**：计数器需要一个单调持久化位点，崩溃时它可能
+落后于状态（假冲突/假放行）；哈希直接从被保护的事实派生（state + decision +
+journal 尾），无额外状态、崩溃重启后同一份事实必得同一枚 —— 幂等，也就不会被崩溃污染。
+列表编码带**长度前缀**，避免 `["a","b,c"]` 与 `["a,b","c"]` 塌缩成同一串；
+`autoDisabled` **保留原序**（先关谁是因果信息，排序会把两种事实当成一种）。
+
+客户端契约（`src/client/api.ts`）：非 2xx 也要解析 body，把
+`reason/conflict/current/status` 透出 —— 此前这里写死 `HTTP ${status}` 把 body 丢了，
+宿主给的 409 语义全部蒸发，闭环断在客户端。分支逻辑挂 `conflict` 字段
+而不是挂 `reason` 文案（文案会改，分支不能跟着坏）。
 
 ## 3. 面板快照契约（PanelSnapshot 摘要）
 
@@ -166,6 +248,8 @@ eventFlow[]                  **v0.10**：事件流/状态流转时序（stage/ac
 markov                       **v0.10**：转移矩阵（rows[].probabilities/stationary/samples）
 backupPolicy                 **v0.9**：备份策略投影（versionedBackups/retain/root…）
 lastRecoveryVerdict?         **v0.9.1**：最近恢复判定（观察中 N/M 轮 或 已行动）
+revision                     **v0.12**：乐观并发凭证（12 hex，从 state+decision+journal 尾派生）
+                             —— 动作请求带 `expectedRevision` 回传它；跨分区只读视图恒 null
 diagnostics                  **v0.10**：插件/宿主版本、平台、快照耗时、repositoryUrl/issuesUrl
 ```
 
@@ -174,6 +258,38 @@ diagnostics                  **v0.10**：插件/宿主版本、平台、快照�
 运行时字段如实降级（stage 恒 `idle` + stageLabel 说明「跨分区只读视图」，
 metrics/capability/markov 为 null —— 那些是当前进程的状态机事实，不能替
 对方分区编造）。未知分区返回 `{available:false, reason}`。
+
+**v0.12 补充**：跨分区投影的 `revision` 恒为 `null`（不是省略字段）。
+只读视图没有可改的事实，而动作只作用于当前分区 —— 拿对方的凭证去核对
+必然产生假冲突。用 null 而不是 undefined 是为了让「这个版本没有凭证」与
+「跨分区没有凭证」两种事实可区分（缺席要可归因）。
+
+### 3.0a v0.12 L4 审计线（journal 的机器可读部分）
+
+四个写动作（`recover` / `restore` / `reenable` / `archive`）在**执行之前**
+各落一条审计行：
+
+```jsonc
+{
+  "kind": "note",                                     // 复用既有通道，不新增 kind
+  "detail": "审计 · tool/recover · <理由或可审计默认>", // 人读
+  "audit": { "actor": "tool", "action": "recover", "justification": "…" } // 机器读
+}
+```
+
+三条取舍：
+
+- **先写后执行**：崩溃可能发生在动作中间，那时「谁、以什么理由发起了这件事」
+  必须已经在盘上。反过来（先执行后记录）会让最需要审计的那次失败恰好没有审计。
+- **只审计写动作**：L4 全自主 = 人类只在事后审计，要记的是「改了什么」。
+  把 status/history 也记进去，面板每 5s 轮询会把崩溃因果链冲掉（信号被噪声淹没）。
+- **复用 `kind: note` 而不是新开 `audit` kind**：journal 的 kind 是一张跨层词汇表
+  （store 的 JournalKind、observations 的 FlowAction、eventFlow 渲染映射、面板着色
+  分组都要跟着改）。新开 kind 而漏掉任一处，审计行就在事件流里**静默消失** ——
+  那条线比「少一个语义标签」危险得多。真要独立成 kind，应作为一次完整的词汇表演进。
+- **写审计行失败不阻塞动作**：它是可观测性设施，不该有否决守护动作的权力。
+- **理由缺席时写「调用方未提供理由」而不是空串**：空理由不是「没有理由」，
+  是「调用方没写」；默认文案让审计时不会把后者误读成前者。
 
 ## 3.1 面板与图谱客户端行为（v0.5 + v0.6）
 

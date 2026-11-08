@@ -244,6 +244,60 @@ export function isolationView(profileDir: string, workspace: string): IsolationV
 }
 
 /**
+ * 面板用的隔离视图（v0.12.1 从 index.ts 的 Guard 方法抽出）。
+ *
+ * 为什么抽出来：它是**纯投影**（读分区索引 + 拼路径），却因为写在
+ * `Guard` 类里而被计入 index.ts 的复杂度热点（实测 14 个分支）。
+ * 复杂度按**文件**计分，把方法从一个类移到另一个类没有意义 ——
+ * 必须把代码移出该文件。抽到这里之后，这段只要给定 profileDir/workspace
+ * 就能被单测直接驱动，不必构造整个 Guard。
+ *
+ * `others` 只给出键/标签/工作区路径：面板据此回答「还有谁在用这个 profile」，
+ * 但绝不把对方的状态读进来 —— 隔离在数据结构上就成立，不靠调用方自觉。
+ * 同时给出对方分区的产物路径清单，作为「互不可见」可断言的对照面。
+ */
+export interface GuardIsolationView {
+  profile: string
+  workspace: string
+  projectKey: string
+  current: ProjectPartition | null
+  others: Array<{ key: string; label: string; workspace: string; lastSeenAt: string }>
+  isolated: boolean
+  exclusive: boolean
+  artifacts: string[]
+  foreignArtifacts: Array<{ key: string; label: string; paths: string[] }>
+}
+
+export function buildGuardIsolationView(input: {
+  profileDir: string
+  profileName: string
+  workspace: string
+  projectKey: string
+}): GuardIsolationView {
+  const view = isolationView(input.profileDir, input.workspace)
+  return {
+    profile: input.profileName,
+    workspace: input.workspace,
+    projectKey: input.projectKey,
+    current: view.current,
+    others: view.others.map((p) => ({
+      key: p.key,
+      label: p.label,
+      workspace: p.workspace,
+      lastSeenAt: p.lastSeenAt,
+    })),
+    isolated: view.isolated,
+    exclusive: view.exclusive,
+    artifacts: partitionArtifacts(input.profileDir, input.projectKey),
+    foreignArtifacts: view.others.map((p) => ({
+      key: p.key,
+      label: p.label,
+      paths: partitionArtifacts(input.profileDir, p.key),
+    })),
+  }
+}
+
+/**
  * 一个分区产物的绝对路径集合 —— 隔离的**否定性证据**。
  *
  * 「互不可见」很难直接证明，但它的反面很容易：列出对方分区的全部产物路径，

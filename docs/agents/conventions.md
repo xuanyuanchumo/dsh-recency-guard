@@ -161,6 +161,51 @@ formatter 自己再拼一份。v0.7 重构 display 时漏掉摊平，宿主层�
 不采用的：dsh-context 的 zod 双运行时校验（本插件用手写形状校验 isSnapshot/isGraph，
 零依赖纪律优先）；dsh-ops 的多模式 applyMode 装配（单职责插件不需要）。
 
+## 6.3 v0.12 新增纪律（真机旅程沉淀）
+
+### 6.3.1 崩溃信号必须有两条通道
+
+单靠哨兵（`process.on('exit')`）会漏掉 SIGKILL / OOM / 断电 / 原生崩溃。
+第二条通道判据 = 「`bootMarker` 残留 且 那个 pid 已不在」，且必须是**概率性证据**
+（第 1 轮只观察、累计到 `confirmRounds` 才动手）——残留标记同样可由人为杀进程产生。
+
+- **有哨兵时第二条通道必须归零**，否则一次崩溃记两笔、`crashSeq` 翻倍、隔离面被放大。
+- **同进程重入（热重载）必须单独成一类**（`self-reload`），不能并入 concurrent：
+  否则会报「检测到另一个实例」，让用户去查一个不存在的进程。
+- **`!crashedLastRun` 是「没有哨兵」，不是「活过了启动」**。这两者在新通道下不再等价，
+  恢复分支必须直接判 `exitClass === 'clean'`（见 `shouldRestoreAfterBoot`）。
+
+### 6.3.2 可选优化不得排在主功能之前，且必须 try 包裹
+
+`setPointerCapture?.(id)` 的真实教训：
+1. `?.` 只保护「方法不存在」，**不保护方法抛异常**（pointerId 失效时按规范抛
+   `NotFoundError`）；
+2. 它排在 `onNavigate(...)` 之前 ⇒ 一个只为「拖拽连续性」的可选优化，
+   把「定位到那一块」这个主功能整个吞掉，症状是「点了没反应」（只有控制台有痕迹）。
+
+纪律：捕获/释放这类浏览器 API 一律 `try` 包裹；调用顺序上**主功能先于可选优化**。
+
+### 6.3.3 无 DOM 缺陷用「源码门 + 变异自证」替代行为测试
+
+React 合成事件冒泡、指针捕获异常、手势互斥，在纯函数测试环境里**测不到**。
+做法：把不变式写成对源码的断言（如「`GraphMinimap` 的六个手势处理器各自含
+`stopPropagation`」），然后**故意破坏它一次**，确认门真的会响（变异自证）。
+只会通过、不会失败的门等于没有门。
+
+### 6.3.4 追加断言必须插在汇总行之前
+
+`core.test.ts` 的结构是 `main()` → 汇总 → `process.exit`。把断言块追加到文件末尾
+（`process.exit` 之后）会**永不执行**，而文件照样打印 `ALL PASS` —— 这是最难发现的
+假绿：测试"通过"了，但新加的断言从来没跑过。追加后必须看到断言自己的 PASS 行。
+
+### 6.3.5 沙箱：环境变量会压过 `--profile`
+
+从 dsh 会话内起动子 dsh 会继承 `DSH_PROFILE` / `DSH_PROFILE_DIR`，它们优先于
+`--profile`；`env -u` 在本执行器下不生效。正确形态：
+`dsh --profile <name> <app>`（profile 在 app 名之前），并用
+`--from-default-profile web` 建干净沙箱。**判别是否真的隔离**：日志里出现
+`dsh-anic` / `codegraph` 就说明跑的是 shipped `web` profile，不是你的沙箱。
+
 ## 7. 发布与沙箱流程
 
 1. 验证链全绿 + ANIC 门禁 G0-G3 通过。
