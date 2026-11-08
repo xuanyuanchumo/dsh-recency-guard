@@ -78,6 +78,30 @@ export function classifyAbnormalExit(input: {
 }
 
 /**
+ * 这一轮启动是否该「宣布崩溃已过、恢复被关的插件」（v0.12.1）。
+ *
+ * 为什么单独成函数：这个判定此前内联成 `recovering && !crashedLastRun`，
+ * 而 `!crashedLastRun` 的真实含义是「没有哨兵」——在单一哨兵通道下它恰好
+ * 等价于「活过了启动」，于是被当成后者的代理。新增异常终止通道后，
+ * **异常终止同样没有哨兵**，代理关系破裂：若沿用旧条件，
+ * 「关了嫌疑插件 → 又死一次（无哨兵）」会被读成「崩溃已过」⇒ 把插件全部
+ * 恢复 ⇒ 亲手拆掉刚建立的隔离，崩溃循环原地复活。
+ *
+ * 所以判据必须直接问「上一轮是**干净退出**吗」，而不是问「有没有哨兵」。
+ * 拆成纯函数是为了让这条二阶缺陷能被单测钉住 —— 内联在 boot() 里时，
+ * 它只能靠真机崩溃循环才能暴露。
+ */
+export function shouldRestoreAfterBoot(input: {
+  /** 名单里有被自动关闭的插件（= 上一轮建立过隔离）。 */
+  recovering: boolean
+  /** 上一轮的退出方式分类（见 classifyAbnormalExit）。 */
+  exitClass: AbnormalExitClass
+}): boolean {
+  if (!input.recovering) return false
+  return input.exitClass === 'clean'
+}
+
+/**
  * 异常终止累计到多少轮才动手（v0.12.1）。
  *
  * 沿用 v0.9 的**概率性证据**纪律：残留标记同样可由「用户主动杀进程/关机」

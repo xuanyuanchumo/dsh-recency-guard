@@ -5,7 +5,7 @@
  * 一个无辜插件」与「半成品状态怎么对账」，是本插件里最不该出错的判定。
  * 夹具数据取自真实场景：多嫌疑连续复现、头号更换、唯一嫌疑、空名单。
  */
-import { assessConfidence, environmentChanged, reconcilePrepared, classifyAbnormalExit, abnormalExitDecision, type CrashHistoryEntry } from '../../src/recovery-policy.js'
+import { assessConfidence, environmentChanged, reconcilePrepared, classifyAbnormalExit, abnormalExitDecision, shouldRestoreAfterBoot, type CrashHistoryEntry } from '../../src/recovery-policy.js'
 import type { RecencyEntry } from '../../src/recency.js'
 
 let failures = 0
@@ -136,6 +136,15 @@ function main() {
     // 同进程重入 boot（热重载/HMR）：实测形态 —— 装完新版后同一 pid 又写启动记录。
     // 必须与 concurrent 分开，否则会报「检测到另一个实例」这种假归因。
     check('classifyAbnormalExit: 标记 pid == 本进程 ⇒ self-reload（热重载不是并发实例）', classifyAbnormalExit(sameProc) === 'self-reload')
+
+    // shouldRestoreAfterBoot：二阶缺陷的机器门（上一轮若是异常终止，绝不能恢复）
+    check('shouldRestoreAfterBoot: 无隔离记录 ⇒ 不恢复', shouldRestoreAfterBoot({ recovering: false, exitClass: 'clean' }) === false)
+    check('shouldRestoreAfterBoot: 干净退出 + 有隔离 ⇒ 恢复（崩溃已过）', shouldRestoreAfterBoot({ recovering: true, exitClass: 'clean' }) === true)
+    // 关键：异常终止同样「没有哨兵」，若沿用旧条件 recovering && !crashedLastRun 会恢复，
+    // 等于亲手拆掉刚建立的隔离 ⇒ 崩溃循环原地复活。
+    check('shouldRestoreAfterBoot: 上一轮异常终止 ⇒ **不**恢复', shouldRestoreAfterBoot({ recovering: true, exitClass: 'abnormal' }) === false)
+    check('shouldRestoreAfterBoot: 并发实例 ⇒ 不恢复（语义不明不冒险）', shouldRestoreAfterBoot({ recovering: true, exitClass: 'concurrent' }) === false)
+    check('shouldRestoreAfterBoot: 热重载 ⇒ 不恢复（同上）', shouldRestoreAfterBoot({ recovering: true, exitClass: 'self-reload' }) === false)
 
     // 阈值语义：第 1 轮只观察（残留标记可能是人为杀进程），到 confirmRounds 才动手。
     const d1 = abnormalExitDecision(1, 2, 2)

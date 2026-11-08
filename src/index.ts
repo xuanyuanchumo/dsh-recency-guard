@@ -24,7 +24,7 @@ import { deriveObservations, deriveRiskInputs } from './observations.js'
 import { installExitSentinel, readSentinel, clearSentinel, pidAlive } from './sentinel.js'
 import { observeOfficialExperimental } from './official-observe.js'
 import { watchPluginChanges } from './event-watch.js'
-import { assessConfidence, environmentChanged, reconcilePrepared, classifyAbnormalExit, abnormalExitDecision, type CrashHistoryEntry } from './recovery-policy.js'
+import { assessConfidence, environmentChanged, reconcilePrepared, classifyAbnormalExit, abnormalExitDecision, shouldRestoreAfterBoot, type CrashHistoryEntry } from './recovery-policy.js'
 import { StageMachine, type LifecycleStepName } from './lifecycle.js'
 import { buildCapabilityGraph, verifyCapabilityContract } from './capability-specs.js'
 import { currentRegistrationSurface, verifySurfaceAlignment } from './capability-specs.js'
@@ -1054,7 +1054,7 @@ class Guard {
     // 但新增通道之后不再成立：异常终止同样没有哨兵。若沿用旧条件，
     // 「关了嫌疑插件 → 又死了一次（无哨兵）」会被读成「崩溃已过」而把插件
     // 全部恢复 —— 那等于把刚建立的隔离亲手拆掉，正是崩溃循环最需要的反面。
-    if (recovering && !crashedLastRun && exitClass === 'clean') {
+    if (shouldRestoreAfterBoot({ recovering, exitClass }) && !crashedLastRun) {
       // The profile booted with the suspect(s) disabled and SURVIVED the boot,
       // so the crash is over. Restore everything except the prime suspect,
       // which stays off until the user confirms it with the reenable action.
