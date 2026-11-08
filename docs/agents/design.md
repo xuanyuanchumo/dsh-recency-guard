@@ -366,3 +366,13 @@ js-yaml 报 `bad indentation of a mapping entry (185:9)`。注意失败的不是
   `crashSeq`/`hardEscalateAfter` 安全网（默认 3 次强制行动）。
   宿主可用性优先于误伤最小化 —— 崩溃循环本身就是确定性事实。
 - 回归：tests/unit/recovery-policy.test.ts 新增 4 条断言。
+
+## 13. v0.11.4 触屏双指缩放（viewport.pinchViewport）
+
+- 不变式：**两指中点下的世界点**在捏合前后保持不动（与 zoomAt 同一推导）；
+  中点位移同时带动画布平移 —— 一次解出 `t1 = nextMid - world(prevMid) · s1`，
+  而不是先 zoomBy 再 panBy（后者以旧中点锚定会让世界点漂移）。
+- 退化保护：两点距离 ≤ 0.01 或非有限 ⇒ 返回原视口（捏合刚开始两指可能
+  落在同一像素，除零会污染视口）。
+- 上界：scale 仍由 clampScale 钳制；组件层每帧 clampPan。
+- 交互互斥：两指在场即取消画布平移拖拽；抬指后清空取样，下一次捏合重新取样。
