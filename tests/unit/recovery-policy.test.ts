@@ -58,6 +58,20 @@ function main() {
     // confirmRounds=1 退化：任何一轮都动手（兼容旧行为）
     const eager = assessConfidence([], [entry('a'), entry('b')], { confirmRounds: 1 })
     check('confirmRounds=1 acts immediately (legacy parity)', eager.act && eager.required === 1, eager)
+
+    // v0.11.1 紧急修复回归：启动检测记录（嫌疑为空）不得打断连续计数。
+    // 实测场景：每次启动先写「上次运行以退出码 1 结束」（无 suspects），
+    // 随后崩溃决策写带 suspects 的记录 —— 历史末尾总是空记录，streak 恒 1。
+    const mixed = [histAt(['a', 'b']), histAt([]), histAt([])]
+    const afterStartup = assessConfidence(mixed, [entry('a'), entry('b')], { confirmRounds: 2 })
+    check('suspect-less startup records do not reset the streak', afterStartup.act && afterStartup.rounds === 2, afterStartup)
+
+    // 兜底升级（v0.11.1）：连续 3 次崩溃即使计数仍为 1/2 也强制行动。
+    const escalated = assessConfidence([], [entry('a'), entry('b')], { confirmRounds: 2, crashSeq: 3 })
+    check('crashSeq >= 3 escalates to act (safety net)', escalated.act && escalated.rounds === 1, escalated)
+    check('escalation label explains the safety net', escalated.label.includes('兜底升级'), escalated.label)
+    const stillObserving = assessConfidence([], [entry('a'), entry('b')], { confirmRounds: 2, crashSeq: 2 })
+    check('crashSeq=2 keeps observing (below threshold)', !stillObserving.act, stillObserving)
   }
 
   console.log('\n== environmentChanged：计数清零条件 ==')

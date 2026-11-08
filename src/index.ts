@@ -626,6 +626,11 @@ class Guard {
     for (const e of events) {
       if (e.kind !== 'crash-detected') continue
       const suspects = Array.isArray(e.suspects) ? e.suspects.filter((s): s is string => typeof s === 'string') : []
+      // v0.11.1 紧急修复：启动时的崩溃检测记录（`上次运行以退出码 N 结束`）
+      // 没有嫌疑名单 —— 它不是一次**决策**。此前把它也收进历史，连续计数
+      // 每轮都被这条空记录打断：桌面端 crashSeq 涨到 3 仍停在 1/2 轮，
+      // 崩溃循环永远无法升级为自动关闭（真机实锤）。
+      if (suspects.length === 0) continue
       out.push({
         at: e.t,
         exitCode: typeof e.exitCode === 'number' ? e.exitCode : -1,
@@ -824,7 +829,12 @@ class Guard {
       // 环境变化（runtime/头号插件版本）⇒ 历史计数清零。
       const history = this.readCrashHistory()
       const envChanged = environmentChanged(history[history.length - 1], safeVersion(), ranked)
-      const verdict = assessConfidence(envChanged ? [] : history, ranked, { confirmRounds: this.config.confirmRounds })
+      // crashSeq 进判定（v0.11.1）：连续崩溃达到 3 次即兜底升级为行动 ——
+      // 崩溃循环本身是确定性事实，不能让计数失效把宿主钉死在循环里。
+      const verdict = assessConfidence(envChanged ? [] : history, ranked, {
+        confirmRounds: this.config.confirmRounds,
+        crashSeq: seq,
+      })
       this.store.appendSync({
         kind: 'note',
         detail: `恢复判定：${verdict.label}`,
@@ -933,10 +943,19 @@ class Guard {
       await this.bootInner()
       this.endStep('boot', true, '启动流程完成')
     } catch (error) {
-      // 失败必须带原因留痕：只有「阶段停在 monitoring」的话，没人知道
-      // 是崩溃检测失败、变更记录失败还是恢复失败。
+      // v0.11.1 紧急修复：boot **绝不向外抛**（此前 rethrow 直接把宿主拖进
+      // `dsh: fatal load failure`，实测：崩溃遗留的 0 字节 state.json.lock
+      // 让 updateState 等满 3s 超时，异常冒到 loader 即宿主退出码 1）。
+      //
+      // 本插件的全部价值都建立在「观测/恢复设施不能拖垮主流程」之上：
+      // 守护自己起不来时正确姿势是**降级留痕**（步骤记失败 + 警告日志），
+      // 让宿主照常启动；下一个启动周期可以继续尝试恢复。
       this.endStep('boot', false, describeError(error))
-      throw error
+      try {
+        this.ctx.logger?.warn?.(`[recency-guard] 守护启动降级（宿主继续启动）：${describeError(error)}`)
+      } catch {
+        /* 日志通道失败也不能抛出 */
+      }
     }
   }
 

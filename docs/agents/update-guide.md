@@ -22,7 +22,21 @@ npx tsc --noEmit  # 类型检查（lint 的超集验证）
 - 文档同步点：`README.md`（版本新增块）、`docs/agents/api.md`（契约变更一句话清单）、
   `.cycles/intent/intent.md`（需求表）。
 
-## 3. 更新到桌面端 dsh（两种路径）
+## 3.1 紧急修复流程（v0.11.1 事故复盘，2026-11-08）
+
+宿主自动升级后插件被移出 profile / 启动致命时按此顺序处理：
+
+1. **先读崩溃日志**（`%APPDATA%\@deepseek-ai\dsh-desktop\logs\crash-*.log`），
+   找 `fatal load failure` 的栈 —— 它直接指向是哪个插件、哪一行。
+2. **核对宿主运行时版本**：`strings app.asar | grep '"@deepseek-ai/dsh-tools"'`，
+   与 `engines.dsh` / peer 范围逐条对照（预发布版本必须显式分支）。
+3. **止血**：插件管理器禁用崩溃嫌疑插件（`plugin_manager set_plugin`），
+   并确认 profile `dsh.profile.bundles` 里本插件仍在（被闸门移除时手动补回）。
+4. **修代码**（本次三类缺陷：预发布范围、boot 抛出、失效写锁）。
+5. **干净沙箱验证**：用与宿主**完全相同**的 dsh 版本安装 + 启动 + 看 journal。
+6. 版本号 patch +1（0.11.1）→ 测试/构建 → npm publish → GitHub tag/release。
+
+## 3.2 更新到桌面端 dsh（两种路径）
 
 ### 路径 A：npm 发布后更新（推荐，生产形态）
 

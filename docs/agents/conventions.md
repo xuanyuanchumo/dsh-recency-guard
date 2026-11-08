@@ -42,6 +42,21 @@ npm run build && npx tsc --noEmit && npm run lint && npm test
 - **语言文件最小 diff**：locale/*.json 用 `json.dumps(indent=2)` 原行尾重写
   （Python json.dump 会改全文件行尾 ⇒ 542 行假 diff 实测发生过）。
 
+## 3.2 v0.11.1 紧急修复纪律（宿主兼容与启动健壮性）
+
+- **预发布版本范围必须写显式分支**：`>=0.2.1-rc.5 <0.3.0-0` 会**静默排除**
+  `0.2.2-rc.1`（node-semver 规则）；宿主升级即被兼容闸门移出 profile。
+  新范围：`>=0.2.1-rc.5 <0.2.2-0 || >=0.2.2-rc.1 <0.2.3-0 || >=0.2.3-rc.1 <0.3.0-0`；
+  契约测试守卫 `>=0.2.2-rc.1` 分支存在。
+- **boot 绝不外抛**：`Guard.boot()` 失败只降级留痕。任何异常冒到 loader
+  都会变成 `dsh: fatal load failure`（宿主退出码 1）——守护不能拖垮主流程。
+- **写锁卫生**：崩溃可能留下 0 字节 `*.lock`（创建与写 PID 之间被杀），
+  atomic-write 无法接管不完整记录。启动先 `cleanStaleLocks`（空/非 PID/
+  死 PID 且年龄 > 5s），`updateState` 超时后清理重试一次。
+- **连续计数不得被启动记录打断**：`crash-detected` 有两种来源（启动检测
+  无 suspects / 崩溃决策带 suspects）；历史只认后者，另有 crashSeq ≥ 3
+  兜底升级（安全网）。
+
 ## 4. 宿主纪律（dsh 插件通用）
 
 - Loader 四件套（name/inject/Config/apply）之外不导出任何东西。

@@ -1,6 +1,6 @@
 {
   "name": "dsh-recency-guard",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Crash-recovery guard for DeepSeek Harness: records third-party/experimental plugin install & update recency, backs up their config, and after a crash auto-disables the most-recently-updated plugin(s) so the profile boots again, then restores stable config.",
   "license": "MIT",
   "type": "module",
@@ -67,10 +67,10 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5",
-    "@deepseek-ai/dsh-app-boot": ">=0.2.1-rc.5 <0.3.0-0",
-    "@deepseek-ai/dsh-config-editor": ">=0.2.1-rc.5 <0.3.0-0",
-    "@deepseek-ai/dsh-plugin-manager": ">=0.2.1-rc.5 <0.3.0-0",
-    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-app-boot": ">=0.2.1-rc.5 <0.2.2-0 || >=0.2.2-rc.1 <0.2.3-0 || >=0.2.3-rc.1 <0.3.0-0",
+    "@deepseek-ai/dsh-config-editor": ">=0.2.1-rc.5 <0.2.2-0 || >=0.2.2-rc.1 <0.2.3-0 || >=0.2.3-rc.1 <0.3.0-0",
+    "@deepseek-ai/dsh-plugin-manager": ">=0.2.1-rc.5 <0.2.2-0 || >=0.2.2-rc.1 <0.2.3-0 || >=0.2.3-rc.1 <0.3.0-0",
+    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.5 <0.2.2-0 || >=0.2.2-rc.1 <0.2.3-0 || >=0.2.3-rc.1 <0.3.0-0",
     "@deepseek-ai/schemastery": ">=3.18.0 <4.0.0-0"
   },
   "peerDependenciesMeta": {
@@ -122,6 +122,6 @@
     "typescript": "^5.9.0"
   },
   "engines": {
-    "dsh": ">=0.2.1-rc.5 <0.3.0-0"
+    "dsh": ">=0.2.1-rc.5 <0.2.2-0 || >=0.2.2-rc.1 <0.2.3-0 || >=0.2.3-rc.1 <0.3.0-0"
   }
 }

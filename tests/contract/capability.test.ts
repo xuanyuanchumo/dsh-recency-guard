@@ -321,6 +321,27 @@ function main() {
   check('the spec list is not empty', CAPABILITY_SPECS.length > 0)
   check('every spec appears in the graph', CAPABILITY_SPECS.every((s) => graph.get(s.id) !== undefined))
 
+  // ── v0.11.1 紧急修复回归：宿主预发布版本的 semver 覆盖 ──
+  // 背景（真机实锤）：宿主升级到 0.2.2-rc.1 后，旧范围
+  // `>=0.2.1-rc.5 <0.3.0-0` 按 node-semver 的预发布规则**静默排除**它
+  // （只有与版本 major.minor.patch 元组相同、且自身带预发布标签的比较符
+  // 才放行预发布版本）→ 兼容闸门把插件从 profile 移出、守护失效。
+  // 这里钉死：engines 与每个 @deepseek-ai/dsh-* peer 必须包含显式的
+  // 0.2.2-rc / 0.2.3-rc 分支。
+  console.log('\n== pre-release compat ranges (v0.11.1 emergency fix) ==')
+  {
+    const runtimeRange = String(manifest.engines?.dsh ?? '')
+    check('engines.dsh declares an explicit 0.2.2-rc branch', runtimeRange.includes('>=0.2.2-rc.1'), runtimeRange)
+    check('engines.dsh declares an explicit 0.2.3-rc branch', runtimeRange.includes('>=0.2.3-rc.1'), runtimeRange)
+    check('engines.dsh still excludes 0.3.0 pre-releases', runtimeRange.includes('<0.3.0-0'), runtimeRange)
+    const peers = Object.entries(manifest.peerDependencies ?? {}) as Array<[string, string]>
+    for (const [name, range] of peers) {
+      // 只有 @deepseek-ai/dsh-* 与 dsh 同版本线；cordis 走 4.x、schemastery 走 3.x。
+      if (!name.startsWith('@deepseek-ai/dsh-')) continue
+      check(`${name} covers 0.2.2-rc host prereleases`, String(range).includes('>=0.2.2-rc.1'), range)
+    }
+  }
+
   console.log('\n' + (failures === 0 ? 'ALL PASS' : failures + ' FAILURE(S)') + '\n')
   process.exit(failures === 0 ? 0 : 1)
 }

@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises'
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
 
@@ -119,6 +119,91 @@ export function emptyState(): GuardState {
   return { bootMarker: null, crashSeq: 0, autoDisabled: [], stabilized: false, restored: [] }
 }
 
+/**
+ * 陈旧写锁的最小年龄（毫秒）。
+ *
+ * 比它年轻的锁一律不清理：锁文件由 `writeFile(..., {flag:'wx'})` 创建后
+ * 立刻写入 PID，两者之间存在一个**极短的零字节窗口** —— 此时清理会把
+ * 正在创建的锁删掉，两个写者就会同时持锁。5 秒的窗口远大于该间隙，
+ * 又远小于「崩溃遗留」的时间尺度（实测遗留锁已数小时）。
+ */
+const STALE_LOCK_MIN_AGE_MS = 5_000
+
+/** 陈旧锁清理结果（可观测：清了什么、留了什么、为什么）。 */
+export interface StaleLockReport {
+  /** 被清理的锁文件名。 */
+  removed: string[]
+  /** 保留的锁文件名（可能仍被活进程持有，或太新）。 */
+  kept: string[]
+}
+
+/** 进程是否存活（EPERM = 存在但无权探测，按存活处理）。 */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/**
+ * 清理**失效的写锁**（v0.11.1 紧急修复）。
+ *
+ * 背景（真机实锤）：宿主崩溃恰好发生在锁文件创建与写入 PID 之间，留下
+ * 一个 **0 字节的 `state.json.lock`**。`@deepseek-ai/dsh-atomic-write` 的
+ * 接管逻辑只在锁里**有可读 PID 且进程已死**时才删除；记录不完整的锁
+ * 会被一直等待，2 秒后超时抛错 —— 而该错误发生在 `boot()` 里，直接成了
+ * 宿主 `fatal load failure`（DSH 起不来）。守护设施绝不能把主流程拖死。
+ *
+ * 清理判据（任一成立且超过年龄阈值）：
+ * - 锁内容为空 / 不是正整数 PID（不完整记录，永远无法被接管）；
+ * - PID 对应的进程不存在（等价于库的接管语义，提前做掉少等 2 秒）；
+ * - 其余保留（可能真被活进程持有 —— 那种情况必须等，不能抢）。
+ */
+export function cleanStaleLocks(dir: string, now = Date.now()): StaleLockReport {
+  const report: StaleLockReport = { removed: [], kept: [] }
+  let entries: string[]
+  try {
+    entries = readdirSync(dir)
+  } catch {
+    return report
+  }
+  for (const name of entries) {
+    if (!name.endsWith('.lock')) continue
+    const path = join(dir, name)
+    try {
+      if (now - statSync(path).mtimeMs < STALE_LOCK_MIN_AGE_MS) {
+        report.kept.push(name)
+        continue
+      }
+      let text = ''
+      try {
+        text = readFileSync(path, 'utf8').trim()
+      } catch {
+        report.kept.push(name)
+        continue
+      }
+      const pid = Number(text)
+      const incomplete = text === '' || !Number.isInteger(pid) || pid <= 0
+      if (!incomplete && processAlive(pid)) {
+        report.kept.push(name)
+        continue
+      }
+      rmSync(path, { force: true })
+      report.removed.push(name)
+    } catch {
+      report.kept.push(name)
+    }
+  }
+  return report
+}
+
+/** 判断一个错误是否是写锁超时（用于「清理后重试一次」的定向处理）。 */
+export function isLockTimeout(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('timed out waiting for the writer lock')
+}
+
 export class Store {
   /** profile 根目录下的守护目录（分区索引与归档都在这里）。 */
   readonly rootDir: string
@@ -156,6 +241,15 @@ export class Store {
 
   async init(): Promise<void> {
     await mkdir(this.backupsDir, { recursive: true })
+    // v0.11.1 紧急修复：清掉上一个崩溃进程遗留的失效写锁。
+    // 0 字节锁无法被 atomic-write 接管（它要求锁内有可读 PID），会让
+    // 本次启动的 updateState 等满超时后抛错 —— 实测直接把宿主拖进
+    // fatal load failure。清理失败不阻断 init（那只是少一道保险）。
+    try {
+      cleanStaleLocks(this.dir)
+    } catch {
+      /* best effort：init 的唯一硬要求是备份目录存在 */
+    }
   }
 
   /** 本分区的绝对路径（供面板与日志引用）。 */
@@ -320,12 +414,29 @@ export class Store {
 
   /** Serialized read-modify-write across processes. */
   async updateState(mutate: (s: GuardState) => GuardState | Promise<GuardState>): Promise<GuardState> {
-    return withFileLock(this.statePath, async () => {
-      const cur = await this.readState()
-      const mutated = await mutate(cur)
-      await this.writeState(mutated)
-      return mutated
-    }, { waitMs: 3000 })
+    const run = (): Promise<GuardState> =>
+      withFileLock(
+        this.statePath,
+        async () => {
+          const cur = await this.readState()
+          const mutated = await mutate(cur)
+          await this.writeState(mutated)
+          return mutated
+        },
+        { waitMs: 3000 },
+      )
+    try {
+      return await run()
+    } catch (error) {
+      // v0.11.1 紧急修复：锁超时先清理失效锁再重试一次。
+      // 定向处理（只认锁超时）——写失败/权限错误不该被重试掩盖。
+      if (!isLockTimeout(error)) throw error
+      // 此刻多半是「锁被活进程持有」或「记录不完整」；清理只动
+      // 失效记录（空/PID 已死/超过年龄阈值），活锁会被保留，重试仍超时
+      // 则如实抛出（由调用方决定降级）。
+      cleanStaleLocks(this.dir)
+      return run()
+    }
   }
 
   /**

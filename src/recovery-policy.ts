@@ -69,18 +69,23 @@ export interface CrashHistoryEntry {
  *
  * @param history 以往崩溃记录（不含本轮），旧 → 新
  * @param currentSuspects 本轮嫌疑名单（ranked 顺序）
- * @param options confirmRounds：概率性证据需要的重复轮数（默认 2）
+ * @param options confirmRounds：概率性证据需要的重复轮数（默认 2）；
+ *   crashSeq：本轮的累计崩溃序号（用于兜底升级）；hardEscalateAfter：兜底阈值（默认 3）。
  *
  * 判定表：
  * - 唯一嫌疑（本轮名单长度 1）⇒ deterministic，第 1 轮就动手 ——
  *   「没有别的解释」是硬证据，等第二轮只会让用户多崩一次；
  * - 多嫌疑 ⇒ probabilistic，需要连续 confirmRounds 轮看到**同一**头号
- *   嫌疑才动手（名单换头 = 环境变了 = 重新计数）。
+ *   嫌疑才动手（名单换头 = 环境变了 = 重新计数）；
+ * - **兜底升级（v0.11.1 紧急修复）**：累计崩溃序号 ≥ hardEscalateAfter 时
+ *   强制动手 —— 崩溃循环本身就是「宿主已经起不来」的确定性事实，
+ *   概率计数机制一旦失效（实测：启动记录的嫌疑空记录曾把连续数打断），
+ *   没有兜底就会永远观察、永远崩溃。宿主可用性优先于误伤最小化。
  */
 export function assessConfidence(
   history: readonly CrashHistoryEntry[],
   currentSuspects: readonly RecencyEntry[],
-  options: { confirmRounds?: number } = {},
+  options: { confirmRounds?: number; crashSeq?: number; hardEscalateAfter?: number } = {},
 ): ConfidenceVerdict {
   const confirmRounds = Math.max(1, options.confirmRounds ?? 2)
   const names = currentSuspects.map((s) => s.bundle)
@@ -97,21 +102,29 @@ export function assessConfidence(
     }
   }
   // 概率性证据：数「连续同头号嫌疑」的轮数。
+  // v0.11.1：**跳过嫌疑为空的记录**（启动时的检测事件）。此前
+  // `entry.suspects[0] ?? '' !== head` 会让每条启动记录都打断连续计数 ——
+  // 实测桌面端 crashSeq 连涨到 3 却永远停在 1/2 轮，崩溃循环无解。
   const head = names[0]
   let streak = 1
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const entry = history[i] as CrashHistoryEntry
+    if (entry.suspects.length === 0) continue
     if ((entry.suspects[0] ?? '') !== head) break
     streak += 1
   }
-  const act = streak >= confirmRounds
+  const hardEscalateAfter = Math.max(1, options.hardEscalateAfter ?? 3)
+  const escalated = options.crashSeq !== undefined && options.crashSeq >= hardEscalateAfter
+  const act = streak >= confirmRounds || escalated
   return {
     act,
     evidence: 'probabilistic',
     rounds: streak,
     required: confirmRounds,
     label: act
-      ? `头号嫌疑 ${head} 连续 ${streak} 轮复现（≥ ${confirmRounds}）：达到行动阈值`
+      ? streak >= confirmRounds
+        ? `头号嫌疑 ${head} 连续 ${streak} 轮复现（≥ ${confirmRounds}）：达到行动阈值`
+        : `连续 ${options.crashSeq} 次崩溃仍未恢复：兜底升级为行动（安全网）`
       : `头号嫌疑 ${head} 复现 ${streak}/${confirmRounds} 轮：观察中，本轮只记录不关闭`,
   }
 }

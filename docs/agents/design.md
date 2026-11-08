@@ -326,3 +326,43 @@ js-yaml 报 `bad indentation of a mapping entry (185:9)`。注意失败的不是
   核心去向分布（README 宣称的）界面上看不到。
 - 修复：`MarkovRowView.exits`（排除自环与零概率，按概率降序 top-2，
   并列按阶段名稳定排序）→ 行内「→ 崩溃 40%」徽标。
+
+## 12. v0.11.1 紧急修复：宿主兼容与启动健壮性（cycle-6 应急）
+
+### 12.1 预发布版本兼容（package.json）
+
+- 事故：桌面端 DSH 升到 `0.2.2-rc.1`，旧 `engines.dsh` / peer 范围
+  `>=0.2.1-rc.5 <0.3.0-0` 按 node-semver 规则**静默排除**该预发布版本
+  （只有与版本元组相同、且自身带预发布标签的比较符才放行预发布），
+  插件被兼容闸门移出 profile `bundles` → 守护消失 → 崩溃循环失去保护。
+- 修复：显式多分支范围
+  `>=0.2.1-rc.5 <0.2.2-0 || >=0.2.2-rc.1 <0.2.3-0 || >=0.2.3-rc.1 <0.3.0-0`；
+  契约测试钉死「每个 @deepseek-ai/dsh-* peer 必须包含 >=0.2.2-rc.1 分支」。
+- 验证：`npx @deepseek-ai/dsh@0.2.2-rc.1 plugin add file:...` 干净沙箱
+  （sb-rg-v0111）安装成功 + 启动后 journal 有 `dsh 启动` 与 install 0.11.1。
+
+### 12.2 启动绝不抛出（index.ts Guard.boot）
+
+- 事故：崩溃遗留的 0 字节 `state.json.lock` 让 `bootInner` 的 `updateState`
+  等满 3s 超时抛错；`boot()` rethrow 后宿主报
+  `dsh: fatal load failure: Error: atomic-write: timed out ...` 并退出码 1。
+- 修复：`boot()` 捕获后只做**降级留痕**（步骤失败 + 警告日志），绝不外抛。
+  理由是设计红线：观测/恢复设施不能拖垮主流程；守护自己失败时宿主应照常启动。
+
+### 12.3 失效写锁自愈（store.ts）
+
+- `cleanStaleLocks(dir)`：清理「空内容 / 非正整数 PID / PID 进程已死」且
+  文件年龄 > 5s 的 `*.lock`；保留活锁与刚创建的锁（锁创建→写 PID 之间有
+  零字节窗口，清理太新的锁会抢掉正在持有的写者）。
+- 两处接线：`Store.init()` 启动先清理；`updateState` 锁超时后清理并重试一次
+  （定向识别 timeout 消息，其他错误不重试）。
+- 回归：tests/unit/store-lock.test.ts（11 断言，含「陈旧锁下 updateState 仍成功」）。
+
+### 12.4 连续崩溃兜底升级（recovery-policy.ts）
+
+- 事故：`readCrashHistory` 把启动时「无嫌疑 crash-detected」也当决策记录，
+  连续计数每轮被打断 → crashSeq 涨到 3 仍「观察中 1/2 轮」→ 崩溃循环无解。
+- 修复：历史读取跳过 suspects 为空的记录；`assessConfidence` 增加
+  `crashSeq`/`hardEscalateAfter` 安全网（默认 3 次强制行动）。
+  宿主可用性优先于误伤最小化 —— 崩溃循环本身就是确定性事实。
+- 回归：tests/unit/recovery-policy.test.ts 新增 4 条断言。
