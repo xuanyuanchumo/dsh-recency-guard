@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
-import Schema from '@deepseek-ai/schemastery'
+// schemastery 是**可选** peer：静态 import 会在缺失时让整个插件 require 崩，
+// 因此改由下方 `loadSchemastery()` 惰性解析 + 纯对象降级（v0.13 安装不崩修复）。
 import { readSelfPackage, readHostVersion, safeJson, safeVersion } from './self-describe.js'
 // The runtime version is a detail, not a hard dependency: the import is
 // resolved lazily so a missing optional peer can never stop the plugin from
@@ -82,16 +83,90 @@ export interface Config {
   backupRoot: string
 }
 
-export const Config: Schema<Config> = Schema.object({
-  enabled: Schema.boolean().default(true).description('崩溃后自动按“最近更新”关闭嫌疑插件。'),
-  includeExperimental: Schema.boolean().default(true).description('把 experimental/beta 命名的组合包也算作嫌疑。'),
-  maxAutoDisable: Schema.number().default(2).description('单次恢复最多自动关闭的嫌疑插件数（崩溃次数递增，封顶此值）。'),
-  autoRestore: Schema.boolean().default(true).description('稳定启动后自动重新启用非嫌疑插件，恢复需要的配置。'),
-  confirmRounds: Schema.number().default(2).description('概率性证据的行动阈值：同一头号嫌疑连续 N 轮崩溃才自动关闭（唯一嫌疑不受限）。'),
-  versionedBackups: Schema.boolean().default(true).description('插件更新时写带版本的时间线备份（可回溯更新前后的配置）。'),
-  backupRetain: Schema.number().default(5).description('每个插件保留的时间线备份份数（超出删最旧）。'),
-  backupRoot: Schema.string().default('').description('备份自定义目录（留空用 profile 内默认位置，随分区隔离）。'),
-})
+/**
+ * Schemastery 的**可选**加载（v0.13 安装不崩修复）。
+ *
+ * ## 为什么不能静态 import
+ *
+ * `@deepseek-ai/schemastery` 在 package.json 里是 `peerDependencies` 且
+ * `optional: true` —— 它由宿主（`@deepseek-ai/dsh-base` 等）提供，插件不直接装。
+ * 但它的**静态 ESM import 会在模块求值阶段硬失败**：
+ *
+ * ```
+ * Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@deepseek-ai/schemastery'
+ *   imported from .../dist/index.js
+ * ```
+ *
+ * 沙箱实测：只装 `dsh-base` + 本插件的 profile 里，宿主没有把 schemastery
+ * 提到可解析位置 ⇒ **插件整个加载失败**（不是功能降级，是 require 就崩）。
+ * 对守护插件来说这是致命的：它恰恰要在"宿主环境不完整"时还能加载。
+ *
+ * ## 修法：动态解析 + 纯对象降级
+ *
+ * - 能解析 ⇒ 用 schemastery（保留 desc/默认值/校验，宿主设置页可渲染表单）；
+ * - 解析不到 ⇒ 用一个**纯对象 schema 占位**：`Config` 仍是可用对象，
+ *   但宿主设置页拿不到字段描述（诚实降级，不是崩溃）。
+ *
+ * 这与 compat-guardian 的做法一致（它根本不依赖 schemastery，配置用普通对象）。
+ */
+type SchemasteryFactory = {
+  object(fields: Record<string, unknown>): unknown
+  boolean(): { default(value: boolean): { description(text: string): unknown } }
+  number(): { default(value: number): { description(text: string): unknown } }
+  string(): { default(value: string): { description(text: string): unknown } }
+}
+
+/** 尝试同步解析 schemastery；失败返回 null（绝不抛）。 */
+function loadSchemastery(): SchemasteryFactory | null {
+  try {
+    const req = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process?.getBuiltinModule?.('module') as
+      | { createRequire?: (p: string) => (id: string) => unknown }
+      | undefined
+    const createRequire = req?.createRequire
+    if (typeof createRequire !== 'function') return null
+    // 以本模块自身位置为锚点解析（与打包产物同一查找起点）。
+    const localRequire = createRequire(import.meta.url)
+    const mod = localRequire('@deepseek-ai/schemastery') as { default?: SchemasteryFactory } | SchemasteryFactory
+    const factory = (mod as { default?: SchemasteryFactory }).default ?? (mod as SchemasteryFactory)
+    return typeof factory?.object === 'function' ? factory : null
+  } catch {
+    return null
+  }
+}
+
+/** 纯对象降级：Config 仍是可枚举的对象，只是没有 schemastery 的表单描述。 */
+function fallbackConfigSchema(): Record<string, { type: string; default: unknown; description: string }> {
+  return {
+    enabled: { type: 'boolean', default: true, description: '崩溃后自动按“最近更新”关闭嫌疑插件。' },
+    includeExperimental: { type: 'boolean', default: true, description: '把 experimental/beta 命名的组合包也算作嫌疑。' },
+    maxAutoDisable: { type: 'number', default: 2, description: '单次恢复最多自动关闭的嫌疑插件数。' },
+    autoRestore: { type: 'boolean', default: true, description: '稳定启动后自动重新启用非嫌疑插件。' },
+    confirmRounds: { type: 'number', default: 2, description: '概率性证据的行动阈值：同一头号嫌疑连续 N 轮崩溃才自动关闭。' },
+    versionedBackups: { type: 'boolean', default: true, description: '插件更新时写带版本的时间线备份。' },
+    backupRetain: { type: 'number', default: 5, description: '每个插件保留的时间线备份份数。' },
+    backupRoot: { type: 'string', default: '', description: '备份自定义目录（留空用 profile 内默认位置）。' },
+  }
+}
+
+const SchemaFactory = loadSchemastery()
+
+export const Config: unknown = SchemaFactory
+  ? SchemaFactory.object({
+      enabled: SchemaFactory.boolean().default(true).description('崩溃后自动按“最近更新”关闭嫌疑插件。'),
+      includeExperimental: SchemaFactory.boolean().default(true).description('把 experimental/beta 命名的组合包也算作嫌疑。'),
+      maxAutoDisable: SchemaFactory.number().default(2).description('单次恢复最多自动关闭的嫌疑插件数（崩溃次数递增，封顶此值）。'),
+      autoRestore: SchemaFactory.boolean().default(true).description('稳定启动后自动重新启用非嫌疑插件，恢复需要的配置。'),
+      confirmRounds: SchemaFactory.number().default(2).description('概率性证据的行动阈值：同一头号嫌疑连续 N 轮崩溃才自动关闭（唯一嫌疑不受限）。'),
+      versionedBackups: SchemaFactory.boolean().default(true).description('插件更新时写带版本的时间线备份（可回溯更新前后的配置）。'),
+      backupRetain: SchemaFactory.number().default(5).description('每个插件保留的时间线备份份数（超出删最旧）。'),
+      backupRoot: SchemaFactory.string().default('').description('备份自定义目录（留空用 profile 内默认位置，随分区隔离）。'),
+    })
+  : fallbackConfigSchema()
+
+// 注意：**不导出** `schemaProvider` 一类的诊断常量。CLAUDE.md 纪律是
+// 「Loader 四件套（name/inject/Config/apply）之外不导出任何东西」，
+// 契约测试 `tests/contract/capability.test.ts` 会逐名核对导出面。
+// 降级状态改由 `Config` 的形状自证（fallback 是纯对象，schemastery 有 validate）。
 
 /** The subset of `ctx.pluginManager` this plugin uses. */
 interface PluginManagerLike {
