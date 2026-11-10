@@ -130,6 +130,28 @@ export function writeDecision(partitionDir: string, decision: Decision): void {
 }
 
 /**
+ * 读指针（同步）—— 返回指针内容，文件缺失/损坏时返回 null。
+ *
+ * 为什么需要读指针：排查「为什么这个插件被拦了」时，第一件要确认的事实是
+ * **表达式读到了哪个分区的决策**。没有读函数时只能靠人肉开文件，而文件路径
+ * 本身要由 `pointerPath()` 拼 —— 那正是最容易拼错的一环。
+ *
+ * 注意它**不影响表达式行为**：守护行的求值逻辑内联在 `guardExpression()` 里，
+ * 本函数只服务诊断与测试。
+ */
+export function readPointer(profileDir: string): DecisionPointer | null {
+  try {
+    const file = pointerPath(profileDir)
+    if (!existsSync(file)) return null
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as DecisionPointer
+    if (typeof parsed?.decisionPath !== 'string') return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+/**
  * 写指针（同步）—— 指向某个分区的决策文件。
  *
  * @param profileDir profile 目录
