@@ -1,6 +1,6 @@
 {
   "flowId": "macro-phase",
-  "current": "maintain",
+  "current": "design",
   "history": [
     {
       "trigger": "advance",
@@ -91,8 +91,14 @@
       "from": "deploy",
       "to": "maintain",
       "at": "2026-11-07T07:27:37.465Z"
+    },
+    {
+      "trigger": "advance",
+      "from": "plan",
+      "to": "design",
+      "at": "2026-11-10T12:23:30.174Z"
     }
   ],
-  "updatedAt": "2026-11-07T07:27:37.465Z",
+  "updatedAt": "2026-11-10T12:23:30.174Z",
   "ledgerHead": null
 }
