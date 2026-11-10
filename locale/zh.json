@@ -346,7 +346,10 @@
   "calibration": {
     "threshold": "确认轮数",
     "rate": "误伤率",
-    "insufficient": "样本不足，不可判定（不是 0%）"
+    "insufficient": "样本不足，不可判定（不是 0%）",
+    "unattributedRestores": "证据链缺口",
+    "evidenceGap": "证据链缺口",
+    "evidenceGapHint": "（记录可能损坏，误伤率偏低）"
   },
   "bayes": {
     "empty": "没有嫌疑插件",

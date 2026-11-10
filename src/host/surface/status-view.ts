@@ -102,6 +102,16 @@ export interface CalibrationView {
   falsePositives: number
   /** 系统自动恢复次数（不算误伤，但要展示以解释差异）。 */
   systemRestored: number
+  /**
+   * 证据链缺口（v0.15 TD-1）：`restore` 声明恢复了某插件，但 journal 里
+   * 找不到对应的 `enable` 记录。
+   *
+   * 为什么必须单独展示而不是并进 `unattributed`：后者是「用户开了一个
+   * 守护没关过的插件」—— 那是**正常的用户行为**；前者是**记录本身损坏**
+   * （事件被截断、手改 journal、跨轮清理）。把两者混在一个计数器里，
+   * 面板会把「数据坏了」读成「用户在操作」，从而让误伤率悄悄失真。
+   */
+  unattributedRestores: number
   /** 校准前 / 后的确认轮数。 */
   base: number
   required: number

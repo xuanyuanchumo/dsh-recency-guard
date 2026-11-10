@@ -101,6 +101,15 @@ export interface PanelSnapshot {
     decision: CalibrationDecision
     /** 人话解释（面板直接渲染）。 */
     explanation: string
+    /**
+     * 证据链缺口（v0.15 TD-1）：`restore` 声明恢复了某插件，但 journal 里
+     * 找不到对应的 `enable`。
+     *
+     * 为什么面板要看到它：它说明**记录本身可能损坏**，而误伤率会因此偏低。
+     * 用户若同时看到「误伤率 0%」与「证据链缺口 3」，正确的解读是
+     * 「这个 0% 不可信」，而不是「一切正常」。恒为 0 时面板不显示该行。
+     */
+    unattributedRestores: number
   }
   /**
    * 贝叶斯并行读数（v0.14 / M2 / RQ1，研究文档 07 §2）。
@@ -385,6 +394,7 @@ export function buildPanelSnapshot(input: SnapshotInput, now = Date.now()): Pane
       rate: falsePositiveRate(fpStats),
       decision: calibrationDecision,
       explanation: calibrationExplanation(calibrationDecision),
+      unattributedRestores: fpStats.unattributedRestores,
     },
     bayes,
     backupPolicy: input.backupPolicy,

@@ -1,0 +1,13 @@
+ M .cycles/band-history.json
+ M .cycles/verify/mutation-equivalents.json
+ M .cycles/verify/mutation-report.md
+ M locale/en.json
+ M locale/zh.json
+ M src/client/panel/PanelCards.tsx
+ M src/host/surface/snapshot.ts
+ M src/host/surface/status-projections.ts
+ M src/host/surface/status-view.ts
+?? .tmp-before.json
+?? .tmp-dry-final.txt
+?? .tmp-status-after.txt
+?? .tmp-status-before.txt

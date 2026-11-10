@@ -5,7 +5,7 @@
   "note": "每条都已证等价（reason）+ 有断言钉住等价所依赖的事实（proof）。缺任一字段的条目会被 scripts/mutation.mjs 拒绝登记。未登记 ≠ 已确认测试缺口：存疑条目一律留在分母。",
   "entries": [
     {
-      "file": "src/control-band.ts",
+      "file": "src/host/observe/control-band.ts",
       "line": 38,
       "mutator": "comparison",
       "label": "比较方向 < → <=（i <= crashTimes）",
@@ -15,7 +15,7 @@
       "proof": "tests/unit/observability-math.test.ts:倒序时间戳 ⇒ 诚实不可判定（负间隔全过滤）—— 该断言钉住「负间隔会被 gap > 0 过滤」这个等价性的承重事实。"
     },
     {
-      "file": "src/observability.ts",
+      "file": "src/host/observe/observability.ts",
       "line": 120,
       "mutator": "comparison",
       "label": "比较方向 < → <=（sampleSize <= 1）",
@@ -25,7 +25,7 @@
       "proof": "tests/unit/observability-math.test.ts:位数夹在 [1,4]（displayDigits(0) === 1 钉住守卫分支返回 1）与 3 个样本只配 1 位有效数字（displayDigits(3) === 1 钉住下限夹到 1）。"
     },
     {
-      "file": "src/store.ts",
+      "file": "src/host/data/store.ts",
       "line": 231,
       "mutator": "comparison",
       "label": "比较方向 <= → <（pid < 0）",
@@ -35,7 +35,7 @@
       "proof": "tests/unit/core.test.ts:pidAlive(0) === false（非法 pid 不是进程）—— 该断言钉住 processAlive(0) 为 false，即两条路径都不保留 pid=0 的锁。"
     },
     {
-      "file": "src/risk-bayes.ts",
+      "file": "src/host/risk/risk-bayes.ts",
       "line": 147,
       "mutator": "comparison",
       "label": "比较方向 < → <=（x <= 1）",
@@ -45,7 +45,7 @@
       "proof": "tests/unit/risk-bayes.test.ts:先验 95% 下界 = 0.025（均匀分布的解析分位）与 先验均值 = 0.5（均为 1e-8/1e-12 容差）—— 先验 Beta(1,1) 的 logBeta(1,1) 三次走 lgamma(1)，容差钉住该处 x=1 的数值不变。"
     },
     {
-      "file": "src/survival.ts",
+      "file": "src/host/observe/survival.ts",
       "line": 116,
       "mutator": "comparison",
       "label": "比较方向 > → >=（zeros >= 0）",

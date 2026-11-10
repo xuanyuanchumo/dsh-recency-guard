@@ -924,10 +924,22 @@ export function CalibrationBody({ snapshot }: { snapshot: PanelSnapshot }): Reac
           )}
         </span>
       </div>
+      {/* 证据链缺口（v0.15 TD-1）：**只在 >0 时显示**。
+          它是「记录可能损坏」的信号，常态应为 0；恒显示一个 0 会让用户
+          对它脱敏，真出问题时反而看不见。缺口 >0 时上面的误伤率不可信 ——
+          两者并排出现，用户才能读出「这个 0% 是记录缺失造成的」。 */}
+      {snapshot.calibration.unattributedRestores > 0 && (
+        <div className="rg-kv">
+          <span className="rg-kv-key">{t('calibration.evidenceGap')}</span>
+          <span className="rg-kv-value">
+            <span className="rg-badge rg-badge-warn">{snapshot.calibration.unattributedRestores}</span>
+            <span className="rg-evidence-meta"> {t('calibration.evidenceGapHint')}</span>
+          </span>
+        </div>
+      )}
     </>
   )
 }
-
 /**
  * 贝叶斯并行读数卡片（v0.14 / M2 / RQ1）。
  *

@@ -137,5 +137,38 @@ console.log('\n== 纯投影：同样输入两次调用逐字节相同 ==')
   check('校准投影确定性', JSON.stringify(projectCalibrationView(journal, 2)) === JSON.stringify(projectCalibrationView(journal, 2)))
 }
 
+console.log('\n== 证据链缺口：restore 声明了 bundle 但没有对应 enable（v0.15 TD-1）==')
+{
+  // 5 次自动关闭；一条 restore 声明恢复了 'dsh-ghost'，但 journal 里
+  // 从来没有 'dsh-ghost' 的 enable 记录 ⇒ 证据链断了一行。
+  //
+  // 为什么这个计数必须与误伤率**分开**呈现：它说明记录本身可能损坏，
+  // 此时误伤率是偏低的。用户在面板同时看到「误伤率 0%」与「缺口 1」
+  // 才能正确解读为「这个 0% 不可信」，而不是「一切正常」。
+  const withGap: JournalRecord[] = [
+    row('disable', 'dsh-a', 0, 'auto-recency'),
+    row('disable', 'dsh-b', 1, 'auto-recency'),
+    row('disable', 'dsh-c', 2, 'auto-recency'),
+    row('disable', 'dsh-d', 3, 'auto-recency'),
+    row('disable', 'dsh-e', 4, 'auto-recency'),
+    // 显式声明恢复了一个从未出现在 journal 里的 bundle
+    { ...row('restore', 'dsh-ghost', 5), bundles: ['dsh-ghost'] },
+  ]
+  const view = projectCalibrationView(withGap, 2)
+  check('证据链缺口被投影出来', view !== null && view.unattributedRestores >= 1, view?.unattributedRestores)
+  check('缺口不影响分母（autoDisables 仍是 5）', view?.autoDisables === 5, view?.autoDisables)
+  check('缺口不被算成误伤', view?.falsePositives === 0, view?.falsePositives)
+
+  // 正常形态：restore 声明 + 对应 enable 存在 ⇒ 无缺口，且算系统恢复。
+  const clean: JournalRecord[] = [
+    row('disable', 'dsh-a', 0, 'auto-recency'),
+    row('enable', 'dsh-a', 1),
+    { ...row('restore', 'dsh-a', 2), bundles: ['dsh-a'] },
+  ]
+  const cleanView = projectCalibrationView(clean, 2)
+  check('证据链完整时缺口为 0', cleanView?.unattributedRestores === 0, cleanView?.unattributedRestores)
+  check('证据链完整时算系统恢复', (cleanView?.systemRestored ?? 0) >= 1, cleanView?.systemRestored)
+}
+
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}\n`)
 process.exit(failures === 0 ? 0 : 1)

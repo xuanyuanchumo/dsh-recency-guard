@@ -69,6 +69,9 @@ export function projectCalibrationView(
     autoDisables: stats.autoDisables,
     falsePositives: stats.falsePositives,
     systemRestored: stats.systemRestored,
+    // 证据链缺口与「用户放了守护没关过的插件」是两件事，必须分开呈现：
+    // 前者说明记录损坏（误伤率会因此偏低），后者是正常用户行为。
+    unattributedRestores: stats.unattributedRestores,
     base: decision.base,
     required: decision.required,
     explanation: calibrationExplanation(decision),

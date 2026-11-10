@@ -868,9 +868,14 @@ async function main() {
   // 4) 落盘报告（G2 消费）
   mkdirSync(dirname(reportPath), { recursive: true })
   const now = new Date().toISOString()
-  const commandLine = `node scripts/mutation.mjs --metric ${args.metric}${args.filter ? ` --filter ${args.filter}` : ''}${
+  const commandLine = `node scripts/mutation.mjs --metric ${args.metric}${
+    args.minKillRate !== null && Number.isFinite(args.minKillRate) ? ` --min-kill-rate ${args.minKillRate}` : ''
+  }${args.filter ? ` --filter ${args.filter}` : ''}${
     Number.isFinite(args.maxMutants) ? ` --max-mutants ${args.maxMutants}` : ''
   }`
+  // 门禁结果也写进报告：否则「报告说 56%」与「CI 退出码 1」在文件层面无法对上。
+  const gateConfigured = args.minKillRate !== null && Number.isFinite(args.minKillRate)
+  const gatePassed = gateConfigured ? gateRate >= args.minKillRate : null
   const lines = [
     '# 变异测试报告（M4 / RQ4）',
     '',
@@ -890,6 +895,7 @@ async function main() {
     `| **原始口径杀灭率** | **${(killRate * 100).toFixed(1)}%**（${assertionKilled.length}/${total}） |`,
     `| **有意义口径杀灭率** | **${(meaningfulRate * 100).toFixed(1)}%**（${assertionKilled.length}/${meaningfulTotal}） |`,
     `| 门禁采用口径 | \`${args.metric}\` |`,
+    `| 门禁阈值 / 结果 | ${gateConfigured ? `${(args.minKillRate * 100).toFixed(1)}% / ${gatePassed ? 'PASS' : 'FAIL'}（${args.metric} 口径）` : '未设置（本轮只报告，不做门禁）'} |`,
     `| 账本有效条目 | ${ledger.valid.length}（${ledgerRel}） |`,
     `| 账本 STALE-EQUIVALENT | ${ledger.stale.length} |`,
     `| 账本被拒条目（缺 reason/proof） | ${ledger.rejected.length} |`,
