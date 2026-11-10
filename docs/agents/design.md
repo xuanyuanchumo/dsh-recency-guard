@@ -1,4 +1,4 @@
-# 架构与设计（dsh-recency-guard v0.12.1）
+# 架构与设计（dsh-recency-guard v0.13.0）
 
 ## 0. v0.7 的关键变化（先读这段）
 
