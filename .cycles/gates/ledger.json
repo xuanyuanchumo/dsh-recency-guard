@@ -683,7 +683,52 @@
       "timestamp": "2026-11-10T12:21:41.927Z",
       "previousHash": "262c8f28e32536c5e50febda1879b15fc9a22a4d71ac8daf472eb6076bd79481",
       "hash": "34b1b452ae1bcc14839e2eec6702285ba8889bb3e73a0170f3aa2d4eb2646ec5"
+    },
+    {
+      "gate": "G0",
+      "gateName": "评估收敛门",
+      "result": "FAIL",
+      "detail": "Evaluation report found in cycle-13 (16 dimension rows) [Q1:PASS,Q5:FAIL]",
+      "timestamp": "2026-11-10T16:06:37.995Z",
+      "previousHash": "34b1b452ae1bcc14839e2eec6702285ba8889bb3e73a0170f3aa2d4eb2646ec5",
+      "hash": "7269245c7bdec45a32208fe8b6e979a5fe3b1be5188f654a22afbf08f7cca3b1"
+    },
+    {
+      "gate": "G1",
+      "gateName": "任务收敛门",
+      "result": "FAIL",
+      "detail": "No task entries found (fill the task tables in 任务清单.md) §cycle-13",
+      "timestamp": "2026-11-10T16:06:38.006Z",
+      "previousHash": "7269245c7bdec45a32208fe8b6e979a5fe3b1be5188f654a22afbf08f7cca3b1",
+      "hash": "444d83781a1348ca6c28f3adaf4900462a6664a5715213fe87b523a46e617842"
+    },
+    {
+      "gate": "G2",
+      "gateName": "测试收敛门",
+      "result": "PASS",
+      "detail": "Zero failures, zero errors (测试报告.md) §cycle-13 [Q2:PASS]",
+      "timestamp": "2026-11-10T16:06:38.014Z",
+      "previousHash": "444d83781a1348ca6c28f3adaf4900462a6664a5715213fe87b523a46e617842",
+      "hash": "039e0e0106c3a5c3142d7db2227749fea85943bc1dba672a2ba2b2c938272b42"
+    },
+    {
+      "gate": "G3",
+      "gateName": "构建收敛门",
+      "result": "PASS",
+      "detail": "Build passed: npm run build §cycle-13 [dist=absent] [Q3:PASS,Q4:PASS]",
+      "timestamp": "2026-11-10T16:06:38.558Z",
+      "previousHash": "039e0e0106c3a5c3142d7db2227749fea85943bc1dba672a2ba2b2c938272b42",
+      "hash": "0766f63b890567fde3a63a22e48c6c5794e84359f7b75009be24b29a395f9a37"
+    },
+    {
+      "gate": "G1",
+      "gateName": "任务收敛门",
+      "result": "FAIL",
+      "detail": "5 of 22 tasks not completed §cycle-13",
+      "timestamp": "2026-11-10T16:08:06.871Z",
+      "previousHash": "0766f63b890567fde3a63a22e48c6c5794e84359f7b75009be24b29a395f9a37",
+      "hash": "ba5016a54e6d7253da206fdf0d848850b664949528d6b60d9a4d5b0200d7a7f8"
     }
   ],
-  "chainHead": "34b1b452ae1bcc14839e2eec6702285ba8889bb3e73a0170f3aa2d4eb2646ec5"
+  "chainHead": "ba5016a54e6d7253da206fdf0d848850b664949528d6b60d9a4d5b0200d7a7f8"
 }
