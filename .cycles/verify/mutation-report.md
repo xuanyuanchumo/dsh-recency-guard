@@ -1,6 +1,6 @@
 # 变异测试报告（M4 / RQ4）
-**生成时间**：2026-11-10T15:24:08.657Z
-**命令**：`node scripts/mutation.mjs --metric raw`
+**生成时间**：2026-11-10T15:28:47.659Z
+**命令**：`node scripts/mutation.mjs --metric meaningful --min-kill-rate 0.8`
 ## 1. 汇总（双口径）
 | 项 | 值 |
 |---|---|
@@ -12,7 +12,8 @@
 | └ 未归因（留在分母 = 真实缺口/未证等价） | 18 |
 | **原始口径杀灭率** | **47.7%**（21/44） |
 | **有意义口径杀灭率** | **53.8%**（21/39） |
-| 门禁采用口径 | `raw` |
+| 门禁采用口径 | `meaningful` |
+| 门禁阈值 / 结果 | 80.0% / FAIL（meaningful 口径） |
 | 账本有效条目 | 5（.cycles/verify/mutation-equivalents.json） |
 | 账本 STALE-EQUIVALENT | 0 |
 | 账本被拒条目（缺 reason/proof） | 0 |
@@ -112,3 +113,56 @@
 - `src/host/surface/tool-registration.ts`
 - `src/host/surface/tool-text.ts`
 - `src/shared/graph-contract.ts`
+
+## 8. 附注（人工补充，生成器不产出这一节）
+
+### 8.1 分母为什么从 cycle-12 的 40 变成 44
+
+- **+2 `src/host/guard/abnormal-boot.ts`**：工具此前只按 `.js` 后缀匹配「直接测试」，
+  而它唯一的直接测试 `tests/host/reload-journey.test.ts` 用 `.ts` 导入 ⇒ 它被判
+  「无直接测试」、**从未被评估**。cycle-13 修复（`.js`/`.ts` 双后缀 + 结尾引号）
+  后进池。这是**漏判被修正**，不是测试退步。
+- **+2 `src/host/core/atomic-sync.ts`**：cycle-13 新增模块（同步原子写原语）。
+- 目录重构（`git mv` 到 `src/host/<domain>/`、`src/client/<area>/`）本身
+  **不增减变异点**，只改路径；`src/shared/` 已扫描，`src/client/**` 按路径段排除。
+
+> 因此：40 口径下的 47.5% 与 44 口径下的数字**不可直接横比**；分母变化本身是
+> 一次修正，报告必须同时给出「分子/分母」，只报百分比会掩盖这一点。
+
+### 8.2 已知噪声：一条 KILL 不可复现
+
+`src/host/core/isolation.ts:212`（删除 try/catch）在连续三次全量中
+**1 次 KILL、2 次 SURV**；唯一的杀死者是 `tests/host/isolation-parallel.test.ts`。
+该 killer 是**并发**隔离回归（多分区并发 + 临时 IO），失败带有非确定性。
+
+- 处置：本报告采用 2/3 一致的 **SURV** 结论（原始 21/44）。
+- 纪律：**不可复现的 KILL 不能当作稳定测试强度的证据**；若门禁消费此指标，
+  应先固定该并发测试的确定性，或把它的 kill 归因单列（而不是静默算进分子）。
+
+### 8.3 未归因的 18 个存活体构成（为什么它们留在分母）
+
+- **13 个 try/catch**（含上面那条 flaky 的 `isolation.ts:212`）：删除 try 只改变
+  「异常发生时」的行为，而现有测试**不制造 IO 异常**。这是 E4.2「故障注入」
+  的边界，**不是等价体**，因此一律留在分母。
+- **4 个「行为可读等价但没有断言钉住」**：`store.ts:707`（`limit > 0` → `>= 0`，
+  分歧点 `limit === 0` 无断言覆盖）、`markov.ts:166`（越界项经 `?? 0` 恒为 0，
+  无断言钉住该兜底）、`risk-calibration.ts:315/350`（`events[i]` 在 `i === length`
+  恒为 `undefined`，被 `if (!event) continue` 跳过，无断言钉住该守卫）。
+  **行为等价不等于可以剔除**：没有 proof 的等价就是自我豁免，按纪律不登记。
+- **1 个「存疑」**：`risk-bayes.ts:146`（`x <= 0` → `< 0`）。`x === 0` 时原路径返回
+  `NaN`、变异路径返回 `+Infinity` —— **行为不同**，不是等价体。公开 API 走不到
+  `x = 0`（`alpha = 1 + hits ≥ 1`），但它仍是「未证/存疑」，留在分母。
+
+### 8.4 账本 5 条的可复核性
+
+5 条全部通过「file:line 重生成校验」（同一变异子今天仍能在该行生成完全相同的
+`original → mutated`），0 条 STALE、0 条被拒、0 条未生效。每条都带 `reason`
+与 `proof`（见 §2）。**没有登记**的等价候选（§8.3 的 4 条「无断言钉住」+
+1 条存疑）不因「看起来等价」而豁免。
+
+### 8.5 账本锚定策略（设计结论，不在本轮实现）
+
+完整路径是条目的**身份**，代码指纹只做诊断/迁移线索：路径变了就报
+`STALE-EQUIVALENT`，由人确认后重锚 —— **等价性不跟随代码搬家**。原因：
+等价理由常依赖模块内其它不变量（如 `survival.ts:116` 依赖 `crashSeries` 的
+filter+sort），按 basename 自动跟随会把一条断言静默搬到语义不同的模块。
