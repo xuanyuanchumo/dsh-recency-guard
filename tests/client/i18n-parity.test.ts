@@ -95,16 +95,30 @@ function main() {
 
   console.log('\n== 源码里的每个字面键都存在 ==')
   {
-    // 扫描 src/client 下所有 .ts/.tsx（跳过 i18n.ts：它自己定义了 t）。
-    // 注释要先剥掉 —— 文档里的示例键（`t('a.b')`）不是真实调用。
-    const files = readdirSync(clientDir).filter(
-      (name) => /\.(ts|tsx)$/.test(name) && name !== 'i18n.ts' && !name.endsWith('.d.css.ts'),
-    )
-    check('扫到了客户端源码文件', files.length > 5, files.length)
+    // 扫描 src/client 下**所有** .ts/.tsx（递归）。
+    //
+    // v0.15 功能域重构后 client 分成 panel/ graph/ api/ i18n/ 子目录：
+    // 用 `readdirSync` 只读一层会**静默漏掉全部子目录**，扫描集变空、
+    // 「扫到了客户端源码文件」这条断言会红 —— 那还是好的情况；
+    // 若阈值放宽，它会变成一个「什么都没扫却全绿」的假测试。
+    // 因此这里必须递归，且阈值按真实文件数校验。
+    const clientFiles: string[] = []
+    const walkClient = (directory: string): void => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const path = join(directory, entry.name)
+        if (entry.isDirectory()) walkClient(path)
+        else if (/\.(ts|tsx)$/.test(entry.name) && entry.name !== 'i18n.ts' && !entry.name.endsWith('.d.css.ts')) {
+          clientFiles.push(path)
+        }
+      }
+    }
+    walkClient(clientDir)
+    const files = clientFiles
+    check('扫到了客户端源码文件（递归，含子目录）', files.length > 5, files.length)
     const missing: string[] = []
     let usedKeys = 0
-    for (const name of files) {
-      const raw = readFileSync(join(clientDir, name), 'utf8')
+    for (const filePath of files) {
+      const raw = readFileSync(filePath, 'utf8')
       const source = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
       // `(?<![\w$])` 很关键：`createElement('style')` 里的 `t('style` 不是翻译调用，
       // 早先一版扫描把它当成了键名，报了 8 个假缺口 —— 假缺口比没检查更糟，

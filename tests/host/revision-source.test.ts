@@ -32,7 +32,7 @@ if (!hasRuntime()) {
 
 const { Context } = await importRuntime<{ Context: new () => any }>('@deepseek-ai/cordis')
 const { apply, Config } = await import('../../src/index.ts')
-const { ROUTE_PATHS } = await import('../../src/surface/routes.ts')
+const { ROUTE_PATHS } = await import('../../src/host/surface/routes.ts')
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

@@ -14,7 +14,7 @@
  * 这条测试就是那个「显式」的守卫：截断时必须**出现**省略提示，
  * 未截断时**不得**出现 —— 两个方向都要钉，只钉一个方向等于只防一半。
  */
-import { renderOutcome, formatStatus } from '../../src/surface/tool-render.js'
+import { renderOutcome, formatStatus } from '../../src/host/surface/tool-render.ts'
 
 /**
  * 省略提示的**实际文案**是 `… 其余 N 项未展开（hint）`（见 tool-text.ts 的

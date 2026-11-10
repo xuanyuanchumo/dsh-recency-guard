@@ -1,11 +1,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 // schemastery 是**可选** peer：静态 import 会在缺失时让整个插件 require 崩，
 // 因此改由下方 `loadSchemastery()` 惰性解析 + 纯对象降级（v0.13 安装不崩修复）。
-import { readSelfPackage, readHostVersion, safeJson, safeVersion } from './core/self-describe.js'
+import { readSelfPackage, readHostVersion, safeJson, safeVersion } from './host/core/self-describe.ts'
 // The runtime version is a detail, not a hard dependency: the import is
 // resolved lazily so a missing optional peer can never stop the plugin from
 // loading.
-import { Store, bundleMtimes, bundleMtimesSync, bundleVersionsSync, declaredDependenciesSync } from './data/store.js'
+import { Store, bundleMtimes, bundleMtimesSync, bundleVersionsSync, declaredDependenciesSync } from './host/data/store.ts'
 import {
   suspectBundles,
   rankByRecency,
@@ -14,20 +14,20 @@ import {
   isOfficial,
   isExperimentalName,
   describeError,
-} from './risk/recency.js'
-import type { BundleLike, RecencyEntry } from './risk/recency.js'
-import type { JournalEvent } from './data/store.js'
-import type { GuardState } from './data/store.js'
-import { computeRevision, type RevisionFacts } from './core/change-guard.js'
-import { DECISION_RELATIVE_PATH, writePointer, type DecisionSuspect } from './guard/decision.js'
-import { rankForDecision } from './guard/decision-evidence.js'
-import { GUARD_PACKAGE_NAME } from './guard/guarded-rows.js'
-import { deriveObservations, deriveRiskInputs } from './observe/observations.js'
-import { installExitSentinel, readSentinel, clearSentinel } from './guard/sentinel.js'
-import { assessAbnormalExit, abnormalRecoveryVerdict, holdReason } from './guard/abnormal-boot.js'
-import { abnormalExitEvents } from './guard/boot-notes.js'
-import { restoreDisabledExceptPrime, reenableOne, type RecoveryDeps } from './guard/recovery-actions.js'
-import { observeOfficialExperimental } from './guard/official-observe.js'
+} from './host/risk/recency.ts'
+import type { BundleLike, RecencyEntry } from './host/risk/recency.ts'
+import type { JournalEvent } from './host/data/store.ts'
+import type { GuardState } from './host/data/store.ts'
+import { computeRevision, type RevisionFacts } from './host/core/change-guard.ts'
+import { DECISION_RELATIVE_PATH, writePointer, type DecisionSuspect } from './host/guard/decision.ts'
+import { rankForDecision } from './host/guard/decision-evidence.ts'
+import { GUARD_PACKAGE_NAME } from './host/guard/guarded-rows.ts'
+import { deriveObservations, deriveRiskInputs } from './host/observe/observations.ts'
+import { installExitSentinel, readSentinel, clearSentinel } from './host/guard/sentinel.ts'
+import { assessAbnormalExit, abnormalRecoveryVerdict, holdReason } from './host/guard/abnormal-boot.ts'
+import { abnormalExitEvents } from './host/guard/boot-notes.ts'
+import { restoreDisabledExceptPrime, reenableOne, type RecoveryDeps } from './host/guard/recovery-actions.ts'
+import { observeOfficialExperimental } from './host/guard/official-observe.ts'
 import {
   buildCooccurrenceSample,
   buildDecisionSuspects,
@@ -36,17 +36,17 @@ import {
   projectCooccurrence,
   projectDecisionEvidence,
   type HazardShape,
-} from './guard/decision-views.js'
-import { watchPluginChanges } from './guard/event-watch.js'
-import { assessConfidence, environmentChanged, reconcilePrepared, shouldRestoreAfterBoot, type CrashHistoryEntry } from './guard/recovery-policy.js'
-import { StageMachine, type LifecycleStepName } from './core/lifecycle.js'
-import { buildCapabilityGraph, verifyCapabilityContract } from './capability/capability-specs.js'
-import { currentRegistrationSurface, verifySurfaceAlignment } from './capability/capability-specs.js'
-import { buildPanelSnapshot, buildGraphDataFor, type PanelSnapshot } from './surface/snapshot.js'
-import { buildStatusOutput } from './surface/status-view.js'
-import { projectBayesViews, projectCalibrationView } from './surface/status-projections.js'
-import { recordStartup } from './guard/startup-record.js'
-import { buildPartitionSnapshot } from './surface/partition-snapshot.js'
+} from './host/guard/decision-views.ts'
+import { watchPluginChanges } from './host/guard/event-watch.ts'
+import { assessConfidence, environmentChanged, reconcilePrepared, shouldRestoreAfterBoot, type CrashHistoryEntry } from './host/guard/recovery-policy.ts'
+import { StageMachine, type LifecycleStepName } from './host/core/lifecycle.ts'
+import { buildCapabilityGraph, verifyCapabilityContract } from './host/capability/capability-specs.ts'
+import { currentRegistrationSurface, verifySurfaceAlignment } from './host/capability/capability-specs.ts'
+import { buildPanelSnapshot, buildGraphDataFor, type PanelSnapshot } from './host/surface/snapshot.ts'
+import { buildStatusOutput } from './host/surface/status-view.ts'
+import { projectBayesViews, projectCalibrationView } from './host/surface/status-projections.ts'
+import { recordStartup } from './host/guard/startup-record.ts'
+import { buildPartitionSnapshot } from './host/surface/partition-snapshot.ts'
 import {
   buildGuardIsolationView,
   type GuardIsolationView,
@@ -54,11 +54,11 @@ import {
   readPartitionIndex,
   registerPartition,
   writePartitionIndex,
-} from './core/isolation.js'
-import { archiveAndReset, listArchives, readArchiveManifest } from './data/archive.js'
-import { wireRoutes } from './surface/routes-plugin.js'
-import { registerGuardTool } from './surface/tool-registration.js'
-import type { Observation } from './observe/observability.js'
+} from './host/core/isolation.ts'
+import { archiveAndReset, listArchives, readArchiveManifest } from './host/data/archive.ts'
+import { wireRoutes } from './host/surface/routes-plugin.ts'
+import { registerGuardTool } from './host/surface/tool-registration.ts'
+import type { Observation } from './host/observe/observability.ts'
 // `intervalSurvival` 的调用已移入 decision-views.ts（hazardShapeFromJournal），
 // 这里不再直接依赖生存模型 —— 崩溃路径只消费投影后的形态判定。
 export const name = 'dsh-recency-guard'

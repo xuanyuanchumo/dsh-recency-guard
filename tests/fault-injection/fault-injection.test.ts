@@ -45,7 +45,7 @@ import {
   type GuardArtifacts,
   type Sandbox,
 } from './harness.ts'
-import { pidAlive } from '../../src/guard/sentinel.ts'
+import { pidAlive } from '../../src/host/guard/sentinel.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

@@ -9,8 +9,8 @@
  * 而集成测试往往只覆盖一个快乐路径 —— 稀疏样本、无数据这些诚实边界
  * 会全部无人守护。
  */
-import { projectBayesViews, projectCalibrationView } from '../../src/surface/status-projections.js'
-import type { JournalRecord } from '../../src/data/store.js'
+import { projectBayesViews, projectCalibrationView } from '../../src/host/surface/status-projections.ts'
+import type { JournalRecord } from '../../src/host/data/store.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

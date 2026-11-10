@@ -61,7 +61,7 @@ npm run build && npx tsc --noEmit && npm run lint && npm test
 
 - Loader 四件套（name/inject/Config/apply）之外不导出任何东西。
 - webServer 依赖放独立路由子插件（headless 下硬依赖会让 fiber 挂起）。
-- 路由路径必须是 `src/routes.ts` 里的**字面量**。
+- 路由路径必须是 `src/host/surface/routes.ts` 里的**字面量**。
 - 只用 `--dsw-alias-*` / `--dsw-radius-*` 主题变量；硬编码颜色仅限 SVG 图形。
 - 守护路径（崩溃决策/启动记录/守护行）**同步 IO**。
 - 崩溃路径上的兜底数据用**同步变体**（bundleMtimesSync 等）——

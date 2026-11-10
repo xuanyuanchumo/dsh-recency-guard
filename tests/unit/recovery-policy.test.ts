@@ -5,8 +5,8 @@
  * 一个无辜插件」与「半成品状态怎么对账」，是本插件里最不该出错的判定。
  * 夹具数据取自真实场景：多嫌疑连续复现、头号更换、唯一嫌疑、空名单。
  */
-import { assessConfidence, environmentChanged, reconcilePrepared, classifyAbnormalExit, abnormalExitDecision, shouldRestoreAfterBoot, type CrashHistoryEntry } from '../../src/guard/recovery-policy.js'
-import type { RecencyEntry } from '../../src/risk/recency.js'
+import { assessConfidence, environmentChanged, reconcilePrepared, classifyAbnormalExit, abnormalExitDecision, shouldRestoreAfterBoot, type CrashHistoryEntry } from '../../src/host/guard/recovery-policy.ts'
+import type { RecencyEntry } from '../../src/host/risk/recency.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

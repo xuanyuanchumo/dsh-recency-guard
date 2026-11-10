@@ -19,7 +19,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { existsSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Store } from '../../src/data/store.js'
+import { Store } from '../../src/host/data/store.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

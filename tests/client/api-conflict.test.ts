@@ -8,7 +8,7 @@
  *
  * 不起真服务器：桩 globalThis.fetch，断言返回结构。
  */
-import { fetchSnapshot, postAction, isSnapshot } from '../../src/client/api.ts'
+import { fetchSnapshot, postAction, isSnapshot } from '../../src/client/api/api.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

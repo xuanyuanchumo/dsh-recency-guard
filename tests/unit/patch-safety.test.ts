@@ -36,9 +36,9 @@ import {
   readPatchRowsFromText,
   parseScalar,
   patchBackupPath,
-} from '../../src/profile/patch.js'
-import { appendPatchText } from '../../src/guard/guarded-rows.js'
-import { guardExpression } from '../../src/guard/decision.js'
+} from '../../src/host/profile/patch.ts'
+import { appendPatchText } from '../../src/host/guard/guarded-rows.ts'
+import { guardExpression } from '../../src/host/guard/decision.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

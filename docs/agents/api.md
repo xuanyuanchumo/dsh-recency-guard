@@ -12,7 +12,7 @@
 | **`status` 新增 `decisionEvidence` / `cooccurrence`** | 命令窗口携带三因子分解与共现验证结论 | 兼容（只增） |
 | **面板快照新增 `decisionSuspects`** | 「决策因子」卡片的数据源（含 `hasEvidence` 诚实边界） | 兼容（只增） |
 | **`Config` 改为惰性加载** | schemastery 缺失 ⇒ 纯对象 schema 降级（8 字段齐全）；dsh-tools 缺失 ⇒ 工具定义原样注册 + `degraded` 标记 | **修复安装即崩**（此前静态 import optional peer） |
-| 新增 `src/decision-evidence.ts` / `cooccurrence.ts` / `client/graph-analysis.ts` | 纯函数模块，各自带单测 | 新文件 |
+| 新增 `src/host/guard/decision-evidence.ts` / `cooccurrence.ts` / `client/graph-analysis.ts` | 纯函数模块，各自带单测 | 新文件 |
 | 新增契约门 `install-resilience` / `decision-compat` | optional peer 不得静态 import；守护行不得读 `evidence` | 新门（含变异自证） |
 
 **关键兼容性论证**：`evidence` 是**展示与回放**字段，不参与拦截判定。守护行仍只读
@@ -44,7 +44,7 @@
 | package.json 新增 `repository` / `bugs` / `homepage` | 反馈入口的数据源（R18）；npm 与面板共用 | 兼容 |
 | `status` 工具输出新增 `pluginVersion` / `issuesUrl`（可选） | 命令窗口 facts 带「插件版本」「问题反馈」行 | 兼容（可选字段） |
 | `bin/rescue.mjs` status/history 输出按 CJK 显示宽对齐 | Windows 控制台不再错位（R10）；退出码契约不变 | 兼容（纯显示） |
-| 新增 `src/markov.ts` 模块 | 马尔可夫链视角的状态机分析（宿主侧拥有，客户端只渲染投影） | 新文件 |
+| 新增 `src/host/observe/markov.ts` 模块 | 马尔可夫链视角的状态机分析（宿主侧拥有，客户端只渲染投影） | 新文件 |
 
 ## 0.0c v0.9.1 契约变更一句话清单
 
@@ -166,7 +166,7 @@ v0.4 起 `execute` 返回**规范 JSON 对象**（不再是字符串）：
 
 ### 1.1 v0.12 命令窗口显示契约（最容易被漏掉的一层）
 
-工具注册（`src/tool-registration.ts`）必须同时接上**四条**显示通道，少接一条
+工具注册（`src/host/surface/tool-registration.ts`）必须同时接上**四条**显示通道，少接一条
 宿主就退回通用回退卡片：
 
 | 通道 | 位置 | 显示什么 | 缺席时的表现（就是曾经的缺陷） |
@@ -197,7 +197,7 @@ v0.4 起 `execute` 返回**规范 JSON 对象**（不再是字符串）：
 
 ## 2. HTTP 路由（面板数据面）
 
-前缀 `/recency-guard/api`，路径在 `src/routes.ts` 为**字面量**（契约测试核对）。
+前缀 `/recency-guard/api`，路径在 `src/host/surface/routes.ts` 为**字面量**（契约测试核对）。
 
 | 路由 | 方法 | 语义 |
 |---|---|---|
@@ -243,7 +243,7 @@ journal 尾），无额外状态、崩溃重启后同一份事实必得同一枚
 列表编码带**长度前缀**，避免 `["a","b,c"]` 与 `["a,b","c"]` 塌缩成同一串；
 `autoDisabled` **保留原序**（先关谁是因果信息，排序会把两种事实当成一种）。
 
-客户端契约（`src/client/api.ts`）：非 2xx 也要解析 body，把
+客户端契约（`src/client/api/api.ts`）：非 2xx 也要解析 body，把
 `reason/conflict/current/status` 透出 —— 此前这里写死 `HTTP ${status}` 把 body 丢了，
 宿主给的 409 语义全部蒸发，闭环断在客户端。分支逻辑挂 `conflict` 字段
 而不是挂 `reason` 文案（文案会改，分支不能跟着坏）。
@@ -334,7 +334,7 @@ metrics/capability/markov 为 null —— 那些是当前进程的状态机事�
 
 ## 4. 能力清单（对 Agent 的承诺）
 
-能力图见 `src/capability-specs.ts`；对外暴露：
+能力图见 `src/host/capability/capability-specs.ts`；对外暴露：
 `recency-guard.panel` / `recency-guard.graph` / `recency-guard.reset` /
 `recency-guard.isolation` / `recency_guard`（工具，承载 status/recover/archive 等）。
 清单是投影：注册处为真相，契约测试双向比对（漏登/虚登都会响亮失败）。

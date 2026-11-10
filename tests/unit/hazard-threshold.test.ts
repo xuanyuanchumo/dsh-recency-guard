@@ -17,9 +17,9 @@
  * 本测试钉住的是**调整的边界条件**（哪些情况下必须不动），而不是调整本身 ——
  * 因为「不动」是向后兼容与安全性的保证。
  */
-import { assessConfidence, hazardAdjustedRounds, type HazardLike } from '../../src/guard/recovery-policy.js'
-import type { RecencyEntry } from '../../src/risk/recency.js'
-import type { CrashHistoryEntry } from '../../src/guard/recovery-policy.js'
+import { assessConfidence, hazardAdjustedRounds, type HazardLike } from '../../src/host/guard/recovery-policy.ts'
+import type { RecencyEntry } from '../../src/host/risk/recency.ts'
+import type { CrashHistoryEntry } from '../../src/host/guard/recovery-policy.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

@@ -15,6 +15,10 @@
 - 沙箱验证用独立 profile（sb-rg-*），绝不碰 desktop/web 主力 profile。
 
 ## Conventions
+- **架构两层**：`src/index.ts`（host 入口）+ `src/host/<domain>/` + `src/client/<area>/` + `src/shared/`。依据 dsh 规范：先按运行时切（`client`/`host` 是不同 bundle），再按功能域分。详见 `docs/agents/architecture.md`。
+- **`client/` 不得 import `src/host/**` 与 `node:*`**（`import type` 豁免）。由 `tests/contract/client-host-boundary.test.ts` 守护 —— 它抓到过 11 处真实越界。
+- **跨运行时共享的东西放 `src/shared/`**（类型 / 纯常量 / 无副作用纯函数）。`shared/` 不得 import `host/` 或 `client/`。两份定义必然漂移：`LAYOUT` 各写一份会让小地图点击整体偏移且不报错。
+- **类型环不算架构违例，值环算**。类型在编译期擦除；值依赖会让「换实现」变连锁改动。
 - 中文注释必须说明「为什么这样写」，不复述代码在做什么。
 - 能力清单（capability-specs.ts）是**投影，不是第二真相源**；真相在注册处，契约测试做双向比对。
 - 指标不可判定时为 `null`（Metric.defined=false），绝不把「无数据」当「零」。
@@ -70,6 +74,14 @@
 - **MAD 在 ≥50% 样本同值时退化为 0** ⇒ 控制带带宽为 0 ⇒ 阶跃被静默判成「完全规则，不预警」。需要 IQR → 平均绝对偏差三级后备，并把用了谁写进 `sigmaEstimator` 字段（白盒）。
 - **尺度会被待检漂移自己污染**：用整段样本的 MAD/IQR 标准化时，一次 60 倍阶跃被摊进离散度，实测 S 只到 3.4 < h=5 ⇒ 检测器对它要抓的漂移**结构性失明**。改用差分型移动极差（MR̄/1.128，与 control-band 同口径）后 S=21.86 正常越界。
 - **EWMA 控制带的带宽必须乘 `√(λ/(2−λ))`**：不乘等于把 σ̂ 直接当带宽，带会宽约 3 倍，漂移永远报不出来。
+
+## 架构重构（v0.15 实测新增）
+
+- **只改目录不改边界 = 白改**：把文件挪进 `src/<domain>/` 之后，`client/graph/graph-model.ts` 仍然直接 `import '../../host/capability/graph-data.ts'`（11 处越界）。目录是给人看的，**边界必须写成测试**（`tests/contract/client-host-boundary.test.ts`）才成立。
+- **`export { X } from` 不会把名字带进本文件作用域**：lifecycle.ts 只写转发导致 30+ 处 `TS2304`。要同时写 `import` 与 `export` 两行。
+- **`require.resolve('../package.json')` 隐含「本文件在包根下一层」**：搬到 `src/core/` 后 `..` 变成 `src/`，`readSelfPackage()` 静默降级为全 null（面板诊断卡空白，测试直跑源码才暴露）。改成「向上找到 name 与本包一致的 package.json」，两种形态都对。
+- **`readdirSync(dir)` 只读一层**：client 分成子目录后，i18n 扫描集变空、变异池变 0 —— 都是**静默**的。凡「扫描源码」的代码必须递归，且要有「扫到了 N 个」的下界断言。
+- **重构会同时打断三类隐式路径**：`await import('...')`（没有 `from`，正则漏改）、`join(process.cwd(),'src',...)` 字符串拼接、子进程里拼的模块路径。改完必须 `tsc` + 全量测试双验证，别只看 tsc 绿。
 
 ## 团队协作（v0.14 实测新增）
 

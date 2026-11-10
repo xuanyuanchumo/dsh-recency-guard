@@ -12,7 +12,7 @@
  * 既有 lifecycle 测试都在多区间场景下跑（至少 2 条），所以从未暴露这个边界。
  * 这个文件专钉**单区间 / 首区间**两个形态。
  */
-import { StageMachine } from '../../src/core/lifecycle.js'
+import { StageMachine } from '../../src/host/core/lifecycle.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

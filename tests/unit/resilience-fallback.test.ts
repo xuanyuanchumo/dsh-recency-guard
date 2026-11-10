@@ -22,12 +22,12 @@ import { join } from 'node:path'
 // 注意：一律用 `.js` 后缀（项目 ESM 惯例）。早期写成 `.ts` 会让
 // scripts/mutation.mjs 的「直接 import 映射」漏掉本文件 —— 变异体的
 // 测试归属判定按 `${module}.js` 匹配，`.ts` 写法让它成了「无直接测试」。
-import { readPatchRows } from '../../src/profile/patch.js'
-import { readSentinel, SENTINEL_NAME } from '../../src/guard/sentinel.js'
-import { listArchives } from '../../src/data/archive.js'
-import { readDecision } from '../../src/guard/decision.js'
-import { readPartitionIndex, writePartitionIndex, emptyPartitionIndex } from '../../src/core/isolation.js'
-import { installGuardedRows } from '../../src/guard/guarded-rows.js'
+import { readPatchRows } from '../../src/host/profile/patch.ts'
+import { readSentinel, SENTINEL_NAME } from '../../src/host/guard/sentinel.ts'
+import { listArchives } from '../../src/host/data/archive.ts'
+import { readDecision } from '../../src/host/guard/decision.ts'
+import { readPartitionIndex, writePartitionIndex, emptyPartitionIndex } from '../../src/host/core/isolation.ts'
+import { installGuardedRows } from '../../src/host/guard/guarded-rows.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

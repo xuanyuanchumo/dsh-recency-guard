@@ -13,11 +13,11 @@
  * 5. 变更计数只数 install/update
  * 6. `riskScore` 重构后行为不变（对照旧公式）
  */
-import { decisionSuspects, streakOf, rankForDecision } from '../../src/guard/decision-evidence.js'
-import { riskScore, riskFactors, RISK_WEIGHTS } from '../../src/core/lifecycle.js'
-import type { RecencyEntry } from '../../src/risk/recency.js'
-import type { JournalRecord } from '../../src/data/store.js'
-import type { CrashHistoryEntry } from '../../src/guard/recovery-policy.js'
+import { decisionSuspects, streakOf, rankForDecision } from '../../src/host/guard/decision-evidence.ts'
+import { riskScore, riskFactors, RISK_WEIGHTS } from '../../src/host/core/lifecycle.ts'
+import type { RecencyEntry } from '../../src/host/risk/recency.ts'
+import type { JournalRecord } from '../../src/host/data/store.ts'
+import type { CrashHistoryEntry } from '../../src/host/guard/recovery-policy.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

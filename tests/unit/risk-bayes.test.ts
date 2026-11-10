@@ -19,7 +19,7 @@
  * 与 `bayesRisk(...).riskScore` 做**逐位相等**断言：贝叶斯读数可以随便保守，
  * 但它必须把现有评分原样带出来。这条断言是「并行读数」而非「替换」的可执行证据。
  */
-import { riskFactors, riskScore, type RiskInput } from '../../src/core/lifecycle.js'
+import { riskFactors, riskScore, type RiskInput } from '../../src/host/core/lifecycle.ts'
 import {
   BAYES_PRIOR,
   PRIOR_STRENGTH,
@@ -36,7 +36,7 @@ import {
   regularizedIncompleteBeta,
   roundPosterior4,
   weightsNormalized,
-} from '../../src/risk/risk-bayes.js'
+} from '../../src/host/risk/risk-bayes.ts'
 
 let failures = 0
 let assertions = 0

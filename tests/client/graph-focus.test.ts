@@ -1,4 +1,4 @@
-import type { GraphEdge, GraphNode } from '../../src/capability/graph-data.ts'
+import type { GraphEdge, GraphNode } from '../../src/host/capability/graph-data.ts'
 import {
   EDGE_DEGREE_SUM_MAX,
   EDGE_DEGREE_SUM_MIN,
@@ -13,8 +13,8 @@ import {
   linkRangeHops,
   logScale,
   type LinkRange,
-} from '../../src/client/graph-model.ts'
-import { IDENTITY, isWorldPointVisible, type Viewport } from '../../src/client/viewport.ts'
+} from '../../src/client/graph/graph-model.ts'
+import { IDENTITY, isWorldPointVisible, type Viewport } from '../../src/client/graph/viewport.ts'
 
 /**
  * 聚焦邻域 / 键盘导航 / 边粗细编码的纯函数测试。

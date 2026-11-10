@@ -34,10 +34,10 @@ import {
   falsePositiveSamples,
   wilsonInterval,
   type FalsePositiveStats,
-} from '../../src/risk/risk-calibration.js'
-import { assessConfidence, type CrashHistoryEntry } from '../../src/guard/recovery-policy.js'
-import type { RecencyEntry } from '../../src/risk/recency.js'
-import type { JournalRecord } from '../../src/data/store.js'
+} from '../../src/host/risk/risk-calibration.ts'
+import { assessConfidence, type CrashHistoryEntry } from '../../src/host/guard/recovery-policy.ts'
+import type { RecencyEntry } from '../../src/host/risk/recency.ts'
+import type { JournalRecord } from '../../src/host/data/store.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

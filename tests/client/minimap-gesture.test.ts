@@ -27,7 +27,7 @@ function check(name: string, cond: boolean, detail?: unknown) {
   }
 }
 
-const source = readFileSync(join(process.cwd(), 'src', 'client', 'GraphParts.tsx'), 'utf8')
+const source = readFileSync(join(process.cwd(), 'src', 'client', 'graph', 'GraphParts.tsx'), 'utf8')
 
 /**
  * 抠出 GraphMinimap 的函数体。

@@ -23,12 +23,12 @@ import {
   zoomAt,
   zoomBy,
   type Rect,
-} from '../../src/client/viewport.ts'
+} from '../../src/client/graph/viewport.ts'
 // 图谱的纯数学已从 GuardGraph.tsx 抽到 graph-model.ts（组件拆分的产物）：
 // 测试要跟着**定义**走，而不是跟着某个消费它的组件走 —— 组件还会继续搬。
-import { shapePath } from '../../src/client/graph-model.ts'
-import { detectClientLang, t, setLocaleFromHost } from '../../src/client/i18n.ts'
-import { isSnapshot, isGraph } from '../../src/client/api.ts'
+import { shapePath } from '../../src/client/graph/graph-model.ts'
+import { detectClientLang, t, setLocaleFromHost } from '../../src/client/i18n/i18n.ts'
+import { isSnapshot, isGraph } from '../../src/client/api/api.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

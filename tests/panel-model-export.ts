@@ -19,4 +19,4 @@ export {
   type DecisionEvidenceRow,
   type DiagnosticsRow,
   type MarkovRowView,
-} from '../src/client/panel-model.ts'
+} from '../src/client/panel/panel-model.ts'

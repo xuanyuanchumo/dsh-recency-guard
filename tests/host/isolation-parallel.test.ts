@@ -43,17 +43,17 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { Store } from '../../src/data/store.js'
-import { computeRevision, type RevisionFacts } from '../../src/core/change-guard.js'
+import { Store } from '../../src/host/data/store.ts'
+import { computeRevision, type RevisionFacts } from '../../src/host/core/change-guard.ts'
 import {
   partitionDir,
   projectKey,
   readPartitionIndex,
   registerPartition,
   writePartitionIndex,
-} from '../../src/core/isolation.js'
-import { decisionPath, pointerPath, readDecision, readPointer, writePointer } from '../../src/guard/decision.js'
-import type { GuardState, JournalEvent, PrebootDecision } from '../../src/data/store.js'
+} from '../../src/host/core/isolation.ts'
+import { decisionPath, pointerPath, readDecision, readPointer, writePointer } from '../../src/host/guard/decision.ts'
+import type { GuardState, JournalEvent, PrebootDecision } from '../../src/host/data/store.ts'
 
 // ─────────────────────────── 测试骨架 ───────────────────────────
 
@@ -423,10 +423,10 @@ async function revisionOf(fx: PartitionFixture): Promise<string> {
 const WORKER_SOURCE = [
   "const { pathToFileURL } = await import('node:url')",
   'const payload = JSON.parse(process.argv[2])',
-  'const src = (name) => pathToFileURL(payload.projectRoot + "/src/" + name).href',
-  "const { Store } = await import(src('store.ts'))",
-  "const { writePointer } = await import(src('decision.ts'))",
-  "const { readPartitionIndex, registerPartition, writePartitionIndex } = await import(src('isolation.ts'))",
+  'const src = (name) => pathToFileURL(payload.projectRoot + "/src/host/" + name).href',
+  "const { Store } = await import(src('data/store.ts'))",
+  "const { writePointer } = await import(src('guard/decision.ts'))",
+  "const { readPartitionIndex, registerPartition, writePartitionIndex } = await import(src('core/isolation.ts'))",
   'const store = new Store(payload.profileDir, payload.key)',
   'await store.init()',
   'await store.append(payload.events)',

@@ -1,4 +1,4 @@
-import type { GraphEdge, GraphNode } from '../../src/capability/graph-data.ts'
+import type { GraphEdge, GraphNode } from '../../src/host/capability/graph-data.ts'
 import {
   KIND_COLOR,
   STAGE_COLOR,
@@ -19,7 +19,7 @@ import {
   withLayout,
   zoomLabel,
   type ColorMode,
-} from '../../src/client/graph-model.ts'
+} from '../../src/client/graph/graph-model.ts'
 
 /**
  * graph-model 纯函数测试 —— 补上「文件头自称已由测试钉死但测试不存在」的

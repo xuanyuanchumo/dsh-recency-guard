@@ -284,7 +284,7 @@ js-yaml 报 `bad indentation of a mapping entry (185:9)`。注意失败的不是
 
 ## 10. v0.10 数学模型与洞察卡（cycle-5）
 
-### 10.1 马尔可夫转移矩阵（src/markov.ts）
+### 10.1 马尔可夫转移矩阵（src/host/observe/markov.ts）
 
 - 状态空间 = 六阶段白名单（MARKOV_STAGES，与 lifecycle.ALL_STAGES 同序的独立声明
   —— 客户端不 import 宿主常量的铁律在**数据模型层**同样成立）。
@@ -314,7 +314,7 @@ js-yaml 报 `bad indentation of a mapping entry (185:9)`。注意失败的不是
 ### 10.4 rescue CLI 的 CJK 宽度（bin/rescue.mjs）
 
 - 零依赖纪律 ⇒ 宽度判定（codePointWidth/displayWidth/padWidth）内联实现，
-  与 src/tool-text.ts 的同名原语语义一致但不共享代码 —— 崩溃现场 node_modules
+  与 src/host/surface/tool-text.ts 的同名原语语义一致但不共享代码 —— 崩溃现场 node_modules
   可能正是损坏状态，逃生通道只能依赖 node 内置模块。
 
 ## 11. v0.11 数据面安全与图谱一致性（cycle-6）
@@ -403,7 +403,7 @@ js-yaml 报 `bad indentation of a mapping entry (185:9)`。注意失败的不是
 
 ### 14.1 命令窗口显示问题的根因不在渲染层
 
-用户报「本插件调用时命令窗口显示难看」。取证发现根因：`src/tool-presentation.ts`
+用户报「本插件调用时命令窗口显示难看」。取证发现根因：`src/host/surface/tool-presentation.ts`
 里 `presentCallOf` / `presentResultOf` / `presentationMetaOf` 三个纯函数**早就写好了**
 （含详尽注释说明为什么需要它们），但 `defineTool` 从未接上它们 ——
 `grep presentCall src/index.ts` 零命中。于是宿主落到通用回退：待执行卡片标题 =
@@ -459,7 +459,7 @@ app.asar 解出的宿主真实包），逐 peer 做 `semver.satisfies(装机版�
 
 ### 14.3 乐观并发：为什么是哈希而不是计数器
 
-`src/change-guard.ts` 从 state + decision + journal 尾派生 12 hex（48 bit）。
+`src/host/core/change-guard.ts` 从 state + decision + journal 尾派生 12 hex（48 bit）。
 
 - 计数器需要一个单调持久化位点，崩溃时它可能**落后于状态** ⇒ 假冲突或假放行。
 - 哈希从被保护的事实本身派生，无额外状态、无写入顺序依赖，
@@ -567,8 +567,8 @@ L4 全自主下人类只在**事后**审计，审计线要能回答「谁、以�
 
 band-detector 实测两个文件越预算（100）：
 
-- `src/index.ts` 109（工具注册内联在 apply 里）⇒ 抽出 `src/tool-registration.ts`；
-- `src/client/graph-model.ts` 117（新增聚焦/小地图/边宽/导航）⇒ 抽出 `src/client/minimap-model.ts`。
+- `src/index.ts` 109（工具注册内联在 apply 里）⇒ 抽出 `src/host/surface/tool-registration.ts`；
+- `src/client/graph/graph-model.ts` 117（新增聚焦/小地图/边宽/导航）⇒ 抽出 `src/client/graph/minimap-model.ts`。
 
 抽取小地图时刻意**不**从 graph-model import `NODE_WIDTH/NODE_HEIGHT`：
 那会让 `graph-model ⇄ minimap-model` 形成循环依赖 —— 打包器能容忍，
@@ -609,7 +609,7 @@ dsh-cookie-guard 0.1.1 的**安装副本实现**（以发布包为事实）：
 ### 15.1 缺陷：只认哨兵 = 漏掉一半死法
 
 崩溃信号此前**只有**哨兵文件，而哨兵写在 `process.on('exit')` 里
-（`src/sentinel.ts` 的 `installExitSentinel`）。真机实测（强杀沙箱后直接看磁盘）：
+（`src/host/guard/sentinel.ts` 的 `installExitSentinel`）。真机实测（强杀沙箱后直接看磁盘）：
 
 ```
 bootMarker = {"pid":39576}   crashSeq = 0   哨兵文件 = 不存在

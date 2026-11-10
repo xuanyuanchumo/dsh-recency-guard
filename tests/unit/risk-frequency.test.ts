@@ -26,7 +26,7 @@ import {
   riskFactors,
   riskScore,
   type RiskInput,
-} from '../../src/core/lifecycle.js'
+} from '../../src/host/core/lifecycle.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

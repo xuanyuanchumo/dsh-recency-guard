@@ -1,4 +1,4 @@
-import { matchNodes, searchSummary } from '../../src/client/viewport.ts'
+import { matchNodes, searchSummary } from '../../src/client/graph/viewport.ts'
 
 /**
  * 搜索结果投影测试：matchNodes 的「全量」与 searchSummary 的「窗口」。

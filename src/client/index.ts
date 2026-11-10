@@ -1,10 +1,10 @@
 import { createElement, type ReactElement } from 'react'
-import { GuardPanel } from './GuardPanel.tsx'
-import { GuardPanelIcon } from './GuardPanelIcon.ts'
-import { registerDictionaries, t } from './i18n.ts'
-import { fetchSnapshot, fetchGraph, fetchArchives, postAction } from './api.ts'
-import type { PanelSnapshot } from '../../src/surface/snapshot.ts'
-import type { GraphData } from '../../src/capability/graph-data.ts'
+import { GuardPanel } from './panel/GuardPanel.tsx'
+import { GuardPanelIcon } from './panel/GuardPanelIcon.ts'
+import { registerDictionaries, t } from './i18n/i18n.ts'
+import { fetchSnapshot, fetchGraph, fetchArchives, postAction } from './api/api.ts'
+import type { PanelSnapshot } from '../host/surface/snapshot.ts'
+import type { GraphData } from '../shared/graph-contract.ts'
 
 /**
  * 客户端入口 —— 管理面板 + 可交互图谱。
