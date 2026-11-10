@@ -76,9 +76,16 @@ export function deriveRiskInputs(
 ): RiskInput[] {
   const hits = new Map<string, number>()
   const seen = new Map<string, number>()
+  // 变更事件数（v0.13 方向①）：install/update 是「改动」，remove 不是 ——
+  // 已移除的插件不在嫌疑面，把它算作"反复改动"会污染频率信号。
+  const changes = new Map<string, number>()
   for (const event of events) {
-    if (event.kind !== 'disable' || typeof event.bundle !== 'string') continue
-    hits.set(event.bundle, (hits.get(event.bundle) ?? 0) + 1)
+    if (event.kind === 'disable' && typeof event.bundle === 'string') {
+      hits.set(event.bundle, (hits.get(event.bundle) ?? 0) + 1)
+    }
+    if ((event.kind === 'install' || event.kind === 'update') && typeof event.bundle === 'string') {
+      changes.set(event.bundle, (changes.get(event.bundle) ?? 0) + 1)
+    }
   }
   for (const entry of ranked) {
     seen.set(entry.bundle, (seen.get(entry.bundle) ?? 0) + 1)
@@ -89,6 +96,7 @@ export function deriveRiskInputs(
     lastChangeAt: entry.lastChangeAt,
     suspectHits: hits.get(entry.bundle) ?? 0,
     observations: Math.max(1, seen.get(entry.bundle) ?? 1),
+    changeCount: changes.get(entry.bundle) ?? 0,
   }))
 }
 

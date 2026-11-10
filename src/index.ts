@@ -46,6 +46,7 @@ import { archiveAndReset, listArchives, readArchiveManifest } from './archive.js
 import { wireRoutes } from './routes-plugin.js'
 import { registerGuardTool } from './tool-registration.js'
 import type { Observation } from './observability.js'
+import { intervalSurvival } from './survival.js'
 export const name = 'dsh-recency-guard'
 
 export interface Config {
@@ -606,6 +607,42 @@ class Guard {
 
   // ---------- bundle facts ----------
 
+  /**
+   * 崩溃间隔的分布形态（v0.13 方向②）—— 同步版，供崩溃路径的置信判定使用。
+   *
+   * 为什么必须同步：`publishDecisionOnCrash` 跑在 process exit 处理器里，
+   * 进程随时会死，这里不能 await。
+   *
+   * 数据来源：journal 里的 `crash-detected` 事件（带 `t` 时间戳）。
+   * 只读最近 1000 条（既有封顶），不额外扫描。
+   *
+   * 诚实边界：样本不足 / 形状不可辨识时 `intervalSurvival` 返回
+   * `defined:false` ⇒ 这里返回 `undefined`，让 `hazardAdjustedRounds`
+   * 原样返回 `confirmRounds`（行为与 v0.12 逐位一致）。
+   */
+  private hazardShapeSync(): { weibullShape?: number; reliable?: boolean; atBound?: boolean } | undefined {
+    try {
+      const events = this.store.readJournalSync(1000)
+      const crashTimes: number[] = []
+      for (const event of events) {
+        if (event.kind !== 'crash-detected') continue
+        const parsed = Date.parse(event.t)
+        if (Number.isFinite(parsed)) crashTimes.push(parsed)
+      }
+      if (crashTimes.length < 4) return undefined // 至少 3 个间隔才拟合两参数 Weibull
+      const fit = intervalSurvival(crashTimes)
+      if (!fit.defined || fit.value === null) return undefined
+      return {
+        weibullShape: fit.value.weibullShape,
+        reliable: fit.value.hazardDirectionReliable,
+        atBound: fit.value.weibullShapeAtBound,
+      }
+    } catch {
+      // 观测设施绝不拖垮崩溃路径：算不出形态就退回不调整。
+      return undefined
+    }
+  }
+
   /** Installed bundle -> version map, used for update detection. */
   private async versionMap(): Promise<Record<string, string>> {
     const out: Record<string, string> = {}
@@ -880,9 +917,12 @@ class Guard {
       const envChanged = environmentChanged(history[history.length - 1], safeVersion(), ranked)
       // crashSeq 进判定（v0.11.1）：连续崩溃达到 3 次即兜底升级为行动 ——
       // 崩溃循环本身是确定性事实，不能让计数失效把宿主钉死在循环里。
+      // v0.13 方向②：把崩溃间隔的分布形态（Weibull k）作为阈值调节输入。
+      // 只影响「多嫌疑」的概率性路径；确定性证据（唯一嫌疑）不受影响。
       const verdict = assessConfidence(envChanged ? [] : history, ranked, {
         confirmRounds: this.config.confirmRounds,
         crashSeq: seq,
+        hazardDirection: this.hazardShapeSync(),
       })
       this.store.appendSync({
         kind: 'note',

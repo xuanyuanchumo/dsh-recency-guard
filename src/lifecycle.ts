@@ -361,6 +361,31 @@ export interface RiskInput {
   suspectHits: number
   /** 历史总观察次数。 */
   observations: number
+  /**
+   * 该插件的**安装/更新事件次数**（v0.13 方向①·变更频率维度）。
+   *
+   * ## 为什么要这个维度
+   *
+   * 只按「最近一次变更距今多久」排序（一维新近性）无法区分：
+   * - 一小时前热更新五次（反复改动 ⇒ 引入缺陷的机会更多）
+   * - 一小时前只安装一次（一次性动作 ⇒ 只有一次引入缺陷的机会）
+   *
+   * 两者 `lastChangeAt` 相同、`recency` 相同，在决策面上完全同分。
+   * 变更频率把「一次动作」与「反复折腾」分开。
+   *
+   * ## 为什么是**调制项**而不是第四个加法因子
+   *
+   * 三个因子权重 0.5/0.3/0.2 之和恰为 1，再加一项要么破坏归一化、
+   * 要么重新分配权重（会让既有断言集体失效，且旧决策不可比）。
+   * 变更频率的语义是「放大或缩小新近性的可信度」，所以做成 recency 的
+   * **乘数**：`recency × (1 + α·density)`。语义清晰、可解释、可回放。
+   *
+   * ## 诚实边界
+   *
+   * `undefined` ⇒ 乘数恒为 1（行为与 v0.12 逐位一致）。这不是「补 0」，
+   * 而是「没有这个维度的信息就不改变结论」—— 与 `Metric.defined` 同一纪律。
+   */
+  changeCount?: number
 }
 
 /** 风险权重。 */
@@ -368,6 +393,18 @@ export const RISK_WEIGHTS = { recency: 0.5, experimental: 0.3, crashFrequency: 0
 
 /** recency 因子的半衰期（小时）。 */
 export const RECENCY_HALF_LIFE_HOURS = 72
+
+/**
+ * 变更频率调制参数（v0.13 方向①）。
+ *
+ * - `cap = 5`：5 次以上变更视为同一档「高频」（再多也只是"很折腾"，不该无限放大）
+ * - `alpha = 0.5`：满档高频把新近性最多放大 50%
+ *
+ * 为什么上限只有 50%：频率是**辅助证据**（相关性），新近性才是主信号。
+ * 让频率能把一个新近插件的排名从第 3 提到第 1，但不能把一个月没动过的
+ * 插件顶到前面（那会违反时间局部性这个更强的基础假设）。
+ */
+export const CHANGE_FREQUENCY = { cap: 5, alpha: 0.5 } as const
 
 /**
  * 三因子的加权贡献分解（v0.13 因子快照）。
@@ -380,7 +417,7 @@ export const RECENCY_HALF_LIFE_HOURS = 72
  * （先求三因子贡献、再求和、最后 round4 并夹到 [0,1]），既有断言不受影响。
  */
 export interface RiskFactorContributions {
-  /** 新近性贡献：`0.5 × 0.5^(ageHours/72)`。 */
+  /** 新近性贡献：`0.5 × 0.5^(ageHours/72) × (1 + α·density)`。 */
   recency: number
   /** 实验性贡献：`0.3 × experimental`。 */
   experimental: number
@@ -388,11 +425,24 @@ export interface RiskFactorContributions {
   crashFrequency: number
 }
 
+/**
+ * 变更频率的调制乘数 ∈ [1, 1+α]。
+ *
+ * `changeCount` 缺失 ⇒ 1（不变）。这是向后兼容的关键：
+ * 没有频率信息时结论与 v0.12 逐位相同。
+ */
+export function changeDensityMultiplier(changeCount?: number): number {
+  if (changeCount === undefined || !Number.isFinite(changeCount) || changeCount <= 1) return 1
+  const density = Math.min(changeCount, CHANGE_FREQUENCY.cap) / CHANGE_FREQUENCY.cap
+  return 1 + CHANGE_FREQUENCY.alpha * density
+}
+
 /** 分解三因子的加权贡献（未取整，供 riskScore 与快照共用）。 */
 export function riskFactors(input: RiskInput, now = Date.now()): RiskFactorContributions {
   const changed = Date.parse(input.lastChangeAt)
   const ageHours = Number.isFinite(changed) ? Math.max(0, (now - changed) / 3_600_000) : Number.POSITIVE_INFINITY
-  const recency = ageHours === Number.POSITIVE_INFINITY ? 0 : Math.pow(0.5, ageHours / RECENCY_HALF_LIFE_HOURS)
+  const baseRecency = ageHours === Number.POSITIVE_INFINITY ? 0 : Math.pow(0.5, ageHours / RECENCY_HALF_LIFE_HOURS)
+  const recency = baseRecency * changeDensityMultiplier(input.changeCount)
   const experimental = input.experimental ? 1 : 0
   const frequency = input.observations > 0 ? input.suspectHits / input.observations : 0
   return {

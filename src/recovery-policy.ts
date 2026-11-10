@@ -181,7 +181,7 @@ export interface CrashHistoryEntry {
 export function assessConfidence(
   history: readonly CrashHistoryEntry[],
   currentSuspects: readonly RecencyEntry[],
-  options: { confirmRounds?: number; crashSeq?: number; hardEscalateAfter?: number } = {},
+  options: { confirmRounds?: number; crashSeq?: number; hardEscalateAfter?: number; hazardDirection?: HazardLike } = {},
 ): ConfidenceVerdict {
   const confirmRounds = Math.max(1, options.confirmRounds ?? 2)
   const names = currentSuspects.map((s) => s.bundle)
@@ -211,19 +211,85 @@ export function assessConfidence(
   }
   const hardEscalateAfter = Math.max(1, options.hardEscalateAfter ?? 3)
   const escalated = options.crashSeq !== undefined && options.crashSeq >= hardEscalateAfter
-  const act = streak >= confirmRounds || escalated
+  // v0.13 方向②：用崩溃间隔的**分布形态**调整阈值，而不是"证据年龄指数衰减"。
+  // 为什么不是指数衰减：衰减会把「环境未变、间隔一天的两次崩溃」判成证据不足，
+  // 而那仍是该插件的确定性缺陷 —— 与「宿主可用性优先于误伤最小化」冲突。
+  // 分布形态给的是**方向性**信息，不否决证据本身：
+  //   k < 0.9（危险率递减 ⇒ 崩溃成簇）⇒ 更低阈值（更积极动手）
+  //   k > 1.1（危险率递增 ⇒ 比泊松更规则）⇒ 更高阈值（更保守）
+  //   其余（≈泊松/无样本）⇒ 不变
+  const adjustedRounds = hazardAdjustedRounds(confirmRounds, options.hazardDirection)
+  const act = streak >= adjustedRounds || escalated
+  // 文案只描述「阈值被调了」，不重复解释成因（起因写在 hazardAdjustedRounds 的头注里）：
+  // 命令窗口的空间有限，多一句解释就会挤掉下一行事实。
+  const hazardNote =
+    adjustedRounds === confirmRounds ? '' : `（间隔分布形态使阈值调整为 ${adjustedRounds} 轮）`
   return {
     act,
     evidence: 'probabilistic',
     rounds: streak,
-    required: confirmRounds,
+    required: adjustedRounds,
     label: act
-      ? streak >= confirmRounds
-        ? `头号嫌疑 ${head} 连续 ${streak} 轮复现（≥ ${confirmRounds}）：达到行动阈值`
+      ? streak >= adjustedRounds
+        ? `头号嫌疑 ${head} 连续 ${streak} 轮复现（≥ ${adjustedRounds}）：达到行动阈值${hazardNote}`
         : `连续 ${options.crashSeq} 次崩溃仍未恢复：兜底升级为行动（安全网）`
-      : `头号嫌疑 ${head} 复现 ${streak}/${confirmRounds} 轮：观察中，本轮只记录不关闭`,
+      : `头号嫌疑 ${head} 复现 ${streak}/${adjustedRounds} 轮：观察中，本轮只记录不关闭${hazardNote}`,
   }
 }
+
+/** 崩溃间隔的分布形态（只取判定方向所需的最小字段，避免耦合整张 SurvivalFit）。 */
+export interface HazardLike {
+  /** Weibull 形状 k：<0.9 递减（成簇）/ ≈1 恒定（泊松）/ >1.1 递增。 */
+  weibullShape?: number
+  /** 方向是否可靠（样本不足时只是提示）。 */
+  reliable?: boolean
+  /** 形状是否撞到搜索上界（边界伪值，不可用于判方向）。 */
+  atBound?: boolean
+}
+
+/**
+ * 按崩溃间隔的分布形态调整行动阈值（v0.13 方向②，研究文档 09 §2.2）。
+ *
+ * ## 为什么用分布形态而不是证据年龄衰减
+ *
+ * 「证据年龄衰减」的直觉是「久远的崩溃不该和新鲜崩溃同权」。但本项目的
+ * `confirmRounds` 语义是「**同一头号嫌疑连续复现**」—— `environmentChanged`
+ * 已经保证「环境没变」。环境没变时的复现，无论间隔多久都是该插件的缺陷；
+ * 加时间衰减会把它判成证据不足 ⇒ **放过真缺陷**，违反「宿主可用性优先
+ * 于误伤最小化」（`recovery-policy.ts` 兜底升级同一条原则）。
+ *
+ * 分布形态回答的是另一个问题：**崩溃之间有没有连带关系**？
+ * - k < 0.9：危险率递减 ⇒ 崩溃成簇（一次故障引发连锁）⇒ 更该积极切断
+ * - k > 1.1：危险率递增 ⇒ 间隔比泊松更规则（固定周期负载）⇒ 证据更弱
+ * - 其余 / 不可靠 / 撞边界：不动阈值
+ *
+ * ## 调整幅度刻意保守（±1 轮，下限 1）
+ *
+ * 形态只是**辅助信号**（它描述间隔分布，不描述因果）。让它把阈值从 2 变成
+ * 1 或 3 已经是「影响决策」；再大就等于让一个间接指标主导判断。
+ *
+ * ## 诚实边界
+ *
+ * - `hazardDirection` 缺席 ⇒ 原样返回 `confirmRounds`（v0.12 行为逐位一致）
+ * - `reliable === false`（样本 < 9）⇒ 不调整：方向只是提示不是结论
+ * - `atBound === true`（k 撞搜索上界）⇒ 不调整：那是边界伪值
+ */
+export function hazardAdjustedRounds(confirmRounds: number, hazard?: HazardLike): number {
+  if (hazard === undefined) return confirmRounds
+  if (hazard.reliable === false) return confirmRounds
+  if (hazard.atBound === true) return confirmRounds
+  const shape = hazard.weibullShape
+  if (shape === undefined || !Number.isFinite(shape)) return confirmRounds
+  if (shape < HAZARD_CLUSTER_SHAPE) return Math.max(1, confirmRounds - 1)
+  if (shape > HAZARD_REGULAR_SHAPE) return confirmRounds + 1
+  return confirmRounds
+}
+
+/** Weibull 形状的分簇上界（低于它 ⇒ 危险率递减 ⇒ 崩溃成簇）。与 survival.ts 同值。 */
+const HAZARD_CLUSTER_SHAPE = 0.9
+
+/** Weibull 形状的规则下界（高于它 ⇒ 危险率递增 ⇒ 比泊松更规则）。与 survival.ts 同值。 */
+const HAZARD_REGULAR_SHAPE = 1.1
 
 /**
  * 环境稳定性检查 —— 判定历史计数是否仍然有效。
