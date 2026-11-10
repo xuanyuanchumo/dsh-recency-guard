@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises'
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
+import type { DecisionSuspect } from './decision.js'
 
 /**
  * Journal / state store for dsh-recency-guard.
@@ -124,8 +125,8 @@ export interface GuardState {
 
 export interface PrebootDecision {
   capturedAt: string
-  /** Suspect bundles, newest change first. */
-  suspects: Array<{ bundle: string; version?: string; lastChangeAt: string }>
+  /** Suspect bundles, newest change first（形状与 `decision.ts` 的 `Decision` 一致）。 */
+  suspects: DecisionSuspect[]
   /** Bundle names to disable for this boot. Empty means "load everything". */
   disable: string[]
   reason: 'none' | 'crash-recovery'

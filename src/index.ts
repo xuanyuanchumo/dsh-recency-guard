@@ -18,7 +18,8 @@ import type { BundleLike, RecencyEntry } from './recency.js'
 import type { JournalEvent } from './store.js'
 import type { GuardState } from './store.js'
 import { computeRevision, type RevisionFacts } from './change-guard.js'
-import { DECISION_RELATIVE_PATH, writePointer } from './decision.js'
+import { DECISION_RELATIVE_PATH, writePointer, type DecisionSuspect } from './decision.js'
+import { decisionSuspects, rankForDecision } from './decision-evidence.js'
 import { installGuardedRows, GUARD_PACKAGE_NAME } from './guarded-rows.js'
 import { deriveObservations, deriveRiskInputs } from './observations.js'
 import { installExitSentinel, readSentinel, clearSentinel } from './sentinel.js'
@@ -794,7 +795,7 @@ class Guard {
       this.machine.transition('deciding', `退出码 ${exitCode} 触发恢复决策`)
       const state = this.store.readStateSync()
       const seq = state.crashSeq + 1
-      const ranked = this.rankedSuspectsSync()
+      const ranked = this.decisionRankedSuspectsSync()
       const n = Math.min(Math.max(1, seq), Math.max(1, this.config.maxAutoDisable))
       const targets = pickSuspects(ranked, n)
       // 置信分级（v0.9.0）：唯一嫌疑是确定性证据，第 1 轮即行动；
@@ -823,11 +824,7 @@ class Guard {
       // act=true 直接 quarantined（动手了），补 prepared 历史到 journal。
       this.store.writeDecisionSync({
         capturedAt: new Date().toISOString(),
-        suspects: ranked.map((s) => ({
-          bundle: s.bundle,
-          version: s.version,
-          lastChangeAt: s.lastChangeAt,
-        })),
+        suspects: this.decisionSuspectsFor(ranked, history),
         disable: verdict.act ? targets.map((t) => t.bundle) : [],
         reason: 'crash-recovery',
         phase: verdict.act ? 'quarantined' : 'prepared',
@@ -1066,7 +1063,7 @@ class Guard {
    * 关闭动作一律交给 `recover()`。
    */
   private async applyAbnormalRecovery(abnormalSeqNext: number): Promise<void> {
-    const head = this.rankedSuspectsSync()[0]?.bundle ?? null
+    const head = this.decisionRankedSuspectsSync()[0]?.bundle ?? null
     const judged = abnormalRecoveryVerdict(
       abnormalSeqNext,
       this.config.confirmRounds,
@@ -1085,7 +1082,7 @@ class Guard {
    * Each target's config is backed up before disabling.
    */
   async recover(crashSeq: number): Promise<RecencyEntry[]> {
-    const ranked = await this.rankedSuspects()
+    const ranked = await this.decisionRankedSuspects()
     const n = Math.min(Math.max(1, crashSeq), Math.max(1, this.config.maxAutoDisable))
     const targets = pickSuspects(ranked, n)
     const already = new Set((await this.store.readState()).autoDisabled.map((d) => d.name))
@@ -1110,6 +1107,38 @@ class Guard {
     }
   }
 
+  /**
+   * 构造决策文件的 suspects 条目（含因子证据，v0.13 方向③落地）。
+   *
+   * 崩溃路径上这是**同步**调用，必须短：只读一次 journal（1000 条封顶），
+   * 证据按 `decision-evidence.ts` 的纯函数算出。把「证据计算」与「写盘」
+   * 放在同一个方法里，是为了让两条决策写入路径（崩溃时同步 + 恢复时异步）
+   * **共享同一份 suspects 形状**——否则一处加了 evidence、另一处忘了，
+   * 决策文件就会在两个通道之间形状不一致。
+   */
+  private decisionSuspectsFor(
+    ranked: readonly RecencyEntry[],
+    history: readonly CrashHistoryEntry[],
+  ): DecisionSuspect[] {
+    return decisionSuspects(ranked, this.store.readJournalSync(1000), history)
+  }
+
+  /**
+   * 决策排序口径统一（v0.13）：崩溃路径上的嫌疑排序。
+   *
+   * 与 `rankedSuspectsSync()`（纯时间戳，供面板展示）的区别：
+   * 多嫌疑（概率性证据）时按 `riskScore` 排序头号嫌疑 —— 让「面板显示的风险排名」
+   * 与「决策关闭的顺序」是同一套口径（研究文档 09 §5）。
+   */
+  private decisionRankedSuspectsSync(): RecencyEntry[] {
+    return rankForDecision(this.rankedSuspectsSync(), this.store.readJournalSync(1000))
+  }
+
+  /** 异步版的决策排序（供 `recover` 路径）。 */
+  private async decisionRankedSuspects(): Promise<RecencyEntry[]> {
+    return rankForDecision(await this.rankedSuspects(), await this.store.readJournal(1000))
+  }
+
   /** Publish the pre-boot decision file the guarded patch rows consult. */
   private async publishDecision(
     suspects: RecencyEntry[],
@@ -1117,13 +1146,11 @@ class Guard {
     reason: 'none' | 'crash-recovery',
     crashSeq?: number,
   ): Promise<void> {
+    // 因子证据需要崩溃历史来算 streak：恢复路径上它来自既有 journal。
+    const history = this.readCrashHistory()
     this.store.writeDecisionSync({
       capturedAt: new Date().toISOString(),
-      suspects: suspects.map((s) => ({
-        bundle: s.bundle,
-        version: s.version,
-        lastChangeAt: s.lastChangeAt,
-      })),
+      suspects: this.decisionSuspectsFor(suspects, history),
       disable,
       reason,
       ...(crashSeq === undefined ? {} : { crashSeq }),
@@ -1361,6 +1388,7 @@ class Guard {
       stabilityScore: this.machine.stabilityScore(),
       observations: this.observations(),
       riskInputs: this.riskInputs(),
+      decisionSuspects: this.store.readDecisionSync()?.suspects ?? [],
       restored: state.restored,
       lastRecoveryVerdict: state.lastRecoveryVerdict,
       autoDisabled: state.autoDisabled.map((d) => ({
@@ -1579,6 +1607,43 @@ class Guard {
     }
   }
 
+  /**
+   * 决策因子证据（v0.13 方向③）—— 命令窗口与面板共用的投影。
+   *
+   * 只读决策文件（几十字节的小 JSON）+ 一次 journal 读，不进崩溃路径。
+   * `hasEvidence=false` 是**诚实边界**：旧版决策文件没记因子，
+   * 此时不返回一排 0（会被误读成「零风险」），而是显式说明未记录。
+   */
+  private decisionEvidenceView(): {
+    hasEvidence: boolean
+    items: Array<{
+      rank: number
+      bundle: string
+      risk: number
+      factors: { recency: number; experimental: number; crashFrequency: number }
+      streak: number
+      changeCount: number
+      source: string | null
+    }>
+  } {
+    const suspects = this.store.readDecisionSync()?.suspects ?? []
+    let hasEvidence = false
+    const items = suspects.map((suspect, index) => {
+      const ev = suspect.evidence
+      if (ev) hasEvidence = true
+      return {
+        rank: ev?.rank ?? index + 1,
+        bundle: suspect.bundle,
+        risk: ev?.risk ?? 0,
+        factors: ev?.factors ?? { recency: 0, experimental: 0, crashFrequency: 0 },
+        streak: ev?.streak ?? 0,
+        changeCount: ev?.changeCount ?? 0,
+        source: ev?.source ?? null,
+      }
+    })
+    return { hasEvidence, items }
+  }
+
   async status(): Promise<unknown> {
     const state = await this.store.readState()
     const ranked = await this.rankedSuspects()
@@ -1609,6 +1674,10 @@ class Guard {
       suspectRanking: ranked,
       suspectTotal: ranked.length,
       experimentalSuspects: ranked.filter((r) => isExperimentalName(r.bundle)).map((r) => r.bundle),
+      // 决策因子证据（v0.13 方向③）：命令窗口也要能回答「为什么是它被选中」。
+      // 旧版决策文件没有 evidence ⇒ 返回空数组 + hasEvidence=false，
+      // 命令窗口显示「未记录因子」而不是一排 0（0 会被读成「零风险」）。
+      decisionEvidence: this.decisionEvidenceView(),
       // 生命周期步骤流：不只报「现在什么状态」，还报「做过哪些步、哪步失败过」。
       lifecycle: {
         stage: lifecycle.stage,

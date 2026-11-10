@@ -28,6 +28,7 @@
     "state": "Lifecycle",
     "metrics": "Metrics",
     "decisions": "Crash decisions",
+    "decisionEvidence": "Decision factors",
     "risks": "Suspect ranking",
     "capabilities": "Capabilities",
     "graph": "Capability graph",
@@ -154,6 +155,27 @@
       "disabled": "disabled",
       "restored": "restored",
       "note": "note"
+    }
+  },
+  "decisionEvidence": {
+    "empty": "No suspect list yet (no crash-recovery decision has been made)",
+    "legacy": "This decision predates factor recording — showing no fake zero values",
+    "hint": "The three weighted factors sum to the risk score; bar length = that factor's contribution (0-1)",
+    "count": "{count} suspects",
+    "head": "Primary suspect",
+    "risk": "Risk",
+    "riskHint": "Weighted sum of three factors in [0,1]; not a crash probability",
+    "recency": "Recency",
+    "experimental": "Experimental",
+    "crashFrequency": "History",
+    "streak": "Streak",
+    "streakHint": "Consecutive rounds as the primary suspect (including this round)",
+    "changeCount": "Changes",
+    "changeCountHint": "Install/update events for this plugin in the journal",
+    "sourceHint": "Evidence source: journal = install fact; mtime = bootstrap value",
+    "source": {
+      "journal": "install fact",
+      "mtime": "mtime bootstrap"
     }
   },
   "capabilities": {

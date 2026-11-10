@@ -55,12 +55,46 @@ export interface DecisionPointer {
 /** 决策文件的形状。 */
 export interface Decision {
   capturedAt: string
-  /** 嫌疑插件，最新变更在前。 */
-  suspects: Array<{ bundle: string; version?: string; lastChangeAt: string }>
+  /** 嫌疑插件，最新变更在前（含因子证据，见 `DecisionSuspect`）。 */
+  suspects: DecisionSuspect[]
   /** 本轮要拦截的插件名。 */
   disable: string[]
   reason: 'none' | 'crash-recovery'
   crashSeq?: number
+}
+
+/**
+ * 嫌疑插件的因子证据快照（v0.13 方向③落地）。
+ *
+ * `decision.json` 此前只记排序键（`lastChangeAt`），回答不了「为什么是 A
+ * 而不是 B」。本字段把 `riskScore` 的三因子分解、连续头号轮数、变更事件数
+ * 一并落盘，供面板解释与离线回放验证。
+ *
+ * 定义放这里（而非 `decision-evidence.ts`）是为了**形状的单一真相源**：
+ * `store.ts` 的 `PrebootDecision` 与本接口必须逐字段一致，否则读写两侧漂移。
+ */
+export interface DecisionSuspectEvidence {
+  /** 在嫌疑名单中的位置（1 基）。 */
+  rank: number
+  /** 风险总分 ∈ [0,1]。 */
+  risk: number
+  /** 三因子加权贡献分解。 */
+  factors: { recency: number; experimental: number; crashFrequency: number }
+  /** 连续作为头号嫌疑的轮数（含本轮）；非头号 = 0。 */
+  streak: number
+  /** journal 里该插件的安装/更新事件数。 */
+  changeCount: number
+  /** `lastChangeAt` 的证据来源（journal = 安装事实，mtime = 引导值）。 */
+  source?: 'journal' | 'mtime'
+}
+
+/** 决策文件里一个嫌疑插件的条目。 */
+export interface DecisionSuspect {
+  bundle: string
+  version?: string
+  lastChangeAt: string
+  /** 因子证据（可选：老版本决策文件没有这个字段）。 */
+  evidence?: DecisionSuspectEvidence
 }
 
 /** 决策文件的绝对路径（参数是**分区目录**）。 */

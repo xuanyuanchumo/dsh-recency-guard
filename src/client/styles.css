@@ -1738,3 +1738,101 @@
 .rg-issues-button:hover {
   border-color: var(--dsw-alias-brand-primary);
 }
+
+/* ---------- 决策因子卡（v0.13 方向③） ---------- */
+/* 三因子加权贡献的可视化分解：条形长度 = 该因子贡献（0~1），
+   让「为什么是它」从总分变成一个可读的成因结构。 */
+.rg-evidence-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rg-evidence {
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-m, 8px);
+  background: var(--dsw-alias-bg-layer-1, transparent);
+}
+/* 头号嫌疑加左侧强调边：它是「这一轮真正会被关掉的那个」。 */
+.rg-evidence-head {
+  border-left: 3px solid var(--dsw-alias-state-error-primary);
+}
+.rg-evidence-head-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.rg-evidence-bundle {
+  font-weight: 600;
+  word-break: break-all;
+}
+.rg-evidence-risk {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-secondary);
+}
+.rg-evidence-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+}
+.rg-evidence-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.rg-evidence-bar-label {
+  flex: none;
+  width: 4.5em;
+  color: var(--dsw-alias-label-tertiary);
+}
+.rg-evidence-bar-track {
+  flex: 1 1 auto;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--dsw-alias-hairline);
+  overflow: hidden;
+}
+.rg-evidence-bar {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  transition: width 200ms ease;
+}
+.rg-evidence-bar-value {
+  flex: none;
+  width: 3.2em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-secondary);
+}
+.rg-evidence-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+/* 三因子各自的语义色：新近性=信息、实验性=警告、历史=错误。 */
+.rg-tone-info {
+  background: var(--dsw-alias-brand-primary);
+}
+.rg-tone-warn {
+  background: var(--dsw-alias-state-warning-primary, var(--dsw-alias-brand-primary));
+}
+.rg-tone-error {
+  background: var(--dsw-alias-state-error-primary);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rg-evidence-bar {
+    transition: none;
+  }
+}

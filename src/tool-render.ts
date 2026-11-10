@@ -295,6 +295,24 @@ interface StatusLike {
   pluginVersion?: string | null
   /** 问题反馈链接（v0.10 R18；缺失时省略该行 —— 不放死链）。 */
   issuesUrl?: string | null
+  /**
+   * 决策因子证据（v0.13 方向③；缺失时整段省略 —— 旧调用方诚实降级）。
+   *
+   * `hasEvidence=false` 表示决策文件来自旧版本、未记录因子分解。
+   * 此时**不渲染一排 0**：0 会被读成「零风险」，而真相是「没有记录」。
+   */
+  decisionEvidence?: {
+    hasEvidence: boolean
+    items: Array<{
+      rank: number
+      bundle: string
+      risk: number
+      factors: { recency: number; experimental: number; crashFrequency: number }
+      streak: number
+      changeCount: number
+      source: string | null
+    }>
+  }
 }
 
 /** status：崩溃状态 + 嫌疑排名的摘要。 */
@@ -365,6 +383,38 @@ export function formatStatus(s: StatusLike): ToolOutcome {
     limit: 12,
     empty: '没有 experimental/beta 命名的插件',
   })
+
+  // 决策因子（v0.13 方向③）：回答「为什么是它被选中」。
+  // 旧版决策文件没有 evidence ⇒ 用 empty 文案说明「未记录」，绝不列 0。
+  const evidence = s.decisionEvidence
+  if (evidence !== undefined) {
+    if (!evidence.hasEvidence) {
+      sections.push({
+        title: '决策因子',
+        items: [],
+        empty: '该决策来自旧版本，未记录因子分解（不显示零值以免误读为零风险）',
+      })
+    } else if (evidence.items.length > 0) {
+      // 数值兜底：`render` 是**全函数**（任何输入都渲染出东西、不抛）。
+      // 畸形条目（缺 factors / 非数字 risk）会让 `.toFixed` 抛异常，
+      // 而渲染异常会吞掉整张卡片 —— 观测设施不能因为一条坏数据而不显示。
+      const num = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
+      sections.push({
+        title: `决策因子（共 ${evidence.items.length} 个，三因子加权和 = 风险）`,
+        items: evidence.items.map((item) => {
+          const f = (item.factors ?? {}) as Record<string, unknown>
+          return (
+            `#${num(item.rank)} ${String(item.bundle ?? '（未知）')} · 风险 ${num(item.risk).toFixed(3)} = ` +
+            `新近 ${num(f.recency).toFixed(2)} + 实验 ${num(f.experimental).toFixed(2)} + ` +
+            `历史 ${num(f.crashFrequency).toFixed(2)} · 连续 ${num(item.streak)} 轮 · 变更 ${num(item.changeCount)} 次` +
+            (item.source == null ? '' : ` · 来源 ${String(item.source)}`)
+          )
+        }),
+        limit: 12,
+        empty: '当前决策未记录任何嫌疑',
+      })
+    }
+  }
 
   return ok('status', s.crashedLastRun ? `上次运行崩溃，已进入第 ${s.crashSeq} 轮恢复` : '守护正常，无待处理崩溃', { facts, sections }, {
     ...s,

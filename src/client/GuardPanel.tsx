@@ -7,6 +7,7 @@ import {
   BackupPolicyBody,
   CapabilityBody,
   Card,
+  DecisionEvidenceBody,
   DecisionsBody,
   EventsBody,
   KpiStrip,
@@ -397,6 +398,15 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
               onToggle={() => toggleCollapse('decisions')}
             >
               <DecisionsBody snapshot={snapshot} />
+            </Card>
+            <Card
+              id="decision-evidence"
+              title={t('sections.decisionEvidence')}
+              hint={t('decisionEvidence.count', { count: snapshot.decisionSuspects.length })}
+              collapsed={collapsed.has('decision-evidence')}
+              onToggle={() => toggleCollapse('decision-evidence')}
+            >
+              <DecisionEvidenceBody snapshot={snapshot} />
             </Card>
             <Card
               id="capabilities"

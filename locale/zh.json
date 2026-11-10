@@ -28,6 +28,7 @@
     "state": "生命周期",
     "metrics": "量化指标",
     "decisions": "崩溃决策",
+    "decisionEvidence": "决策因子",
     "risks": "嫌疑排名",
     "capabilities": "能力清单",
     "graph": "能力图谱",
@@ -154,6 +155,27 @@
       "disabled": "已关闭",
       "restored": "已恢复",
       "note": "备注"
+    }
+  },
+  "decisionEvidence": {
+    "empty": "尚无嫌疑名单（未发生过崩溃恢复决策）",
+    "legacy": "该决策来自旧版本，未记录因子分解 —— 不显示假的零值",
+    "hint": "三因子加权贡献之和即风险总分；条形长度 = 该因子贡献（0~1）",
+    "count": "{count} 个嫌疑",
+    "head": "头号嫌疑",
+    "risk": "风险",
+    "riskHint": "三因子加权和 ∈ [0,1]，不是崩溃概率",
+    "recency": "新近性",
+    "experimental": "实验性",
+    "crashFrequency": "历史频率",
+    "streak": "连续轮次",
+    "streakHint": "连续作为头号嫌疑的轮数（含本轮）",
+    "changeCount": "变更次数",
+    "changeCountHint": "journal 中该插件的安装/更新事件数",
+    "sourceHint": "证据来源：journal = 安装事实；mtime = 引导值",
+    "source": {
+      "journal": "安装事实",
+      "mtime": "mtime 引导"
     }
   },
   "capabilities": {

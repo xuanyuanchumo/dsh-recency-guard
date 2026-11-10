@@ -11,10 +11,12 @@
  */
 export {
   dataFlowStages,
+  decisionEvidenceRows,
   diagnosticsRows,
   markovView,
   metricRows,
   type DataFlowStage,
+  type DecisionEvidenceRow,
   type DiagnosticsRow,
   type MarkovRowView,
 } from '../src/client/panel-model.ts'

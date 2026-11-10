@@ -52,6 +52,20 @@ export interface PanelSnapshot {
   metrics: MetricsSnapshot
   /** 嫌疑风险排名。 */
   risks: RankedRisk[]
+  /** 当前决策文件的嫌疑名单（含因子证据，v0.13 方向③）。 */
+  decisionSuspects: ReadonlyArray<{
+    bundle: string
+    version?: string
+    lastChangeAt: string
+    evidence?: {
+      rank: number
+      risk: number
+      factors: { recency: number; experimental: number; crashFrequency: number }
+      streak: number
+      changeCount: number
+      source?: 'journal' | 'mtime'
+    }
+  }>
   /** 能力矩阵摘要。 */
   capability: {
     total: number
@@ -163,6 +177,29 @@ export interface SnapshotInput {
     suspectHits: number
     observations: number
   }>
+  /**
+   * 当前决策文件的嫌疑名单（含因子证据，v0.13 方向③）。
+   *
+   * 形状与 `decision.ts` 的 `DecisionSuspect` 一致（投影）。空 = 无决策文件
+   * 或决策文件里没有 suspects（首次安装、从未崩溃）。
+   *
+   * 为什么面板需要它：`risks`（`RankedRisk[]`）只给总分，回答不了「A 是靠
+   * experimental 拉高还是靠 recency 拉高」。决策证据把分解、streak、changeCount
+   * 一起给出来，面板才能解释「为什么是它被选中」。
+   */
+  decisionSuspects: ReadonlyArray<{
+    bundle: string
+    version?: string
+    lastChangeAt: string
+    evidence?: {
+      rank: number
+      risk: number
+      factors: { recency: number; experimental: number; crashFrequency: number }
+      streak: number
+      changeCount: number
+      source?: 'journal' | 'mtime'
+    }
+  }>
   restored: readonly string[]
   autoDisabled: Array<{ name: string; reason: string; crashSeq: number; disabledAt: string }>
   partitions: PartitionIndex
@@ -246,6 +283,7 @@ export function buildPanelSnapshot(input: SnapshotInput, now = Date.now()): Pane
     stabilityScore: input.stabilityScore,
     metrics,
     risks,
+    decisionSuspects: [...input.decisionSuspects],
     backupPolicy: input.backupPolicy,
     lastRecoveryVerdict: input.lastRecoveryVerdict,
     capability: {

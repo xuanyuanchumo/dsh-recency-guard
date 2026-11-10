@@ -5,6 +5,7 @@ import type { PanelSnapshot } from '../../src/snapshot.ts'
 import {
   agoLabel,
   capabilityRows,
+  decisionEvidenceRows,
   decisionHistory,
   formatClock,
   formatDateTime,
@@ -571,6 +572,72 @@ function decisionTone(kind: DecisionEntry['kind']): string {
     default:
       return 'neutral'
   }
+}
+
+/* ---------- 决策因子证据（v0.13 方向③） ---------- */
+
+/**
+ * 决策因子卡片 —— 把「为什么是它被选中」摊开成可读的三因子分解。
+ *
+ * 诚实边界：旧版决策文件没有 `evidence`，此时**不画假条形图**，
+ * 直接说明「该决策未记录因子」。把 0 画成条形会让人误读为「零风险」。
+ */
+export function DecisionEvidenceBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+  const { rows, hasEvidence } = decisionEvidenceRows(snapshot)
+  if (rows.length === 0) return <p className="rg-empty">{t('decisionEvidence.empty')}</p>
+  if (!hasEvidence) return <p className="rg-empty">{t('decisionEvidence.legacy')}</p>
+  return (
+    <>
+      <p className="rg-hint">{t('decisionEvidence.hint')}</p>
+      <ol className="rg-evidence-list">
+        {rows.map((row) => (
+          <li key={row.bundle} className={`rg-evidence${row.head ? ' rg-evidence-head' : ''}`}>
+            <div className="rg-evidence-head-row">
+              <span className={`rg-badge rg-badge-${row.head ? 'warn' : 'neutral'}`}>#{row.rank}</span>
+              <strong className="rg-evidence-bundle">{row.bundle}</strong>
+              {row.head && <span className="rg-badge rg-badge-error">{t('decisionEvidence.head')}</span>}
+              <span className="rg-evidence-risk" title={t('decisionEvidence.riskHint')}>
+                {t('decisionEvidence.risk')} {row.risk.toFixed(3)}
+              </span>
+            </div>
+            <div className="rg-evidence-bars">
+              {(
+                [
+                  ['recency', t('decisionEvidence.recency'), row.factors.recency, 'info'],
+                  ['experimental', t('decisionEvidence.experimental'), row.factors.experimental, 'warn'],
+                  ['crashFrequency', t('decisionEvidence.crashFrequency'), row.factors.crashFrequency, 'error'],
+                ] as const
+              ).map(([key, label, value, tone]) => (
+                <div key={key} className="rg-evidence-bar-row">
+                  <span className="rg-evidence-bar-label">{label}</span>
+                  <span className="rg-evidence-bar-track">
+                    <span
+                      className={`rg-evidence-bar rg-tone-${tone}`}
+                      style={{ width: `${Math.max(0, Math.min(1, value)) * 100}%` }}
+                    />
+                  </span>
+                  <span className="rg-evidence-bar-value">{value.toFixed(3)}</span>
+                </div>
+              ))}
+            </div>
+            <div className="rg-evidence-meta">
+              <span title={t('decisionEvidence.streakHint')}>
+                {t('decisionEvidence.streak')} {row.streak}
+              </span>
+              <span title={t('decisionEvidence.changeCountHint')}>
+                {t('decisionEvidence.changeCount')} {row.changeCount}
+              </span>
+              {row.source !== null && (
+                <span className={`rg-badge rg-badge-${row.source === 'journal' ? 'success' : 'neutral'}`} title={t('decisionEvidence.sourceHint')}>
+                  {t(`decisionEvidence.source.${row.source}`)}
+                </span>
+              )}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </>
+  )
 }
 
 /* ---------- 项目隔离 ---------- */

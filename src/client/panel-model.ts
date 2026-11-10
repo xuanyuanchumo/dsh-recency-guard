@@ -168,6 +168,60 @@ export function decisionHistory(snapshot: PanelSnapshot, limit = 12): DecisionEn
     .slice(0, limit)
 }
 
+/* ---------- 决策因子证据（v0.13 方向③） ---------- */
+
+/**
+ * 一条决策因子证据行 —— 面板「决策因子」卡片的一行。
+ *
+ * 为什么要单列 `factors` 而不是只给总分：`risks` 卡片给的 `risk` 是三项之和，
+ * 0.72 可能是「1 小时前更新」也可能是「实验性插件」拉高的。用户问
+ * 「为什么关它不关那个」时，只有分解能回答。
+ */
+export interface DecisionEvidenceRow {
+  /** 排名（1 基，与决策文件一致）。 */
+  rank: number
+  bundle: string
+  /** 风险总分 ∈ [0,1]。 */
+  risk: number
+  /** 三因子加权贡献（已取整到 4 位）。 */
+  factors: { recency: number; experimental: number; crashFrequency: number }
+  /** 连续头号嫌疑轮数。 */
+  streak: number
+  /** journal 里的安装/更新次数。 */
+  changeCount: number
+  /** 证据来源（journal = 安装事实；mtime = 引导值）。 */
+  source: string | null
+  /** 是否为当前头号嫌疑。 */
+  head: boolean
+}
+
+/**
+ * 决策因子证据行（纯函数）。
+ *
+ * 诚实边界：没有 `evidence` 的老决策文件（v0.12.x 及更早）**不伪造因子**——
+ * 该行 `risk`/`factors` 保持 0 并由 `hasEvidence` 标记，面板显示
+ * 「该决策未记录因子（旧版本）」而不是把 0 当成「零风险」。
+ */
+export function decisionEvidenceRows(snapshot: PanelSnapshot): { rows: DecisionEvidenceRow[]; hasEvidence: boolean } {
+  const list = snapshot.decisionSuspects ?? []
+  let hasEvidence = false
+  const rows = list.map((suspect, index) => {
+    const ev = suspect.evidence
+    if (ev) hasEvidence = true
+    return {
+      rank: ev?.rank ?? index + 1,
+      bundle: suspect.bundle,
+      risk: ev?.risk ?? 0,
+      factors: ev?.factors ?? { recency: 0, experimental: 0, crashFrequency: 0 },
+      streak: ev?.streak ?? 0,
+      changeCount: ev?.changeCount ?? 0,
+      source: ev?.source ?? null,
+      head: (ev?.rank ?? index + 1) === 1,
+    }
+  })
+  return { rows, hasEvidence }
+}
+
 /* ---------- 指标 ---------- */
 
 export interface MetricRow {

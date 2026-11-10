@@ -369,18 +369,43 @@ export const RISK_WEIGHTS = { recency: 0.5, experimental: 0.3, crashFrequency: 0
 /** recency 因子的半衰期（小时）。 */
 export const RECENCY_HALF_LIFE_HOURS = 72
 
-/** 计算单个插件的崩溃风险。 */
-export function riskScore(input: RiskInput, now = Date.now()): number {
+/**
+ * 三因子的加权贡献分解（v0.13 因子快照）。
+ *
+ * `riskScore` 是这三者之和，但**只给总分**时无法回答「为什么是 A 而不是 B」——
+ * A 可能靠 experimental 拉高、B 可能靠 recency 拉高，总分相同但成因完全不同。
+ * 决策文件需要落盘的是**分解**而不是总分，否则事后归因只能猜。
+ *
+ * 行为保持：`riskScore` 改为调用本函数后，数学公式与取整顺序不变
+ * （先求三因子贡献、再求和、最后 round4 并夹到 [0,1]），既有断言不受影响。
+ */
+export interface RiskFactorContributions {
+  /** 新近性贡献：`0.5 × 0.5^(ageHours/72)`。 */
+  recency: number
+  /** 实验性贡献：`0.3 × experimental`。 */
+  experimental: number
+  /** 历史频率贡献：`0.2 × suspectHits/observations`。 */
+  crashFrequency: number
+}
+
+/** 分解三因子的加权贡献（未取整，供 riskScore 与快照共用）。 */
+export function riskFactors(input: RiskInput, now = Date.now()): RiskFactorContributions {
   const changed = Date.parse(input.lastChangeAt)
   const ageHours = Number.isFinite(changed) ? Math.max(0, (now - changed) / 3_600_000) : Number.POSITIVE_INFINITY
   const recency = ageHours === Number.POSITIVE_INFINITY ? 0 : Math.pow(0.5, ageHours / RECENCY_HALF_LIFE_HOURS)
   const experimental = input.experimental ? 1 : 0
   const frequency = input.observations > 0 ? input.suspectHits / input.observations : 0
-  const score =
-    RISK_WEIGHTS.recency * recency +
-    RISK_WEIGHTS.experimental * experimental +
-    RISK_WEIGHTS.crashFrequency * frequency
-  return round4(Math.min(1, Math.max(0, score)))
+  return {
+    recency: RISK_WEIGHTS.recency * recency,
+    experimental: RISK_WEIGHTS.experimental * experimental,
+    crashFrequency: RISK_WEIGHTS.crashFrequency * frequency,
+  }
+}
+
+/** 计算单个插件的崩溃风险。 */
+export function riskScore(input: RiskInput, now = Date.now()): number {
+  const f = riskFactors(input, now)
+  return round4(Math.min(1, Math.max(0, f.recency + f.experimental + f.crashFrequency)))
 }
 
 /**
