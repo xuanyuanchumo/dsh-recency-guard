@@ -7,7 +7,7 @@
  * 方向」，控制带回答「**哪一次**间隔越过了偶然波动的边界」—— 区分
  * 偶然原因（common cause）与特殊原因（special cause）是它的本职。
  */
-import { definedMetric, sampleConfidence, undefinedMetric, type Metric } from './observability.ts'
+import { definedMetric, sampleConfidence, undefinedMetric, type Metric } from '../core/metric.ts'
 
 /** 控制带读数（休哈特单值-移动极差法）。 */
 export interface ControlBand {

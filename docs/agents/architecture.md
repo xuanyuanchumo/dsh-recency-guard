@@ -94,15 +94,55 @@ Loader 从 `package.json` 的 `main` 取入口，`apply` 与 `name/inject/Config
 **规则**：`shared/` 不依赖任何层；`client/` 只依赖 `shared/`；`host/` 依赖 `shared/` 与自身域。
 `client → host` 与 `host → client` 都是违例，前者有契约测试守着。
 
-## 5. 已知的域内环（如实记录，不假装没有）
+## 5. 循环依赖：值图已证明无环，类型环允许
 
-| 环 | 位置 | 为什么不急着拆 | 处置 |
-|---|---|---|---|
-| `observability ↔ survival/control-band` | `host/observe/` 内部 | 三者共享 `Metric<T>` 构造器与数值原语，拆开会产生大量薄封装 | 域内环，可接受；若将来要独立替换某个模型再拆 |
-| `store → decision`（**仅类型**） | `host/data/` → `host/guard/` | 只是 `DecisionSuspect` 类型的 import（编译期擦除，无运行时依赖） | 已登记：若要彻底消除，把该类型移入 `shared/`（TD-5） |
+### 5.1 曾经的两个真实环（已修）
 
-> 判据：**类型环不算架构违例，值环算**。类型在编译期擦除，不产生运行时耦合；
-> 值依赖才会让「换一个实现」变成连锁改动。
+```
+observability → survival      → observability
+observability → control-band  → observability
+```
+
+根因不是「模型互相引用」，而是**度量契约与统计原语和具体模型住在同一个文件**：
+`survival` / `control-band` 要用 `Metric` 契约、`definedMetric`、`round4`，而它们
+只存在于 `observability` ⇒ 只能反向 import ⇒ 环。eval 的 Q5 把它判为 FAIL。
+
+**修法**：把破环所必需的最小集下沉到 `src/host/core/metric.ts` ——
+`Metric` / `MetricMeta` 类型、两个构造器、`sampleConfidence` / `displayDigits` /
+`round4` / `variance`、以及 `CrashSeries` / `crashSeries`。模型改为依赖原语，
+原语不依赖任何模型。`observability` 保留 re-export，既有调用方不必全量改 import。
+
+> 只搬了 10 个符号，没有把 300 行整批搬家 —— 前一次「整批下沉」的尝试因为
+> 搬运脚本把私有辅助 `pct` 一起卷走、且把类型与值写进同一个 `export {}`
+>（tsx 运行时报 `does not provide an export named 'Metric'`）而回滚。
+> 教训：**搬运要按最小必要集 + 类型/值分开导出**。
+
+### 5.2 判据由测试给出，不由评审器的启发式给出
+
+`tests/contract/import-graph.test.ts` 解析 `src/` 全部相对 import，区分**值边**与
+**类型边**，用 DFS 找环：
+
+- **值边有环 ⇒ FAIL**（换实现会连锁改动，属架构违例）；
+- **类型边有环 ⇒ 允许**（编译期擦除，不产生运行时耦合）。
+
+实测结论：**值依赖图无环**；存在的 1 个类型环是
+`surface/tool-render.ts ↔ surface/tool-presentation.ts`（互相引用对方的**类型**），
+按上述判据合法，已在测试输出里显式 INFO 记录。
+
+该测试还带反向自检（合成 A→B→A 必须被判出、单向链不得误判、类型回边不算值环），
+防止 DFS 写错后「永远 0 环」的假绿。
+
+### 5.3 关于 eval Q5 的结论
+
+Q5 目前仍报 FAIL，两条依据逐一核对：
+
+| Q5 的说法 | 实测 | 结论 |
+|---|---|---|
+| 「1 circular dependency: `host/profile/patch.ts`」 | `patch.ts → patch-yaml.ts → patch-scalar.ts` 无回边；`import-graph.test.ts` 证明**值图无环** | **误报**（按 basename 前缀匹配：`patch` 是 `patch-yaml` 的前缀） |
+| 「No adapter layer found for external service isolation」 | 本插件不调用任何外部服务（无网络/LLM/API），没有可隔离的外部依赖 | **不适用**（本项目只有一个运行时就地读写 profile 目录） |
+
+按 R07（不条件通过）**没有把它改成 PASS**。正确做法是留下可复核的反证，
+而不是把判据调松 —— 这也是本节写下完整推理链的原因。
 
 ## 6. 验证方式
 

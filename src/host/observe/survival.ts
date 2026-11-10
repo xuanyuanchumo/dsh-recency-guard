@@ -8,7 +8,7 @@
  * definedMetric/sampleConfidence/round4/variance/displayDigits/crashSeries）。
  */
 
-import { crashSeries, definedMetric, displayDigits, round4, sampleConfidence, undefinedMetric, variance, type Metric, type MetricMeta } from './observability.ts'
+import { crashSeries, definedMetric, displayDigits, round4, sampleConfidence, undefinedMetric, variance, type Metric, type MetricMeta } from '../core/metric.ts'
 
 // ─────────────────────────── 生存 / 危险率 ───────────────────────────
 
