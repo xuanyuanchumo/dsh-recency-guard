@@ -18,6 +18,23 @@ dsh-recency-guard 是 DeepSeek Harness 的**插件崩溃恢复守护**：记录�
 | [conventions.md](./conventions.md) | 工程规范：注释、验证链、测试分层、已知陷阱、宿主服务读取纪律、交互事件纪律、YAML 写入纪律、沙箱流程 | 写任何代码前 |
 | [verification.md](./verification.md) | 验证手册：静态/沙箱/路由/用户旅程/对抗四层，全部可复现判据 | 声称"能用/能防崩溃"之前必读 |
 | [update-guide.md](./update-guide.md) | 插件更新规范：发布前置检查、版本号纪律、更新到桌面端的两条路径、热更新重载边界、更新后最小验证 | 发布/更新安装时 |
+| [../research/](../research/) | **研究文档基座（九篇 + 参考插件研究）**：中文思维映射、数学模型白皮书、数据结构选型、语言范式、验证体系、应用泛化、迭代计划、候选方向评审、四方向合流、参考插件取长补短 | 做设计决策 / 评审候选方案前 |
+
+### 2.1 研究文档与实现的关系（v0.13 起）
+
+`docs/research/` 不是"背景材料"，而是**设计决策的依据链**。v0.13 的每一项落地
+都能追到具体一篇：
+
+| 研究文档 | 落地的代码 | 被拒绝的原方案 |
+|---|---|---|
+| 08 候选方向评审 / 09 四方向合流 | `decision-evidence.ts` / `cooccurrence.ts` / `riskFactors` / `hazardAdjustedRounds` | 方向① LRU-K（语义错配）、方向② 指数衰减（放过真缺陷）、方向④ 共现加权（数据基础不存在） |
+| 10 参考插件研究 | 惰性加载可选 peer（对照 compat-guardian 不依赖 schemastery） | — |
+| 02 数学模型白皮书 | `riskFactors` 三因子分解 / `hazardAdjustedRounds` 用已有 Weibull | — |
+| 03 数据结构选型 | `graph-analysis.ts` 用度数排序而非中介数中心性 | — |
+| 05 验证与可证伪体系 | 变异自证（两轮：decision-compat 恰 4 条 FAIL、install-resilience 恰 2 条 FAIL） | — |
+
+**纪律**：新增设计决策时，先在 `docs/research/` 找到依据或补一篇；
+「我觉得这样更好」不是依据。
 
 ## 3. 快速上手（命令）
 
@@ -28,6 +45,14 @@ npm run lint            # tsc --noEmit --noUnusedLocals --noUnusedParameters
 npm test                # 分层统一运行器：Core/Host/Client/Contract
 npm run extract-runtime # 解出宿主运行时（Host 测试前置）
 ```
+
+**v0.13 起的两条硬前置**（不满足会直接失败，不会伪装通过）：
+
+- `tests/host/journey-mount.test.ts` 在 `runtime/` 缺失时**退出非零** ——
+  「无法评估 ≠ 通过」。
+- `tests/contract/install-resilience.test.ts` 会检查**产物**里 optional peer
+  是否被静态 import；`tests/contract/decision-compat.test.ts` 会检查守护行
+  是否偷读 `evidence`。两条都有变异自证记录。
 
 验证顺序固定：**build → typecheck → lint → test**，全部零错误才算完成。
 宿主层测试需要 `runtime/`（由 extract-runtime 产出），缺失先解出再跑。

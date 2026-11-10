@@ -20,20 +20,31 @@ import type { JournalEvent } from './store.js'
 import type { GuardState } from './store.js'
 import { computeRevision, type RevisionFacts } from './change-guard.js'
 import { DECISION_RELATIVE_PATH, writePointer, type DecisionSuspect } from './decision.js'
-import { decisionSuspects, rankForDecision } from './decision-evidence.js'
-import { installGuardedRows, GUARD_PACKAGE_NAME } from './guarded-rows.js'
+import { rankForDecision } from './decision-evidence.js'
+import { GUARD_PACKAGE_NAME } from './guarded-rows.js'
 import { deriveObservations, deriveRiskInputs } from './observations.js'
 import { installExitSentinel, readSentinel, clearSentinel } from './sentinel.js'
 import { assessAbnormalExit, abnormalRecoveryVerdict, holdReason } from './abnormal-boot.js'
+import { abnormalExitEvents } from './boot-notes.js'
 import { restoreDisabledExceptPrime, reenableOne, type RecoveryDeps } from './recovery-actions.js'
 import { observeOfficialExperimental } from './official-observe.js'
-import { appendSample, sampleFromCrash, verifyCooccurrence, mayWeightByCooccurrence } from './cooccurrence.js'
+import {
+  buildCooccurrenceSample,
+  buildDecisionSuspects,
+  hazardShapeFromJournal,
+  mergeCooccurrenceSample,
+  projectCooccurrence,
+  projectDecisionEvidence,
+  type HazardShape,
+} from './decision-views.js'
 import { watchPluginChanges } from './event-watch.js'
 import { assessConfidence, environmentChanged, reconcilePrepared, shouldRestoreAfterBoot, type CrashHistoryEntry } from './recovery-policy.js'
 import { StageMachine, type LifecycleStepName } from './lifecycle.js'
 import { buildCapabilityGraph, verifyCapabilityContract } from './capability-specs.js'
 import { currentRegistrationSurface, verifySurfaceAlignment } from './capability-specs.js'
 import { buildPanelSnapshot, buildGraphDataFor, type PanelSnapshot } from './snapshot.js'
+import { buildStatusOutput } from './status-view.js'
+import { recordStartup } from './startup-record.js'
 import { buildPartitionSnapshot } from './partition-snapshot.js'
 import {
   buildGuardIsolationView,
@@ -47,7 +58,8 @@ import { archiveAndReset, listArchives, readArchiveManifest } from './archive.js
 import { wireRoutes } from './routes-plugin.js'
 import { registerGuardTool } from './tool-registration.js'
 import type { Observation } from './observability.js'
-import { intervalSurvival } from './survival.js'
+// `intervalSurvival` 的调用已移入 decision-views.ts（hazardShapeFromJournal），
+// 这里不再直接依赖生存模型 —— 崩溃路径只消费投影后的形态判定。
 export const name = 'dsh-recency-guard'
 
 export interface Config {
@@ -620,18 +632,13 @@ class Guard {
     try {
       const observed = this.store.readObservationSnapshotSync('official-experimental')
       const officialActive = [...observed.entries()].filter(([, info]) => info.enabled).map(([name]) => name)
-      const store = this.store.readCooccurrenceSync()
-      const next = appendSample(
-        { schemaVersion: 1, samples: store.samples as never[] },
-        sampleFromCrash({
-          at: new Date().toISOString(),
-          officialActive,
-          suspects: ranked.map((r) => r.bundle),
-          disabled,
-          observations: [],
-        }),
-      )
-      this.store.writeCooccurrenceSync(next as never)
+      const sample = buildCooccurrenceSample({
+        at: new Date().toISOString(),
+        officialActive,
+        ranked,
+        disabled,
+      })
+      this.store.writeCooccurrenceSync(mergeCooccurrenceSample(this.store.readCooccurrenceSync(), sample))
     } catch {
       // 共现采集是观测设施：失败不记、不抛，绝不影响崩溃决策与守护行。
     }
@@ -650,27 +657,8 @@ class Guard {
    * `defined:false` ⇒ 这里返回 `undefined`，让 `hazardAdjustedRounds`
    * 原样返回 `confirmRounds`（行为与 v0.12 逐位一致）。
    */
-  private hazardShapeSync(): { weibullShape?: number; reliable?: boolean; atBound?: boolean } | undefined {
-    try {
-      const events = this.store.readJournalSync(1000)
-      const crashTimes: number[] = []
-      for (const event of events) {
-        if (event.kind !== 'crash-detected') continue
-        const parsed = Date.parse(event.t)
-        if (Number.isFinite(parsed)) crashTimes.push(parsed)
-      }
-      if (crashTimes.length < 4) return undefined // 至少 3 个间隔才拟合两参数 Weibull
-      const fit = intervalSurvival(crashTimes)
-      if (!fit.defined || fit.value === null) return undefined
-      return {
-        weibullShape: fit.value.weibullShape,
-        reliable: fit.value.hazardDirectionReliable,
-        atBound: fit.value.weibullShapeAtBound,
-      }
-    } catch {
-      // 观测设施绝不拖垮崩溃路径：算不出形态就退回不调整。
-      return undefined
-    }
+  private hazardShapeSync(): HazardShape | undefined {
+    return hazardShapeFromJournal(this.store.readJournalSync(1000))
   }
 
   /** Installed bundle -> version map, used for update detection. */
@@ -871,51 +859,14 @@ class Guard {
    *  - the crash sentinel of the previous run, so a crash is never lost
    */
   recordStartupSync(): void {
-    try {
-      this.store.appendSync({ kind: 'note', detail: `dsh 启动 pid=${process.pid}` })
-      // Install the guarded rows BEFORE anything can crash, so the next boot
-      // can keep a suspect plugin from loading at all. Synchronous by design.
-      const installed = installGuardedRows(this.profileDir, this.patchPath)
-      // 步骤留痕走**同步**：这里是崩溃路径的入口，await 之后进程可能已经死了。
-      this.recordStep(
-        'install-guarded-rows',
-        installed.blocked === undefined,
-        installed.blocked ?? `新增 ${installed.added.length} 行 / 跳过 ${installed.skipped.length} 行`,
-      )
-      if (installed.added.length > 0) {
-        this.store.appendSync({
-          kind: 'note',
-          detail: `已安装守护行：${installed.added.map((r) => `${r.rowId} (${r.bundleName})`).join(', ')}`,
-        })
-      }
-      const sentinel = readSentinel(this.store.partitionPath)
-      if (sentinel) {
-        this.store.appendSync({
-          kind: 'crash-detected',
-          detail: `上次运行以退出码 ${sentinel.exitCode} 结束`,
-          exitCode: sentinel.exitCode,
-          at: sentinel.at,
-        })
-      }
-      // Record install/update facts synchronously, so the recency ranking has
-      // real data even when this boot dies before an async write completes.
-      const current = bundleVersionsSync(this.profileDir)
-      const previous = this.store.readSnapshotSync()
-      const { install, update } = diffVersions(previous, current)
-      for (const i of install) this.store.appendSync({ kind: 'install', bundle: i.name, version: i.version })
-      for (const u of update) {
-        this.store.appendSync({ kind: 'update', bundle: u.name, version: u.to, prevVersion: u.from })
-      }
-      this.store.writeSnapshotSync(current)
-      this.recordStep(
-        'startup-record',
-        true,
-        `崩溃哨兵 ${sentinel ? `退出码 ${sentinel.exitCode}` : '无'}；安装 ${install.length} / 更新 ${update.length}`,
-      )
-    } catch (error) {
-      /* best effort: the journal must never break the host's startup */
-      this.recordStep('startup-record', false, describeError(error))
-    }
+    // 实现见 startup-record.ts（同步、best-effort、5 个分支集中在一处）。
+    recordStartup({
+      profileDir: this.profileDir,
+      patchPath: this.patchPath,
+      store: this.store,
+      recordStep: (name, ok, reason) => this.recordStep(name, ok, reason),
+      pid: process.pid,
+    })
   }
 
   /**
@@ -1101,18 +1052,8 @@ class Guard {
       state.abnormalExitSeq ?? 0,
     )
     const abnormalSeqNext = abnormal.nextSeq
-    if (abnormal.abnormalDetail !== null) {
-      this.store.appendSync({
-        kind: 'crash-detected',
-        detail: abnormal.abnormalDetail,
-        exitCode: null,
-        signal: 'unobserved',
-      })
-    } else if (abnormal.concurrentDetail !== null) {
-      this.store.appendSync({ kind: 'note', detail: abnormal.concurrentDetail })
-    } else if (abnormal.selfReloadDetail !== null) {
-      this.store.appendSync({ kind: 'note', detail: abnormal.selfReloadDetail })
-    }
+    // 分流留痕由 boot-notes.ts 决定 kind 与文案（三条 if/else 移出启动主线）。
+    for (const event of abnormalExitEvents(abnormal)) this.store.appendSync(event)
     const exitClass = abnormal.exitClass
 
     // 两阶段对账（v0.9.0）：上一轮可能留下 prepared 记录（崩溃打断或正常
@@ -1270,7 +1211,7 @@ class Guard {
     ranked: readonly RecencyEntry[],
     history: readonly CrashHistoryEntry[],
   ): DecisionSuspect[] {
-    return decisionSuspects(ranked, this.store.readJournalSync(1000), history)
+    return buildDecisionSuspects(ranked, this.store.readJournalSync(1000), history)
   }
 
   /**
@@ -1764,34 +1705,8 @@ class Guard {
    * `hasEvidence=false` 是**诚实边界**：旧版决策文件没记因子，
    * 此时不返回一排 0（会被误读成「零风险」），而是显式说明未记录。
    */
-  private decisionEvidenceView(): {
-    hasEvidence: boolean
-    items: Array<{
-      rank: number
-      bundle: string
-      risk: number
-      factors: { recency: number; experimental: number; crashFrequency: number }
-      streak: number
-      changeCount: number
-      source: string | null
-    }>
-  } {
-    const suspects = this.store.readDecisionSync()?.suspects ?? []
-    let hasEvidence = false
-    const items = suspects.map((suspect, index) => {
-      const ev = suspect.evidence
-      if (ev) hasEvidence = true
-      return {
-        rank: ev?.rank ?? index + 1,
-        bundle: suspect.bundle,
-        risk: ev?.risk ?? 0,
-        factors: ev?.factors ?? { recency: 0, experimental: 0, crashFrequency: 0 },
-        streak: ev?.streak ?? 0,
-        changeCount: ev?.changeCount ?? 0,
-        source: ev?.source ?? null,
-      }
-    })
-    return { hasEvidence, items }
+  private decisionEvidenceView(): ReturnType<typeof projectDecisionEvidence> {
+    return projectDecisionEvidence(this.store.readDecisionSync()?.suspects ?? [])
   }
 
   /**
@@ -1801,93 +1716,30 @@ class Guard {
    * **即使验证通过也不自动加权** —— 加权需要额外完成「官方实验插件在崩溃
    * 窗口内确实变更过」的严格化论证（研究文档 09 §4.3 的调和方式）。
    */
-  private cooccurrenceView(): {
-    samples: number
-    activeSamples: number
-    inactiveSamples: number
-    activeHitRate: number | null
-    inactiveHitRate: number | null
-    hitRateDelta: number | null
-    label: string
-    mayWeight: { allowed: boolean; reason: string }
-  } {
-    try {
-      const stored = this.store.readCooccurrenceSync()
-      const verdict = verifyCooccurrence({ schemaVersion: 1, samples: stored.samples as never[] })
-      return {
-        samples: verdict.samples,
-        activeSamples: verdict.activeSamples,
-        inactiveSamples: verdict.inactiveSamples,
-        activeHitRate: verdict.activeHitRate.value,
-        inactiveHitRate: verdict.inactiveHitRate.value,
-        hitRateDelta: verdict.hitRateDelta.value,
-        label: verdict.label,
-        mayWeight: mayWeightByCooccurrence(verdict),
-      }
-    } catch {
-      // 观测设施失败 ⇒ 显式不可判定，不伪造「无差异」。
-      return {
-        samples: 0,
-        activeSamples: 0,
-        inactiveSamples: 0,
-        activeHitRate: null,
-        inactiveHitRate: null,
-        hitRateDelta: null,
-        label: '共现样本读取失败，不可判定',
-        mayWeight: { allowed: false, reason: '读取失败' },
-      }
-    }
+  private cooccurrenceView(): ReturnType<typeof projectCooccurrence> {
+    return projectCooccurrence(this.store.readCooccurrenceSync().samples)
   }
 
   async status(): Promise<unknown> {
     const state = await this.store.readState()
     const ranked = await this.rankedSuspects()
-    const lifecycle = this.lifecycleView()
-    return {
+    return buildStatusOutput({
       profile: this.profileName,
-      // cycle-4 T03：命令窗口的隔离归因 —— 这次守护是哪个项目的事实。
       workspace: this.workspace,
       projectKey: this.projectKey,
       dshVersion: safeVersion(),
-      // 反馈入口（v0.10 R18）：命令窗口的排障现场也能直达 Issues。
       pluginVersion: this.selfPackage.version,
       issuesUrl: this.selfPackage.issuesUrl,
       enabled: this.config.enabled,
-      crashedLastRun: state.crashedRun === true,
-      lastBootMarker: state.bootMarker,
-      lastExitCode: state.lastExitCode,
-      crashSeq: state.crashSeq,
-      autoDisabled: state.autoDisabled,
-      stabilized: state.stabilized,
-      restored: state.restored,
-      decisionFile: DECISION_RELATIVE_PATH,
-      // 恢复判定白盒（v0.9.1）：undefined = 本分区还没有崩溃决策发生过。
-      lastRecoveryVerdict: state.lastRecoveryVerdict,
-      // v0.8.1：不再在数据层裁剪到 10 个。rankedSuspects 本身就是全量排序
-      // （n ≤ 100，全量排序 O(n log n)），slice 只是把「插件多」变成
-      // 「看不到」。显示层的截断（带省略计数）是渲染策略，不该伪装成数据。
-      suspectRanking: ranked,
-      suspectTotal: ranked.length,
+      state,
+      ranked,
       experimentalSuspects: ranked.filter((r) => isExperimentalName(r.bundle)).map((r) => r.bundle),
-      // 决策因子证据（v0.13 方向③）：命令窗口也要能回答「为什么是它被选中」。
-      // 旧版决策文件没有 evidence ⇒ 返回空数组 + hasEvidence=false，
-      // 命令窗口显示「未记录因子」而不是一排 0（0 会被读成「零风险」）。
+      decisionFile: DECISION_RELATIVE_PATH,
       decisionEvidence: this.decisionEvidenceView(),
-      // 共现验证（v0.13 方向④）：只报"能不能加权"，不报加权值。
-      // 这是「先验证假设再行动」纪律的可观测落点。
       cooccurrence: this.cooccurrenceView(),
-      // 生命周期步骤流：不只报「现在什么状态」，还报「做过哪些步、哪步失败过」。
-      lifecycle: {
-        stage: lifecycle.stage,
-        stabilityScore: lifecycle.stabilityScore,
-        steps: lifecycle.steps.slice(-12),
-        openSteps: lifecycle.openSteps,
-        rejectedTransitions: lifecycle.rejected.slice(-5),
-        lastTransition: lifecycle.transitions[lifecycle.transitions.length - 1] ?? null,
-      },
-      // 可选服务可用性：诚实报告（false = 备份能力降级，不是错误）。
+      lifecycle: this.lifecycleView(),
       configEditorAvailable: this.configEditorAvailable,
-    }
+    })
   }
 }
 // 自描述/版本事实族（safeJson/safeVersion/optionalRequire/readSelfPackage/

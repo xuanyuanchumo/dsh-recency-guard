@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, s
 import { isAbsolute, join, resolve } from 'node:path'
 import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
 import type { DecisionSuspect } from './decision.js'
+import { readCooccurrenceSync, writeCooccurrenceSync, readObservation, readObservationSync, writeObservation } from './cooccurrence-store.js'
 
 /**
  * Journal / state store for dsh-recency-guard.
@@ -347,89 +348,33 @@ export class Store {
    * 不同；混写会让 install/update 的 diff 读到脏键。独立文件 `observations.json`
    * —— 两个真相源物理隔离，比键前缀约定更不可能互相污染。
    */
-  private observationPath(name: string): string {
-    return join(this.dir, `observation-${sanitize(name)}.json`)
-  }
-
   async readObservationSnapshot(name: string): Promise<Map<string, { version?: string; enabled: boolean }>> {
-    try {
-      const file = this.observationPath(name)
-      if (!existsSync(file)) return new Map()
-      const parsed = JSON.parse(await readFile(file, 'utf8')) as Record<string, { version?: string; enabled: boolean }>
-      const out = new Map<string, { version?: string; enabled: boolean }>()
-      for (const [bundle, info] of Object.entries(parsed)) {
-        if (typeof bundle !== 'string' || info === null || typeof info !== 'object') continue
-        out.set(bundle, { version: info.version, enabled: info.enabled !== false })
-      }
-      return out
-    } catch {
-      return new Map()
-    }
+    return readObservation(this.dir, name)
   }
 
-  /**
-   * 同步读观测快照（v0.13）—— 崩溃路径不能 await，但共现采集需要
-   * 「崩溃当时官方实验插件是否活跃」这个事实。
-   *
-   * 与异步版同语义：缺失/损坏返回空 Map，绝不抛。
-   */
+  /** 同步读观测快照（v0.13）—— 崩溃路径不能 await，共现采集需要它。 */
   readObservationSnapshotSync(name: string): Map<string, { version?: string; enabled: boolean }> {
-    try {
-      const file = this.observationPath(name)
-      if (!existsSync(file)) return new Map()
-      const parsed = JSON.parse(readFileSync(file, 'utf8')) as Record<string, { version?: string; enabled: boolean }>
-      const out = new Map<string, { version?: string; enabled: boolean }>()
-      for (const [bundle, info] of Object.entries(parsed)) {
-        if (typeof bundle !== 'string' || info === null || typeof info !== 'object') continue
-        out.set(bundle, { version: info.version, enabled: info.enabled !== false })
-      }
-      return out
-    } catch {
-      return new Map()
-    }
+    return readObservationSync(this.dir, name)
   }
 
   async writeObservationSnapshot(name: string, state: Map<string, { version?: string; enabled: boolean }>): Promise<void> {
-    try {
-      await writeFileAtomic(this.observationPath(name), JSON.stringify(Object.fromEntries(state), null, 2), { mode: 0o644 })
-    } catch {
-      /* best effort */
-    }
+    await writeObservation(this.dir, name, state)
   }
 
   /**
    * 读共现样本（v0.13 方向④）。
    *
-   * 崩溃路径用同步 IO（进程随时会死），所以这里只提供 SYNCHRONOUS 版本 ——
-   * 共现采集发生在 `publishDecisionOnCrash` 里，不能 await。
-   *
-   * 损坏/缺失一律返回**空存储**而不是抛：共现验证是观测设施，
-   * 它读不到数据时应该降级为「不可判定」，不能拖垮崩溃路径。
+   * 实现委托给 `cooccurrence-store.ts`：store.ts 的复杂度已顶到预算上限
+   * （123/100），共现是**旁路数据面**（只服务验证，与恢复主线无控制依赖），
+   * 拆出去后主干的读者不必多背一层无关分支。
    */
   readCooccurrenceSync(): { schemaVersion: 1; samples: unknown[] } {
-    try {
-      if (!existsSync(this.cooccurrencePath)) return { schemaVersion: 1, samples: [] }
-      const parsed = JSON.parse(readFileSync(this.cooccurrencePath, 'utf8')) as { schemaVersion?: number; samples?: unknown }
-      if (!Array.isArray(parsed.samples)) return { schemaVersion: 1, samples: [] }
-      return { schemaVersion: 1, samples: parsed.samples }
-    } catch {
-      return { schemaVersion: 1, samples: [] }
-    }
+    return readCooccurrenceSync(this.dir) as { schemaVersion: 1; samples: unknown[] }
   }
 
-  /** 写共现样本（同步：崩溃路径不能 await）。best-effort，失败不抛。 */
+  /** 写共现样本（同步：崩溃路径不能 await）。委托实现见 `cooccurrence-store.ts`。 */
   writeCooccurrenceSync(store: { schemaVersion: 1; samples: unknown[] }): void {
-    try {
-      if (!existsSync(this.dir)) mkdirSync(this.dir, { recursive: true })
-      writeFileSync(this.cooccurrencePath, JSON.stringify(store, null, 2), 'utf8')
-    } catch {
-      /* best effort */
-    }
-  }
-
-  /** 共现样本文件路径。 */
-  private get cooccurrencePath(): string {
-    return join(this.dir, 'cooccurrence.json')
+    writeCooccurrenceSync(this.dir, store as never)
   }
 
   async writeSnapshot(snap: Record<string, string>): Promise<void> {

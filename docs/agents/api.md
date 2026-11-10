@@ -1,5 +1,24 @@
 # 对外面 API（dsh-recency-guard v0.13.0）
 
+## 0.0f v0.13 契约变更一句话清单
+
+| 变更 | 影响 | 兼容性 |
+|---|---|---|
+| **`decision.json` 的 `suspects[]` 新增 `evidence` 字段** | 记录 `rank / risk / factors{recency,experimental,crashFrequency} / streak / changeCount / source`；回答「为什么是 A 而不是 B」 | **纯追加**（守护行只读 `disable`，老版本读到新字段不崩；有契约门） |
+| **决策排序口径统一** | 概率性证据（多嫌疑）改按 `riskScore` 排序头号嫌疑；确定性证据（唯一嫌疑）保持时间戳序 | 行为变更（唯一嫌疑零变化） |
+| **`riskScore` 拆出 `riskFactors`** | 三因子加权贡献可单独消费；`riskScore` 改为其组合 | 兼容（数值逐位不变，有对照断言） |
+| **`RiskInput` 新增可选 `changeCount`** | 变更频率作为 recency 的调制乘数 `1+α·density`（α=0.5, cap=5） | 兼容（缺失 ⇒ 乘数 1 ⇒ 与 v0.12 逐位一致） |
+| **`assessConfidence` 新增可选 `hazardDirection`** | 按崩溃间隔 Weibull 形状调整 `confirmRounds`（±1 轮） | 兼容（缺失/不可靠/撞边界 ⇒ 不调整） |
+| **`status` 新增 `decisionEvidence` / `cooccurrence`** | 命令窗口携带三因子分解与共现验证结论 | 兼容（只增） |
+| **面板快照新增 `decisionSuspects`** | 「决策因子」卡片的数据源（含 `hasEvidence` 诚实边界） | 兼容（只增） |
+| **`Config` 改为惰性加载** | schemastery 缺失 ⇒ 纯对象 schema 降级（8 字段齐全）；dsh-tools 缺失 ⇒ 工具定义原样注册 + `degraded` 标记 | **修复安装即崩**（此前静态 import optional peer） |
+| 新增 `src/decision-evidence.ts` / `cooccurrence.ts` / `client/graph-analysis.ts` | 纯函数模块，各自带单测 | 新文件 |
+| 新增契约门 `install-resilience` / `decision-compat` | optional peer 不得静态 import；守护行不得读 `evidence` | 新门（含变异自证） |
+
+**关键兼容性论证**：`evidence` 是**展示与回放**字段，不参与拦截判定。守护行仍只读
+`disable` 数组 —— 若让它依赖 `evidence`，旧版决策文件（无该字段）会静默全放行
+⇒ 崩溃重演。这条由结构门 + 行为门 + 变异自证三重钉住。
+
 ## 0.0e v0.11 契约变更一句话清单
 
 | 变更 | 影响 | 兼容性 |
