@@ -193,8 +193,26 @@
       "from": "RUNNING",
       "to": "DONE",
       "at": "2026-11-08T23:21:58.184Z"
+    },
+    {
+      "trigger": "reset",
+      "from": "DONE",
+      "to": "IDLE",
+      "at": "2026-11-10T05:03:02.310Z"
+    },
+    {
+      "trigger": "run",
+      "from": "IDLE",
+      "to": "RUNNING",
+      "at": "2026-11-10T05:03:12.567Z"
+    },
+    {
+      "trigger": "success",
+      "from": "RUNNING",
+      "to": "DONE",
+      "at": "2026-11-10T05:03:12.567Z"
     }
   ],
-  "updatedAt": "2026-11-08T23:21:58.184Z",
+  "updatedAt": "2026-11-10T05:03:12.567Z",
   "ledgerHead": null
 }
