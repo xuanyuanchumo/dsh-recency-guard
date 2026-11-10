@@ -8,6 +8,10 @@ import { computeRevision, type RevisionFacts } from './change-guard.js'
 import { markovAnalysis, type MarkovAnalysis } from './markov.js'
 import { STAGE_LABELS, buildGraphData, connectedComponents, type GraphData, type GraphNode } from './graph-data.js'
 import { readPartitionIndex, type PartitionIndex } from './isolation.js'
+import { calibratedConfirmRounds, calibrationExplanation, falsePositiveRate, falsePositiveSamples, type CalibrationDecision, type FalsePositiveRate } from './risk-calibration.js'
+import { bayesMetric, type BayesScoreValue } from './risk-bayes.js'
+import type { JournalRecord } from './store.js'
+import type { Metric } from './observability.js'
 
 /**
  * 事件流快照的条数上限。
@@ -82,9 +86,42 @@ export interface PanelSnapshot {
     label: string
     mayWeight: { allowed: boolean; reason: string }
   }
+  /**
+   * 误伤校准读数（v0.14 / M1 / RQ2，研究文档 07 §3）。
+   *
+   * 为什么进快照而不只在后台算：07 §3.3 要求自适应阈值**必须可解释**
+   * （面板显示「本轮为何提高阈值」），所以这里同时给结论与解释文案。
+   * 样本不足时 `rate.defined === false`（`value === null`），面板必须显示
+   * 「不可判定」而不是「误伤率 0%」—— 后者会把「没数据」谎报成「没问题」。
+   */
+  calibration: {
+    /** 误伤率读数（`Metric`，不可判定时 defined=false + value=null）。 */
+    rate: Metric<FalsePositiveRate>
+    /** 自适应阈值决策（含调整理由）。 */
+    decision: CalibrationDecision
+    /** 人话解释（面板直接渲染）。 */
+    explanation: string
+  }
+  /**
+   * 贝叶斯并行读数（v0.14 / M2 / RQ1，研究文档 07 §2）。
+   *
+   * **并行读数纪律**（07 §2.3）：这里的结果与 `risks[]` 的 `risk` 并列，
+   * 绝不替代默认 `riskScore`。面板同时显示两套，让用户看见分歧而不是
+   * 被单一黑盒结论说服。
+   *
+   * 数组顺序与 `risks[]` 一致（同源输入），便于前端并排渲染。
+   */
+  bayes: Array<{
+    bundle: string
+    /** 样本稀疏时 defined=false（07 §2.3 的「小样本保持诚实」）。 */
+    defined: boolean
+    reason: string
+    label: string
+    /** 可判定时的读数，否则 null。 */
+    value: BayesScoreValue | null
+  }>
   /** 能力矩阵摘要。 */
-  capability: {
-    total: number
+  capability: {    total: number
     exposed: number
     connected: number
     connectivity: number
@@ -227,6 +264,21 @@ export interface SnapshotInput {
     label: string
     mayWeight: { allowed: boolean; reason: string }
   }
+  /**
+   * journal 尾部（v0.14 / M1）：误伤样本从**事件流**里判定，不从快照自身推断。
+   *
+   * 为什么需要整条 journal 而不只 counts：区分「用户主动 reenable」与
+   * 「系统自动 restore」必须看 enable 事件的**上下文**（07 §3.3）——
+   * 单看次数无法区分两者，而把系统恢复误算成误伤会让阈值越来越高。
+   */
+  journal: readonly JournalRecord[]
+  /**
+   * 误伤校准的基线轮数（v0.14 / M1）：来自配置 `confirmRounds`。
+   *
+   * 为什么由调用方给而不是快照内硬编码默认值：面板显示的「校准后 N 轮」
+   * 必须与宿主**实际采用**的阈值同源，否则面板说的和系统做的是两回事。
+   */
+  confirmRoundsBase: number
   restored: readonly string[]
   autoDisabled: Array<{ name: string; reason: string; crashSeq: number; disabledAt: string }>
   partitions: PartitionIndex
@@ -300,6 +352,23 @@ export function buildPanelSnapshot(input: SnapshotInput, now = Date.now()): Pane
 
   const contract = verifyCapabilityContract(graph, input.registeredExposedAs)
 
+  // 误伤校准（M1）：样本来自 journal，判定来源区分用户/系统（07 §3.3）。
+  const fpStats = falsePositiveSamples(input.journal)
+  const calibrationDecision = calibratedConfirmRounds(input.confirmRoundsBase, fpStats)
+
+  // 贝叶斯并行读数（M2）：与 risks 同源同序，便于前端并排渲染。
+  // 注意这里**不动** risks —— 并行读数的全部意义是让分歧可见（07 §2.3）。
+  const bayes = input.riskInputs.map((riskInput) => {
+    const metric = bayesMetric(riskInput, now)
+    return {
+      bundle: riskInput.bundle,
+      defined: metric.defined,
+      reason: metric.reason ?? '',
+      label: metric.label,
+      value: metric.value,
+    }
+  })
+
   return {
     at: new Date(now).toISOString(),
     profile: input.profile,
@@ -312,6 +381,12 @@ export function buildPanelSnapshot(input: SnapshotInput, now = Date.now()): Pane
     risks,
     decisionSuspects: [...input.decisionSuspects],
     cooccurrence: { ...input.cooccurrence },
+    calibration: {
+      rate: falsePositiveRate(fpStats),
+      decision: calibrationDecision,
+      explanation: calibrationExplanation(calibrationDecision),
+    },
+    bayes,
     backupPolicy: input.backupPolicy,
     lastRecoveryVerdict: input.lastRecoveryVerdict,
     capability: {

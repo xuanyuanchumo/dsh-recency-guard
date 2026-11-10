@@ -9,6 +9,8 @@ import {
   Card,
   CooccurrenceBody,
   DecisionEvidenceBody,
+  CalibrationBody,
+  BayesBody,
   DecisionsBody,
   EventsBody,
   KpiStrip,
@@ -408,6 +410,26 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
               onToggle={() => toggleCollapse('decision-evidence')}
             >
               <DecisionEvidenceBody snapshot={snapshot} />
+            </Card>
+            {/* v0.14 M1：误伤校准（07 §3.3 要求面板显示「本轮为何提高阈值」）。 */}
+            <Card
+              id="calibration"
+              title={t('sections.calibration')}
+              hint={t('calibration.threshold') + ` ${snapshot.calibration.decision.required}`}
+              collapsed={collapsed.has('calibration')}
+              onToggle={() => toggleCollapse('calibration')}
+            >
+              <CalibrationBody snapshot={snapshot} />
+            </Card>
+            {/* v0.14 M2：贝叶斯并行读数（07 §2.3 要求两套并列，不替换默认）。 */}
+            <Card
+              id="bayes"
+              title={t('sections.bayes')}
+              hint={t('bayes.score') + ` ${snapshot.bayes.length}`}
+              collapsed={collapsed.has('bayes')}
+              onToggle={() => toggleCollapse('bayes')}
+            >
+              <BayesBody snapshot={snapshot} />
             </Card>
             <Card
               id="cooccurrence"

@@ -44,6 +44,7 @@ import { buildCapabilityGraph, verifyCapabilityContract } from './capability-spe
 import { currentRegistrationSurface, verifySurfaceAlignment } from './capability-specs.js'
 import { buildPanelSnapshot, buildGraphDataFor, type PanelSnapshot } from './snapshot.js'
 import { buildStatusOutput } from './status-view.js'
+import { projectBayesViews, projectCalibrationView } from './status-projections.js'
 import { recordStartup } from './startup-record.js'
 import { buildPartitionSnapshot } from './partition-snapshot.js'
 import {
@@ -1466,9 +1467,10 @@ class Guard {
    */
   async panelSnapshot(): Promise<PanelSnapshot> {
     const state = await this.store.readState()
-    // 事件流快照：journal 尾部直接投影（时间升序），面板据此画「流动」。
-    const recentEvents = this.store
-      .readJournalSync(1000)
+    // 一次读盘，三处消费（事件流投影 / 误伤样本 / revision 事实）：
+    // 快照是**一个时刻**的事实，重复读盘会让三块内容来自不同时刻。
+    const journalTail = this.store.readJournalSync(1000)
+    const recentEvents = journalTail
       .slice(-40)
       .map((e) => ({ t: e.t, kind: e.kind, bundle: e.bundle, detail: e.detail }))
     return buildPanelSnapshot({
@@ -1481,6 +1483,10 @@ class Guard {
       riskInputs: this.riskInputs(),
       decisionSuspects: this.store.readDecisionSync()?.suspects ?? [],
       cooccurrence: this.cooccurrenceView(),
+      journal: journalTail,
+      // 基线轮数取配置值：面板显示的「校准后轮数」必须与宿主实际采用的
+      // 阈值同源，否则面板说的和系统做的是两回事。
+      confirmRoundsBase: this.config.confirmRounds,
       restored: state.restored,
       lastRecoveryVerdict: state.lastRecoveryVerdict,
       autoDisabled: state.autoDisabled.map((d) => ({
@@ -1738,10 +1744,13 @@ class Guard {
       decisionFile: DECISION_RELATIVE_PATH,
       decisionEvidence: this.decisionEvidenceView(),
       cooccurrence: this.cooccurrenceView(),
+      bayes: projectBayesViews(this.riskInputs()),
+      calibration: projectCalibrationView(this.store.readJournalSync(1000), this.config.confirmRounds),
       lifecycle: this.lifecycleView(),
       configEditorAvailable: this.configEditorAvailable,
     })
   }
+
 }
 // 自描述/版本事实族（safeJson/safeVersion/optionalRequire/readSelfPackage/
 // readHostVersion）已拆到 self-describe.ts —— 复杂度预算按文件计分，

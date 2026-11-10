@@ -37,7 +37,9 @@
     "markov": "Transition matrix",
     "dataflow": "Data flow",
     "diagnostics": "Diagnostics",
-    "cooccurrence": "Co-occurrence"
+    "cooccurrence": "Co-occurrence",
+    "calibration": "False-positive calibration",
+    "bayes": "Bayesian reading"
   },
   "stage": {
     "idle": "idle",
@@ -340,5 +342,17 @@
     "undefined": "undetermined",
     "mayWeightYes": "Weighting is supported",
     "mayWeightNo": "Weighting is not supported"
+  },
+  "calibration": {
+    "threshold": "Confirm rounds",
+    "rate": "False-positive rate",
+    "insufficient": "Insufficient samples - undefined (not 0%)"
+  },
+  "bayes": {
+    "empty": "No suspect plugins",
+    "hint": "A second reading alongside \"Suspect ranking\" (research doc 07 2.3: parallel reading, never replaces the default)",
+    "posterior": "Posterior mean",
+    "score": "Bayes score",
+    "insufficient": "Sparse samples - undefined"
   }
 }

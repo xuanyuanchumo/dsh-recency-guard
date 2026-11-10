@@ -37,7 +37,9 @@
     "markov": "转移矩阵",
     "dataflow": "数据流",
     "diagnostics": "系统诊断",
-    "cooccurrence": "共现验证"
+    "cooccurrence": "共现验证",
+    "calibration": "误伤校准",
+    "bayes": "贝叶斯读数"
   },
   "stage": {
     "idle": "空闲",
@@ -340,5 +342,17 @@
     "undefined": "不可判定",
     "mayWeightYes": "可以据此加权",
     "mayWeightNo": "不应加权"
+  },
+  "calibration": {
+    "threshold": "确认轮数",
+    "rate": "误伤率",
+    "insufficient": "样本不足，不可判定（不是 0%）"
+  },
+  "bayes": {
+    "empty": "没有嫌疑插件",
+    "hint": "与「嫌疑排名」并列的第二套口径（研究文档 07 §2.3：并行读数，不替换默认值）",
+    "posterior": "后验均值",
+    "score": "贝叶斯分",
+    "insufficient": "样本稀疏，不可判定"
   }
 }

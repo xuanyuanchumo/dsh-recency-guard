@@ -32,6 +32,9 @@ import {
   undefinedMetric,
   type Metric,
 } from '../../src/observability.js'
+// RQ3 预防性健康指标：cycle-12 按「一个数学模型一个文件」拆到独立模块
+// （原落点 observability.ts 复杂度被这两个模型顶上 115 的带外）。
+import { configChangeCusum, loadTimeEwma } from '../../src/preventive.js'
 import { controlBand } from '../../src/control-band.js'
 import { intervalSurvival } from '../../src/survival.js'
 import { markovAnalysis } from '../../src/markov.js'
@@ -276,6 +279,18 @@ function main(): void {
   check('间隔 < 3 的 reason 说明样本不足', (intervalSurvival(timesFromGaps([1000 * S, 2000 * S])).reason ?? '').includes('至少需要 3'), intervalSurvival(timesFromGaps([1000 * S, 2000 * S])).reason)
   const zeroGaps = intervalSurvival(timesFromGaps([0, 1000 * S, 0]))
   check('含 0 间隔 ⇒ 不可判定（对数似然发散）', !zeroGaps.defined && (zeroGaps.reason ?? '').includes('零间隔'), zeroGaps.reason)
+  // **`zeros > 0` 这个守卫的可达性已实测确认为「只有零间隔能触发」**：
+  // `crashSeries` 先过滤非有限值、再**排序**，所以 gaps 恒 ≥ 0
+  // ⇒ 「非有限间隔」与「负间隔」两个分支实际不可达（排序把负间隔消灭了）。
+  // 因此 `zeros > 0` 改成 `>= 0` 的变异在语义上**等价**——
+  // 它只是把不可达分支的文案换掉。这条断言钉住「该分支确实不可达」，
+  // 而不是假装测到了它（诚实边界：不可达 = 不可证伪，标出来而不是编一个用例）。
+  const unsorted = intervalSurvival([3000, 1000, 2000, 1500])
+  check(
+    '乱序时间戳会被排序 ⇒ 不产生负间隔（故负间隔分支不可达）',
+    unsorted.defined || (unsorted.reason ?? '').includes('至少需要 3'),
+    unsorted.reason,
+  )
   const allEqual = intervalSurvival(timesFromGaps([60 * S, 60 * S, 60 * S, 60 * S]))
   check('全等间隔 ⇒ 不可判定（形状不可辨识）', !allEqual.defined && (allEqual.reason ?? '').includes('方差 0'), allEqual.reason)
   check('全等间隔时仍如实给出指数估计（信息不浪费）', allEqual.inputs?.meanMs === 60 * S, allEqual.inputs)
@@ -471,6 +486,103 @@ function main(): void {
   check('马尔可夫：白名单外迁移被丢弃', mkJunk.samples === 1 && mkJunk.label.includes('白名单外'), mkJunk.label)
   // 快照接线：transition 投影直接进快照（markovAnalysis 由 snapshot.ts 消费，
   // 这里只需确认同一实现被引用，防止模块被 tree-shake 出测试面）。
+
+  // ─────────────── RQ3 预防性健康指标（07 §4.3 只预警不行动）───────────────
+  // 断言里钉的全部是 scratch 实跑出来的真实值，不是「看起来对」的猜测。
+  // 重点守三件事：样本不足给 null 不给 0、σ̂=0 不预警、纯函数无副作用。
+  console.log('\n== RQ3 加载耗时 EWMA 控制带 ==')
+  const loadEmpty = loadTimeEwma([])
+  check('加载：空样本 ⇒ 不可判定且 value 是 null（不是 0）', !loadEmpty.defined && loadEmpty.value === null)
+  check('加载：空样本 ⇒ reason 说明缺多少样本', (loadEmpty.reason ?? '').includes('至少需要 5 次'))
+  const loadFour = loadTimeEwma([1000, 1000, 1000, 1000])
+  check('加载：4 个样本低于门槛 5 ⇒ 不可判定', !loadFour.defined && loadFour.value === null)
+  // 门槛与 EWMA 记忆长度 1/λ 绑定：半衰期 10 ⇒ λ=0.067 ⇒ 门槛抬到 ⌈1/λ⌉=15。
+  const loadLongHalfLife = loadTimeEwma([1000, 1000, 1010, 990, 1005, 995], 10)
+  check('加载：半衰期 10 ⇒ 门槛升到 15，6 个样本仍不可判定', !loadLongHalfLife.defined && loadLongHalfLife.value === null)
+  check('加载：门槛随半衰期抬高的理由写进 reason', (loadLongHalfLife.reason ?? '').includes('15'))
+  const loadZero = loadTimeEwma([0, 0, 0, 0, 0, 0])
+  check('加载：全 0 耗时 ⇒ 不可判定（不是「加载很快」）', !loadZero.defined && loadZero.value === null)
+  // 完全规则（σ̂=0）：带宽为 0 是真值，但零宽带没有区分度 ⇒ 一律不预警。
+  const loadConstant = loadTimeEwma([1000, 1000, 1000, 1000, 1000, 1000, 1000])
+  check('加载：完全规则 ⇒ 仍可判定（σ̂=0 是真值不是缺数据）', loadConstant.defined && loadConstant.value !== null)
+  check('加载：完全规则 ⇒ 零带宽（UCL=LCL=中心线）', loadConstant.value !== null && loadConstant.value.upperMs === loadConstant.value.lowerMs && loadConstant.value.upperMs === 1000, loadConstant.value)
+  check('加载：完全规则 ⇒ 不预警（零宽带无区分度）', loadConstant.value !== null && loadConstant.value.alert === false)
+  check('加载：完全规则 ⇒ estimator 记为 none（白盒交代 σ̂ 来历）', loadConstant.value?.sigmaEstimator === 'none', loadConstant.value?.sigmaEstimator)
+  const loadSteadyTimes = [1000, 1010, 990, 1005, 995, 1002, 998, 1001]
+  const loadSteady = loadTimeEwma(loadSteadyTimes)
+  check('加载：稳定序列 ⇒ 可判定', loadSteady.defined && loadSteady.value !== null)
+  check('加载：稳定序列 ⇒ 不预警', loadSteady.value !== null && loadSteady.value.alert === false)
+  check('加载：稳定序列 ⇒ 去暖机偏置的 EWMA 水平为 1000', loadSteady.value?.levelMs === 1000, loadSteady.value?.levelMs)
+  check('加载：稳定序列 ⇒ 中心线是中位数 1001（不是均值）', loadSteady.value?.baselineMs === 1001, loadSteady.value?.baselineMs)
+  check('加载：稳定序列 ⇒ σ̂=5.1891 来自 MAD', loadSteady.value?.sigmaMs === 5.1891, loadSteady.value?.sigmaMs)
+  check('加载：稳定序列 ⇒ estimator 记为 mad', loadSteady.value?.sigmaEstimator === 'mad', loadSteady.value?.sigmaEstimator)
+  check('加载：稳定序列 ⇒ 带因子 √(λ/(2−λ))=0.3391', loadSteady.value?.bandFactor === 0.3391, loadSteady.value?.bandFactor)
+  check('加载：稳定序列 ⇒ UCL=1006 / LCL=995', loadSteady.value?.upperMs === 1006 && loadSteady.value?.lowerMs === 995, loadSteady.value)
+  // 带宽关系式：UCL − μ̂ = L·σ̂·√(λ/(2−λ))，L=3。这条断言防的正是「直接拿 σ̂
+  // 当带宽」的错误 —— 那会把带放宽约 3 倍，任何漂移都永远报不出来。
+  check(
+    '加载：带宽严格等于 3·σ̂·√(λ/(2−λ))（不是错误的 3σ̂）',
+    loadSteady.value !== null && Math.abs(loadSteady.value.upperMs - loadSteady.value.baselineMs - 3 * loadSteady.value.sigmaMs * loadSteady.value.bandFactor) < 1,
+    loadSteady.value,
+  )
+  const loadSlowTimes = [...loadSteadyTimes, 1400, 1800, 2200, 2600]
+  const loadSlow = loadTimeEwma(loadSlowTimes)
+  check('加载：持续变慢 ⇒ 预警', loadSlow.value !== null && loadSlow.value.alert === true, loadSlow.value)
+  check('加载：持续变慢 ⇒ EWMA 1717ms 越过 UCL 1015ms', loadSlow.value?.levelMs === 1717 && loadSlow.value?.upperMs === 1015, loadSlow.value)
+  check('加载：持续变慢 ⇒ label 带「预警」与白盒数值', (loadSlow.label ?? '').includes('预警') && (loadSlow.label ?? '').includes('UCL'))
+  // 非有限/负值污染必须被剔除，否则 median/MAD 会被 NaN 污染成 NaN。
+  const loadDirty = loadTimeEwma([1000, -5, Number.NaN, 1010, 990, 1005, 995, 1002])
+  check('加载：负值与 NaN 被剔除（剩 6 个样本）', loadDirty.sampleSize === 6, loadDirty.sampleSize)
+  // σ̂ 估计器的两级后备：MAD 在 ≥50% 样本同值时退化为 0，不能静默放行。
+  const loadIqr = loadTimeEwma([1000, 1000, 1000, 1000, 1100, 900, 1050])
+  check('加载：MAD 退化（≥50% 同值）⇒ 自动降级到 IQR', loadIqr.value?.sigmaEstimator === 'iqr' && loadIqr.value?.sigmaMs === 18.5322, loadIqr.value)
+  const loadMeanAbsDev = loadTimeEwma([1000, 1000, 1000, 1000, 1000, 1000, 5000])
+  check('加载：IQR 也退化（≥75% 同值）⇒ 降级到平均绝对偏差', loadMeanAbsDev.value?.sigmaEstimator === 'meanAbsDev', loadMeanAbsDev.value?.sigmaEstimator)
+  check('加载：降级后仍能报出阶跃变慢（不是结构性失明）', loadMeanAbsDev.value?.alert === true, loadMeanAbsDev.value)
+  // 只预警不行动 ⇒ 纯函数：同输入两次调用逐字节相同（无隐藏状态/无 IO）。
+  check(
+    '加载：零副作用（同输入两次调用逐字节相同）',
+    JSON.stringify(loadTimeEwma(loadSlowTimes)) === JSON.stringify(loadTimeEwma(loadSlowTimes)),
+  )
+
+  console.log('\n== RQ3 配置变更频率 CUSUM ==')
+  const cfgEmpty = configChangeCusum([])
+  check('配置：空样本 ⇒ 不可判定且 value 是 null（不是 0）', !cfgEmpty.defined && cfgEmpty.value === null)
+  const cfgThree = configChangeCusum([BASE, BASE + 60_000, BASE + 120_000, BASE + 180_000])
+  check('配置：3 个间隔低于门槛 5 ⇒ 不可判定', !cfgThree.defined && cfgThree.value === null)
+  check('配置：门槛理由写明「5 个间隔（6 次变更）」', (cfgThree.reason ?? '').includes('6 次变更'))
+  // 完全规则 ⇒ σ̂=0 ⇒ 标准化增量无尺度，绝不用除零换一个「很敏感」的读数。
+  const cfgRegular = configChangeCusum([0, 60_000, 120_000, 180_000, 240_000, 300_000, 360_000].map((t) => BASE + t))
+  check('配置：间隔完全规则（σ̂=0）⇒ 不可判定（不做除零）', !cfgRegular.defined && cfgRegular.value === null)
+  const cfgJitter = configChangeCusum([0, 58_000, 121_000, 179_000, 242_000, 298_000, 361_000, 419_000].map((t) => BASE + t))
+  check('配置：受控抖动 ⇒ 可判定', cfgJitter.defined && cfgJitter.value !== null)
+  check('配置：受控抖动 ⇒ 不预警', cfgJitter.value?.alert === false && cfgJitter.value?.breachIndex === null, cfgJitter.value)
+  check('配置：受控抖动 ⇒ 统计量被钳在 0（变稀不累积证据）', cfgJitter.value?.statistic === 0, cfgJitter.value?.statistic)
+  check('配置：σ̂ 取移动极差（避免被待检漂移自己污染）', cfgJitter.value?.sigmaEstimator === 'movingRange', cfgJitter.value?.sigmaEstimator)
+  check('配置：k=0.5 / h=5 随读数一起返回（白盒可审计）', cfgJitter.value?.reference === 0.5 && cfgJitter.value?.threshold === 5, cfgJitter.value)
+  // 失控：60s 稳定后连改 1s —— 这正是 07 H3.2 要抓的形状。
+  const cfgBurst = configChangeCusum([0, 60_000, 120_000, 180_000, 240_000, 300_000, 301_000, 302_000, 303_000, 304_000].map((t) => BASE + t))
+  check('配置：变更变密 ⇒ 预警', cfgBurst.value?.alert === true, cfgBurst.value)
+  check('配置：变更变密 ⇒ S=34.096 越过 h=5', cfgBurst.value?.statistic === 34.096 && cfgBurst.value?.threshold === 5, cfgBurst.value)
+  check('配置：变更变密 ⇒ 变点落在第 6 个间隔（0 基 5）', cfgBurst.value?.breachIndex === 5, cfgBurst.value?.breachIndex)
+  check('配置：变更变密 ⇒ label 带基线与 σ̂（可判读）', (cfgBurst.label ?? '').includes('预警') && (cfgBurst.label ?? '').includes('基线'))
+  // 尺度自污染的回归护栏：IQR/MAD 尺度下这个 20 倍阶跃只算出 S=3.4 < h=5，
+  // 检测器对自己要抓的形状结构性失明。移动极差尺度下 S=21.8562 正常越界。
+  const cfgBurst2 = configChangeCusum([0, 60_000, 120_000, 180_000, 240_000, 300_000, 302_000, 303_500, 304_000].map((t) => BASE + t))
+  check('配置：阶跃仍被检出（尺度不被漂移污染）S=21.8562', cfgBurst2.value?.statistic === 21.8562 && cfgBurst2.value?.alert === true, cfgBurst2.value)
+  // 同刻变更（install → enable 连发）不携带频率信息：丢弃而非记 0。
+  const cfgSameInstant = configChangeCusum([0, 60_000, 120_000, 180_000, 240_000, 300_000, 300_000, 300_000].map((t) => BASE + t))
+  check('配置：同刻变更被丢弃（8 次变更 ⇒ 5 个有效间隔）', cfgSameInstant.sampleSize === 5, cfgSameInstant.sampleSize)
+  // 乱序输入：内部先排序再算间隔。若不排序，负间隔会被 `gap > 0` 全部过滤，
+  // 结果不是「算错」而是**静默变成没有数据** —— 那种失败最难看出来。
+  const cfgBurstTimes = [0, 60_000, 120_000, 180_000, 240_000, 300_000, 301_000, 302_000, 303_000, 304_000].map((t) => BASE + t)
+  const cfgReversed = configChangeCusum([...cfgBurstTimes].reverse())
+  check('配置：乱序输入 → 内部排序后仍可判定（不静默降级为无数据）', cfgReversed.defined && cfgReversed.value !== null, cfgReversed.reason)
+  check('配置：乱序与升序给出逐字节相同的读数', JSON.stringify(cfgReversed) === JSON.stringify(configChangeCusum(cfgBurstTimes)))
+  check(
+    '配置：零副作用（同输入两次调用逐字节相同）',
+    JSON.stringify(configChangeCusum(cfgBurstTimes)) === JSON.stringify(configChangeCusum(cfgBurstTimes)),
+  )
 
   console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}\n`)
   process.exit(failures === 0 ? 0 : 1)

@@ -1,4 +1,4 @@
-# 对外面 API（dsh-recency-guard v0.13.0）
+# 对外面 API（dsh-recency-guard v0.14.0）
 
 ## 0.0f v0.13 契约变更一句话清单
 

@@ -886,3 +886,89 @@ export function archiveEntriesOf(payload: unknown): ArchiveEntry[] {
   if (!Array.isArray(archives)) return []
   return archives.map((entry) => (typeof entry === 'object' && entry !== null ? (entry as ArchiveEntry) : {}))
 }
+
+/**
+ * 误伤校准卡片（v0.14 / M1 / RQ2）。
+ *
+ * 诚实边界：`rate === null` 有两种含义 ——「还没有自动关闭记录」与
+ * 「有记录但样本 < 5」。用 `autoDisables` 区分二者，绝不把任一情形
+ * 画成「误伤率 0%」（那是把「没数据」谎报成「没问题」）。
+ */
+export function CalibrationBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+  const { rate, decision, explanation } = snapshot.calibration
+  const sampleShort = rate.value === null
+  return (
+    <>
+      <p className="rg-hint">{explanation}</p>
+      <div className="rg-kv">
+        <span className="rg-kv-key">{t('calibration.threshold')}</span>
+        <span className="rg-kv-value">
+          {decision.base} → <strong>{decision.required}</strong>
+          {decision.delta > 0 && <span className="rg-badge rg-badge-warn">+{decision.delta}</span>}
+        </span>
+      </div>
+      <div className="rg-kv">
+        <span className="rg-kv-key">{t('calibration.rate')}</span>
+        <span className="rg-kv-value">
+          {sampleShort ? (
+            <span className="rg-empty-inline">{t('calibration.insufficient')}</span>
+          ) : (
+            <>
+              {(rate.value!.rate * 100).toFixed(1)}%
+              <span className="rg-evidence-meta">
+                {' '}
+                （{rate.value!.falsePositives}/{rate.value!.autoDisables}，95% 区间{' '}
+                {(rate.value!.lower * 100).toFixed(1)}–{(rate.value!.upper * 100).toFixed(1)}%）
+              </span>
+            </>
+          )}
+        </span>
+      </div>
+    </>
+  )
+}
+
+/**
+ * 贝叶斯并行读数卡片（v0.14 / M2 / RQ1）。
+ *
+ * **并行读数纪律**：这里展示的是第二套口径，与「嫌疑排名」卡里的默认
+ * `riskScore` 并列。刻意同时显示两者，让用户看见分歧 ——
+ * 只显示一套会把「模型有分歧」这个重要事实藏起来。
+ */
+export function BayesBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+  const rows = snapshot.bayes
+  if (rows.length === 0) return <p className="rg-empty">{t('bayes.empty')}</p>
+  return (
+    <>
+      <p className="rg-hint">{t('bayes.hint')}</p>
+      <ul className="rg-bayes-list">
+        {rows.map((row) => (
+          <li key={row.bundle} className="rg-bayes-row">
+            <strong className="rg-evidence-bundle">{row.bundle}</strong>
+            {/* 样本稀疏 ⇒ 显示「不可判定」，绝不画一个 0 冒充分数。 */}
+            {row.defined && row.value !== null ? (
+              <>
+                <span className="rg-evidence-risk">
+                  {t('bayes.posterior')} {row.value.mean.toFixed(3)}
+                </span>
+                <span className="rg-evidence-meta">
+                  [{row.value.lower95.toFixed(3)}, {row.value.upper95.toFixed(3)}]
+                </span>
+                <span className="rg-evidence-meta">
+                  n={row.value.samples}（命中 {row.value.hits} / 未命中 {row.value.misses}）
+                </span>
+              </>
+            ) : (
+              <span className="rg-empty-inline">{row.reason !== '' ? row.reason : t('bayes.insufficient')}</span>
+            )}
+            {row.value !== null && (
+              <span className="rg-evidence-meta">
+                {t('bayes.score')} {row.value.score.toFixed(3)}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </>
+  )
+}

@@ -1,4 +1,5 @@
 import type { RecencyEntry } from './recency.js'
+import { calibratedConfirmRounds, type FalsePositiveStats } from './risk-calibration.js'
 
 /**
  * 恢复决策的置信分级与两阶段状态机（v0.9.0，借鉴 compat-guardian）。
@@ -166,7 +167,10 @@ export interface CrashHistoryEntry {
  * @param history 以往崩溃记录（不含本轮），旧 → 新
  * @param currentSuspects 本轮嫌疑名单（ranked 顺序）
  * @param options confirmRounds：概率性证据需要的重复轮数（默认 2）；
- *   crashSeq：本轮的累计崩溃序号（用于兜底升级）；hardEscalateAfter：兜底阈值（默认 3）。
+ *   crashSeq：本轮的累计崩溃序号（用于兜底升级）；hardEscalateAfter：兜底阈值（默认 3）；
+ *   hazardDirection：崩溃间隔的分布形态（v0.13 方向②）；
+ *   falsePositiveStats：误伤反馈样本（v0.14 / RQ2），**可选** —— 不传即
+ *   v0.13.0 行为逐位一致（向后兼容是硬要求）。
  *
  * 判定表：
  * - 唯一嫌疑（本轮名单长度 1）⇒ deterministic，第 1 轮就动手 ——
@@ -177,11 +181,31 @@ export interface CrashHistoryEntry {
  *   强制动手 —— 崩溃循环本身就是「宿主已经起不来」的确定性事实，
  *   概率计数机制一旦失效（实测：启动记录的嫌疑空记录曾把连续数打断），
  *   没有兜底就会永远观察、永远崩溃。宿主可用性优先于误伤最小化。
+ *
+ * ## 阈值的三层叠加顺序（v0.14，不可交换）
+ *
+ * 1. `confirmRounds`（配置基线）→
+ * 2. `hazardAdjustedRounds`（分布形态，v0.13）→
+ * 3. `calibratedConfirmRounds`（误伤反馈，v0.14）
+ *
+ * 为什么形态先、校准后：误伤反馈是对**我们关错这件事**的直接测量，
+ * 它比「间隔分布的间接形状」更接近「该多保守」这个问题的答案。把它放在
+ * 最后，等于让最直接的证据拥有最终发言权；而形态只配做基线之上的一层
+ * 方向性修正。两层都是 ±1 量级、都有上限，叠加后不会失控。
+ *
+ * 校准**只升不降**（见 `risk-calibration.ts` 诚实边界 3）：所以这一层
+ * 永远不会让判定比「形态调节后的结果」更激进，也就不会新增误伤。
  */
 export function assessConfidence(
   history: readonly CrashHistoryEntry[],
   currentSuspects: readonly RecencyEntry[],
-  options: { confirmRounds?: number; crashSeq?: number; hardEscalateAfter?: number; hazardDirection?: HazardLike } = {},
+  options: {
+    confirmRounds?: number
+    crashSeq?: number
+    hardEscalateAfter?: number
+    hazardDirection?: HazardLike
+    falsePositiveStats?: FalsePositiveStats
+  } = {},
 ): ConfidenceVerdict {
   const confirmRounds = Math.max(1, options.confirmRounds ?? 2)
   const names = currentSuspects.map((s) => s.bundle)
@@ -218,12 +242,27 @@ export function assessConfidence(
   //   k < 0.9（危险率递减 ⇒ 崩溃成簇）⇒ 更低阈值（更积极动手）
   //   k > 1.1（危险率递增 ⇒ 比泊松更规则）⇒ 更高阈值（更保守）
   //   其余（≈泊松/无样本）⇒ 不变
-  const adjustedRounds = hazardAdjustedRounds(confirmRounds, options.hazardDirection)
+  const hazardRounds = hazardAdjustedRounds(confirmRounds, options.hazardDirection)
+  // v0.14 / RQ2：误伤反馈校准叠在形态调节**之后**（顺序理由见函数头注）。
+  // 校准只升不降 ⇒ 这一步不会让判定比 v0.13 更激进。
+  // 校准以**形态调节后的值**为基线（不是原始 confirmRounds）：形态已说明
+  // 「这次崩溃是成簇的」，校准只回答「我们关错的次数够不够多到该更保守」，
+  // 两者是正交信息，不该互相覆盖 —— 用 baseline 相加会丢掉形态的方向。
+  const calibration =
+    options.falsePositiveStats === undefined ? undefined : calibratedConfirmRounds(hazardRounds, options.falsePositiveStats)
+  const adjustedRounds = calibration === undefined ? hazardRounds : calibration.required
   const act = streak >= adjustedRounds || escalated
   // 文案只描述「阈值被调了」，不重复解释成因（起因写在 hazardAdjustedRounds 的头注里）：
   // 命令窗口的空间有限，多一句解释就会挤掉下一行事实。
+  // v0.14：误伤校准带**自己的**人话理由（07 §3.3 不做黑盒），所以它需要
+  // 单独一句 —— 但不能写成整段：面板读 `explanation`，命令行读 label 的短括号。
   const hazardNote =
-    adjustedRounds === confirmRounds ? '' : `（间隔分布形态使阈值调整为 ${adjustedRounds} 轮）`
+    hazardRounds === confirmRounds ? '' : `（间隔分布形态使阈值调整为 ${hazardRounds} 轮）`
+  const calibrationNote =
+    calibration === undefined || calibration.delta === 0
+      ? ''
+      : `（误伤反馈使阈值 ${hazardRounds} 调整为 ${calibration.required} 轮）`
+  const notes = `${hazardNote}${calibrationNote}`
   return {
     act,
     evidence: 'probabilistic',
@@ -231,9 +270,9 @@ export function assessConfidence(
     required: adjustedRounds,
     label: act
       ? streak >= adjustedRounds
-        ? `头号嫌疑 ${head} 连续 ${streak} 轮复现（≥ ${adjustedRounds}）：达到行动阈值${hazardNote}`
+        ? `头号嫌疑 ${head} 连续 ${streak} 轮复现（≥ ${adjustedRounds}）：达到行动阈值${notes}`
         : `连续 ${options.crashSeq} 次崩溃仍未恢复：兜底升级为行动（安全网）`
-      : `头号嫌疑 ${head} 复现 ${streak}/${adjustedRounds} 轮：观察中，本轮只记录不关闭${hazardNote}`,
+      : `头号嫌疑 ${head} 复现 ${streak}/${adjustedRounds} 轮：观察中，本轮只记录不关闭${notes}`,
   }
 }
 

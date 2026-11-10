@@ -58,8 +58,55 @@ export interface StatusInput {
   decisionFile: string
   decisionEvidence: DecisionEvidenceView
   cooccurrence: CooccurrenceView
+  /**
+   * 贝叶斯并行读数（v0.14 / M2）。
+   *
+   * 为什么命令窗口也要给：排障现场常在命令窗口，若只有面板能看到
+   * 第二套读数，用户会以为系统只有一张黑盒结论（07 §2.3 要求「两套并列」）。
+   */
+  bayes: readonly BayesView[]
+  /**
+   * 误伤校准读数（v0.14 / M1）。
+   *
+   * `null` = 该分区没有自动关闭记录（不是「误伤率 0」）。
+   */
+  calibration: CalibrationView | null
   lifecycle: LifecycleView
   configEditorAvailable: boolean
+}
+
+/** 单个插件的贝叶斯读数投影（命令窗口形态）。 */
+export interface BayesView {
+  bundle: string
+  /** 样本不足时为 false —— 命令窗口据此显示「不可判定」而非一个数字。 */
+  defined: boolean
+  /** 可判定时的人类可读摘要，否则为不可判定原因。 */
+  label: string
+  /** 贝叶斯重排分（仅可判定时有值）。 */
+  score: number | null
+  /** 原 riskScore（并行保留，供用户对照两套读数）。 */
+  riskScore: number | null
+  /** 后验均值与 95% 区间（仅可判定时）。 */
+  mean: number | null
+  lower95: number | null
+  upper95: number | null
+}
+
+/** 误伤校准投影（命令窗口形态）。 */
+export interface CalibrationView {
+  /** 误伤率读数（`null` = 样本不足，不可判定）。 */
+  rate: number | null
+  /** 分母：自动关闭次数。 */
+  autoDisables: number
+  /** 分子：用户主动放行次数。 */
+  falsePositives: number
+  /** 系统自动恢复次数（不算误伤，但要展示以解释差异）。 */
+  systemRestored: number
+  /** 校准前 / 后的确认轮数。 */
+  base: number
+  required: number
+  /** 人话解释（为什么调整）。 */
+  explanation: string
 }
 
 /**
@@ -96,6 +143,8 @@ export function buildStatusOutput(input: StatusInput): Record<string, unknown> {
     experimentalSuspects: input.experimentalSuspects,
     decisionEvidence: input.decisionEvidence,
     cooccurrence: input.cooccurrence,
+    bayes: input.bayes,
+    calibration: input.calibration,
     lifecycle: {
       stage: lifecycle.stage,
       stabilityScore: lifecycle.stabilityScore,
