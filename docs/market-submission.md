@@ -15,8 +15,8 @@ url: https://github.com/xuanyuanchumo/dsh-recency-guard
 name: xuanyuanchumo/dsh-recency-guard
 category: security
 description:
-  en: "Crash-recovery guard for DeepSeek Harness: records install and update recency, backs up plugin config, disables the most recently updated suspects before the next boot after a crash, and restores stable plugins afterwards. Two crash-detection channels cover kills and power loss that never run exit handlers. Ships a management panel with quantified observability, an interactive capability graph, per-project partition isolation, archive-and-reset on the latest facts, and an offline rescue CLI."
-  zh: "DeepSeek Harness 的插件崩溃恢复守护：记录第三方与实验性插件的安装更新时序并备份配置，崩溃后在下一次启动前拦下最近更新的嫌疑插件，稳定后自动恢复。两条崩溃检测通道覆盖强杀与断电这类不会运行退出处理器的情形。带量化可观测性管理面板、可交互能力图谱、按项目分区隔离、按最新事实归档重置与离线救援 CLI。"
+  en: "Crash-recovery guard for DeepSeek Harness: records install and update recency, backs up plugin config, disables the most recently updated suspects before the next boot after a crash, and restores stable plugins afterwards. Two crash-detection channels cover kills and power loss that never run exit handlers. Ships a management panel with quantified observability (decision-factor breakdown, co-occurrence verification, structural graph insights), an interactive capability graph, per-project partition isolation, archive-and-reset on the latest facts, and an offline rescue CLI. Optional peers are lazily resolved so an incomplete host environment can never make the plugin fail to load."
+  zh: "DeepSeek Harness 的插件崩溃恢复守护：记录第三方与实验性插件的安装更新时序并备份配置，崩溃后在下一次启动前拦下最近更新的嫌疑插件，稳定后自动恢复。两条崩溃检测通道覆盖强杀与断电这类不会运行退出处理器的情形。带量化可观测性管理面板（决策因子分解、共现验证、图谱结构洞察）、可交互能力图谱、按项目分区隔离、按最新事实归档重置与离线救援 CLI。可选 peer 惰性解析，宿主环境不完整也不会导致插件加载失败。"
 icon: https://raw.githubusercontent.com/xuanyuanchumo/dsh-recency-guard/main/assets/icon-256.png
 ```
 
@@ -34,7 +34,7 @@ icon: https://raw.githubusercontent.com/xuanyuanchumo/dsh-recency-guard/main/ass
 - [x] `package.json` 声明 `dsh.bundle.patch`（`./cordis.patch.yml`）—— **被拒首因**已避开
       （只声明 `dsh.client` 不可安装；本仓库两者都有）。
 - [x] 仓库根存在 `cordis.patch.yml`，且内含 `insert: [{ id, name }]` 声明。
-- [x] 真实可用代码：22 个测试文件分层全绿（Core 8 / Host 3 / Client 10 / Contract 1）。
+- [x] 真实可用代码：34 个测试文件分层全绿（Core 12 / Host 7 / Client 12 / Contract 3）。
 - [x] 仓库满 1 天（创建于 2026-11-07T07:44Z；CI 自动检查 repo age）。
 - [x] 已加 `dsh-plugin` topic（另加 deepseek-harness / crash-recovery / plugin-guard）——
       经 GitHub API 复核：`["crash-recovery","deepseek-harness","dsh-plugin","plugin-guard"]`。
