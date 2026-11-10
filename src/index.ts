@@ -27,6 +27,7 @@ import { installExitSentinel, readSentinel, clearSentinel } from './sentinel.js'
 import { assessAbnormalExit, abnormalRecoveryVerdict, holdReason } from './abnormal-boot.js'
 import { restoreDisabledExceptPrime, reenableOne, type RecoveryDeps } from './recovery-actions.js'
 import { observeOfficialExperimental } from './official-observe.js'
+import { appendSample, sampleFromCrash, verifyCooccurrence, mayWeightByCooccurrence } from './cooccurrence.js'
 import { watchPluginChanges } from './event-watch.js'
 import { assessConfidence, environmentChanged, reconcilePrepared, shouldRestoreAfterBoot, type CrashHistoryEntry } from './recovery-policy.js'
 import { StageMachine, type LifecycleStepName } from './lifecycle.js'
@@ -608,6 +609,35 @@ class Guard {
   // ---------- bundle facts ----------
 
   /**
+   * 采集一条共现样本（v0.13 方向④）—— 同步，崩溃路径专用。
+   *
+   * 「官方实验插件是否活跃」取自**观测快照**（`official-observe.ts` 每次启动/
+   * 事件后写入的那份），不是重新扫描 —— 崩溃路径上不能做全量扫描。
+   *
+   * 全程 best-effort：任何一步失败都只留痕不抛，共现采集不能拖垮崩溃决策。
+   */
+  private recordCooccurrenceSync(ranked: readonly RecencyEntry[], disabled: readonly string[]): void {
+    try {
+      const observed = this.store.readObservationSnapshotSync('official-experimental')
+      const officialActive = [...observed.entries()].filter(([, info]) => info.enabled).map(([name]) => name)
+      const store = this.store.readCooccurrenceSync()
+      const next = appendSample(
+        { schemaVersion: 1, samples: store.samples as never[] },
+        sampleFromCrash({
+          at: new Date().toISOString(),
+          officialActive,
+          suspects: ranked.map((r) => r.bundle),
+          disabled,
+          observations: [],
+        }),
+      )
+      this.store.writeCooccurrenceSync(next as never)
+    } catch {
+      // 共现采集是观测设施：失败不记、不抛，绝不影响崩溃决策与守护行。
+    }
+  }
+
+  /**
    * 崩溃间隔的分布形态（v0.13 方向②）—— 同步版，供崩溃路径的置信判定使用。
    *
    * 为什么必须同步：`publishDecisionOnCrash` 跑在 process exit 处理器里，
@@ -934,6 +964,11 @@ class Guard {
         exitCode,
         suspects: targets.map((t) => t.bundle),
       })
+      // 共现采集（v0.13 方向④）：**只采集不改判定**。
+      // 研究文档 09 §2.4 判定方向④的数据基础不存在且共现≠因果，所以这里
+      // 只记录「崩溃当时哪些官方实验插件活跃、哪些非官方插件在场、关了谁」，
+      // 供 `verifyCooccurrence` 离线验证是否有预测力。加权留到验证达标之后。
+      this.recordCooccurrenceSync(ranked, verdict.act ? targets.map((t) => t.bundle) : [])
       // 两阶段（v0.9.0）：act=false 只写 prepared（嫌疑保留、disable 为空），
       // 守护行拿到空名单 = 全放行 —— 偶发崩溃不该有人被关。
       // act=true 直接 quarantined（动手了），补 prepared 历史到 journal。
@@ -1759,6 +1794,51 @@ class Guard {
     return { hasEvidence, items }
   }
 
+  /**
+   * 共现验证结论（v0.13 方向④）。
+   *
+   * 返回「共现信号是否有预测力」+「能否据此加权」。当前实现的语义是：
+   * **即使验证通过也不自动加权** —— 加权需要额外完成「官方实验插件在崩溃
+   * 窗口内确实变更过」的严格化论证（研究文档 09 §4.3 的调和方式）。
+   */
+  private cooccurrenceView(): {
+    samples: number
+    activeSamples: number
+    inactiveSamples: number
+    activeHitRate: number | null
+    inactiveHitRate: number | null
+    hitRateDelta: number | null
+    label: string
+    mayWeight: { allowed: boolean; reason: string }
+  } {
+    try {
+      const stored = this.store.readCooccurrenceSync()
+      const verdict = verifyCooccurrence({ schemaVersion: 1, samples: stored.samples as never[] })
+      return {
+        samples: verdict.samples,
+        activeSamples: verdict.activeSamples,
+        inactiveSamples: verdict.inactiveSamples,
+        activeHitRate: verdict.activeHitRate.value,
+        inactiveHitRate: verdict.inactiveHitRate.value,
+        hitRateDelta: verdict.hitRateDelta.value,
+        label: verdict.label,
+        mayWeight: mayWeightByCooccurrence(verdict),
+      }
+    } catch {
+      // 观测设施失败 ⇒ 显式不可判定，不伪造「无差异」。
+      return {
+        samples: 0,
+        activeSamples: 0,
+        inactiveSamples: 0,
+        activeHitRate: null,
+        inactiveHitRate: null,
+        hitRateDelta: null,
+        label: '共现样本读取失败，不可判定',
+        mayWeight: { allowed: false, reason: '读取失败' },
+      }
+    }
+  }
+
   async status(): Promise<unknown> {
     const state = await this.store.readState()
     const ranked = await this.rankedSuspects()
@@ -1793,6 +1873,9 @@ class Guard {
       // 旧版决策文件没有 evidence ⇒ 返回空数组 + hasEvidence=false，
       // 命令窗口显示「未记录因子」而不是一排 0（0 会被读成「零风险」）。
       decisionEvidence: this.decisionEvidenceView(),
+      // 共现验证（v0.13 方向④）：只报"能不能加权"，不报加权值。
+      // 这是「先验证假设再行动」纪律的可观测落点。
+      cooccurrence: this.cooccurrenceView(),
       // 生命周期步骤流：不只报「现在什么状态」，还报「做过哪些步、哪步失败过」。
       lifecycle: {
         stage: lifecycle.stage,
