@@ -139,8 +139,8 @@
  *    的调整幅度压在有限轮数内。
  */
 
-import type { JournalRecord } from './store.js'
-import { definedMetric, round4, sampleConfidence, undefinedMetric, type Metric } from './observability.js'
+import type { JournalRecord } from '../data/store.js'
+import { definedMetric, round4, sampleConfidence, undefinedMetric, type Metric } from '../observe/observability.js'
 
 /**
  * 误伤率可判定的最小自动关闭样本量。

@@ -18,13 +18,13 @@
  * 观测设施不能拖垮崩溃路径，也不能让面板因为一条坏数据而整块空白。
  */
 
-import type { RecencyEntry } from './recency.js'
+import type { RecencyEntry } from '../risk/recency.js'
 import type { DecisionSuspect } from './decision.js'
-import { appendSample, mayWeightByCooccurrence, sampleFromCrash, verifyCooccurrence } from './cooccurrence.js'
+import { appendSample, mayWeightByCooccurrence, sampleFromCrash, verifyCooccurrence } from '../observe/cooccurrence.js'
 import { decisionSuspects } from './decision-evidence.js'
 import type { CrashHistoryEntry } from './recovery-policy.js'
-import type { JournalRecord } from './store.js'
-import { intervalSurvival } from './survival.js'
+import type { JournalRecord } from '../data/store.js'
+import { intervalSurvival } from '../observe/survival.js'
 
 /** 崩溃间隔形态的判定输入（与 `recovery-policy.HazardLike` 同形）。 */
 export interface HazardShape {

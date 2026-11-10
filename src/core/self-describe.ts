@@ -64,20 +64,27 @@ export interface SelfPackage {
  * 为什么不用 optionalRequire('.../package.json')：包名自引用在 pnpm 的
  * 符号链接布局下可能解析到 workspace 根的 package.json —— 用
  * `require.resolve` 拿到的是安装位置，而版本事实应该来自**自己**的清单。
- * dist/index.js 与 package.json 同目录树（files 里都带 dist/），一层
- * `..` 即到包根。读不到时返回空对象（版本/链接都 null，面板诚实降级）。
+ *
+ * ## 为什么不能固定写 `'../package.json'`（v0.15 功能域重构后修复）
+ *
+ * 那个相对路径隐含一个假设：**本文件位于包根下一层**。
+ * - 产物形态 `dist/index.js` ⇒ `dist/..` = 包根 ✓
+ * - 重构前的源码形态 `src/self-describe.ts` ⇒ `src/..` = 包根 ✓
+ * - 重构后的源码形态 `src/core/self-describe.ts` ⇒ `src/core/..` = **src/** ✗
+ *
+ * 第三种形态下 `require.resolve('../package.json')` 直接抛，版本与反馈链接
+ * 全部降级为 null —— 而测试是直跑源码的，于是面板诊断卡在测试里永远空白。
+ * 修法不是再写死一个 `'../../package.json'`（那会让产物形态又坏掉），
+ * 而是**从当前目录向上找，直到找到 name 与本包一致的 package.json**：
+ * 两种形态都对，且不依赖「我在第几层」。
  */
 export function readSelfPackage(): SelfPackage {
   const empty: SelfPackage = { version: null, repositoryUrl: null, issuesUrl: null }
   try {
     const require = createRequire(import.meta.url)
-    // dist/index.js → dist → 包根；src/index.ts（测试直跑）→ src → 包根。
-    const self = require.resolve('../package.json')
-    const parsed = JSON.parse(require('node:fs').readFileSync(self, 'utf8')) as {
-      version?: unknown
-      repository?: { url?: unknown } | unknown
-      bugs?: { url?: unknown } | unknown
-    }
+    const readFileSync = require('node:fs').readFileSync as (path: string, encoding: string) => string
+    const parsed = findSelfManifest(readFileSync)
+    if (parsed === null) return empty
     return {
       version: typeof parsed.version === 'string' ? parsed.version : null,
       repositoryUrl: gitUrlOf(parsed.repository),
@@ -86,6 +93,38 @@ export function readSelfPackage(): SelfPackage {
   } catch {
     return empty
   }
+}
+
+/** 本包的包名 —— 用来在向上查找时确认「找到的是自己，不是别人的清单」。 */
+const SELF_PACKAGE_NAME = 'dsh-recency-guard'
+
+/**
+ * 从当前文件所在目录向上逐级查找**本包**的 package.json。
+ *
+ * 判据是 `name === SELF_PACKAGE_NAME`：只按「有 package.json」查找会在
+ * 单仓（workspace）布局下命中父级仓库的清单，把别人的版本当成自己的。
+ */
+function findSelfManifest(
+  readFileSync: (path: string, encoding: string) => string,
+): { version?: unknown; repository?: { url?: unknown } | unknown; bugs?: { url?: unknown } | unknown } | null {
+  let directory = import.meta.dirname
+  // 上限 6 层：正常包形态最深是 `dist/` 或 `src/<domain>/`，6 层足够且能防止
+  // 异常布局下无限向上（走到盘符根时 dirname 会返回自己，必须靠计数兜底）。
+  for (let depth = 0; depth < 6; depth += 1) {
+    const candidate = `${directory}/package.json`.replace(/\\/g, '/')
+    try {
+      const raw = readFileSync(candidate, 'utf8')
+      const parsed = JSON.parse(raw) as { name?: unknown; version?: unknown; repository?: unknown; bugs?: unknown }
+      if (parsed.name === SELF_PACKAGE_NAME) {
+        return parsed as { version?: unknown; repository?: { url?: unknown } | unknown; bugs?: { url?: unknown } | unknown }
+      }
+    } catch {
+      /* 该层没有 package.json 或不可解析 —— 继续向上 */
+    }
+    const parent = `${directory}/..`
+    directory = parent
+  }
+  return null
 }
 
 /** 从 package.json 的 repository/bugs 字段提取 https 链接（git+ssh 形态归一为 https）。 */

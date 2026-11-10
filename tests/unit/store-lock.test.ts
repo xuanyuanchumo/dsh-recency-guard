@@ -14,7 +14,7 @@
 import { mkdtempSync, rmSync, writeFileSync, utimesSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Store, cleanStaleLocks, isLockTimeout } from '../../src/store.js'
+import { Store, cleanStaleLocks, isLockTimeout } from '../../src/data/store.js'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

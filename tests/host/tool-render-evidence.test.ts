@@ -12,7 +12,7 @@
  * 2. 旧版决策文件（无 evidence）⇒ 显式说「未记录」，**绝不渲成 0**
  * 3. 没有决策文件（字段缺失）⇒ 整段省略，不报错（诚实降级）
  */
-import { formatStatus, renderOutcome } from '../../src/tool-render.js'
+import { formatStatus, renderOutcome } from '../../src/surface/tool-render.js'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

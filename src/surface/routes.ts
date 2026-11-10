@@ -87,7 +87,7 @@ export interface RouteContext {
   logError?: (message: string) => void
 }
 
-import { checkRevision } from './change-guard.js'
+import { checkRevision } from '../core/change-guard.js'
 
 /** 路由前缀。 */
 export const ROUTE_PREFIX = '/recency-guard/api'

@@ -4,9 +4,9 @@ import {
   currentRegistrationSurface,
   verifyCapabilityContract,
   verifySurfaceAlignment,
-} from '../../src/capability-specs.ts'
-import { TOOL_SURFACE, exposedNamesOf } from '../../src/capability.ts'
-import { ROUTE_PREFIX, ROUTE_PATHS, ROUTE_SURFACE } from '../../src/routes.ts'
+} from '../../src/capability/capability-specs.ts'
+import { TOOL_SURFACE, exposedNamesOf } from '../../src/capability/capability.ts'
+import { ROUTE_PREFIX, ROUTE_PATHS, ROUTE_SURFACE } from '../../src/surface/routes.ts'
 import { PANEL_ID, NAMESPACE } from '../../src/client/index.ts'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -61,9 +61,9 @@ function main() {
   const indexSource = readFileSync(join(process.cwd(), 'src', 'index.ts'), 'utf8')
   // 工具注册的**真实位点**（v0.12 抽出）：契约要核对注册处，而不是某个恰好
   // 曾经是注册处的文件。核对目标跟着真值走，门才有意义。
-  const toolRegistrationSource = readFileSync(join(process.cwd(), 'src', 'tool-registration.ts'), 'utf8')
-  const routesSource = readFileSync(join(process.cwd(), 'src', 'routes.ts'), 'utf8')
-  const routesPluginSource = readFileSync(join(process.cwd(), 'src', 'routes-plugin.ts'), 'utf8')
+  const toolRegistrationSource = readFileSync(join(process.cwd(), 'src', 'surface', 'tool-registration.ts'), 'utf8')
+  const routesSource = readFileSync(join(process.cwd(), 'src', 'surface', 'routes.ts'), 'utf8')
+  const routesPluginSource = readFileSync(join(process.cwd(), 'src', 'surface', 'routes-plugin.ts'), 'utf8')
   const injected = [...new Set([...readInjectedServices(indexSource), ...readInjectedServices(routesPluginSource)])].sort()
   const surface = currentRegistrationSurface()
 

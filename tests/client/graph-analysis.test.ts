@@ -16,7 +16,7 @@ import {
   shortestPath,
   structureInsights,
 } from '../../src/client/graph-analysis.ts'
-import type { GraphEdge, GraphNode } from '../../src/graph-data.ts'
+import type { GraphEdge, GraphNode } from '../../src/capability/graph-data.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

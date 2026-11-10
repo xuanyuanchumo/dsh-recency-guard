@@ -1,7 +1,7 @@
 import { useState, type ReactElement } from 'react'
 import { t } from './i18n.ts'
-import type { PanelSnapshot } from '../../src/snapshot.ts'
-import type { GraphData } from '../../src/graph-data.ts'
+import type { PanelSnapshot } from '../../src/surface/snapshot.ts'
+import type { GraphData } from '../../src/capability/graph-data.ts'
 import { analyzeStructure, structureInsights, type NodeDegree } from './graph-analysis.ts'
 import { dataFlowStages, diagnosticsRows, markovView, stageLabelOf } from './panel-model.ts'
 

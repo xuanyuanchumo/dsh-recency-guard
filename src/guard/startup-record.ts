@@ -23,8 +23,8 @@
  * 抽出来后 `recordStartupSync()` 在 index.ts 里只剩一次委托调用。
  */
 
-import { bundleVersionsSync, type Store } from './store.js'
-import { diffVersions } from './recency.js'
+import { bundleVersionsSync, type Store } from '../data/store.js'
+import { diffVersions } from '../risk/recency.js'
 import { installGuardedRows } from './guarded-rows.js'
 import { readSentinel } from './sentinel.js'
 

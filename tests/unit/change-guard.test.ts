@@ -7,7 +7,7 @@
  * 2. checkRevision 只有三种结局（相符 / 过期 / 未带），不存在「带了但没核对」；
  * 3. 列表编码边界（含分隔符插件名）不能被折叠成同一枚 revision。
  */
-import { checkRevision, computeRevision, auditEnvelope, type RevisionFacts } from '../../src/change-guard.ts'
+import { checkRevision, computeRevision, auditEnvelope, type RevisionFacts } from '../../src/core/change-guard.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

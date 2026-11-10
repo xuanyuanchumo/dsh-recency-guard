@@ -6,7 +6,7 @@
  * versioned-backup.test.ts 与 Host 集成覆盖；这里锁的是**分类不变式** ——
  * 哪些包进观测通道、哪些进嫌疑面、哪些两边都不进。判据错了，下游全错。
  */
-import { isOfficial, isOfficialExperimental, isExperimentalName, isSuspectClass } from '../../src/recency.js'
+import { isOfficial, isOfficialExperimental, isExperimentalName, isSuspectClass } from '../../src/risk/recency.js'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

@@ -5,8 +5,8 @@
  * 诚实边界（不可判定不冒充 0、null 链接不渲染成死链）在这里断言最便宜；
  * 组件只是把行数组画出来，行为由 Host 层的快照接线测试覆盖。
  */
-import type { PanelSnapshot } from '../../src/snapshot.ts'
-import { undefinedMetric } from '../../src/observability.ts'
+import type { PanelSnapshot } from '../../src/surface/snapshot.ts'
+import { undefinedMetric } from '../../src/observe/observability.ts'
 import { dataFlowStages, diagnosticsRows, markovView, metricRows } from '../panel-model-export.ts'
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

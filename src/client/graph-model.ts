@@ -18,8 +18,8 @@
  * 本文件只认数字与字符串：不 import React，不碰 DOM，因此能在无浏览器环境
  * 逐条断言（见 tests/client/graph-model.test.ts）。
  */
-import type { GraphEdge, GraphNode, GraphNodeKind } from '../../src/graph-data.ts'
-import { LAYOUT } from '../../src/graph-data.ts'
+import type { GraphEdge, GraphNode, GraphNodeKind } from '../../src/capability/graph-data.ts'
+import { LAYOUT } from '../../src/capability/graph-data.ts'
 import {
   clipToRect,
   curveControl,

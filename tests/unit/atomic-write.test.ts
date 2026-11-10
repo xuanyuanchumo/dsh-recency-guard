@@ -23,9 +23,9 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { writeFileAtomicSync } from '../../src/atomic-sync.js'
-import { writeDecision, readDecision } from '../../src/decision.js'
-import { readPartitionIndex, writePartitionIndex, emptyPartitionIndex, registerPartition } from '../../src/isolation.js'
+import { writeFileAtomicSync } from '../../src/core/atomic-sync.js'
+import { writeDecision, readDecision } from '../../src/guard/decision.js'
+import { readPartitionIndex, writePartitionIndex, emptyPartitionIndex, registerPartition } from '../../src/core/isolation.js'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

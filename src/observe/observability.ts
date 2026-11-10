@@ -44,7 +44,7 @@
  *   插件规模真的上千时，再换成「大小为 k 的最小堆」，届时复杂度是 O(n log k)。
  */
 
-import { crashTrend, riskScore, type RiskInput, type TrendResult } from './lifecycle.js'
+import { crashTrend, riskScore, type RiskInput, type TrendResult } from '../core/lifecycle.js'
 import { intervalSurvival, type SurvivalFit } from './survival.js'
 import { controlBand, type ControlBand } from './control-band.js'
 

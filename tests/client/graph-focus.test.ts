@@ -1,4 +1,4 @@
-import type { GraphEdge, GraphNode } from '../../src/graph-data.ts'
+import type { GraphEdge, GraphNode } from '../../src/capability/graph-data.ts'
 import {
   EDGE_DEGREE_SUM_MAX,
   EDGE_DEGREE_SUM_MIN,

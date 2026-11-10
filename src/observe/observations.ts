@@ -1,9 +1,9 @@
-import type { GuardStage, StageTransition } from './lifecycle.js'
-import { STAGE_LABELS } from './graph-data.js'
+import type { GuardStage, StageTransition } from '../core/lifecycle.js'
+import { STAGE_LABELS } from '../capability/graph-data.js'
 import type { Observation } from './observability.js'
 import { tailWindow } from './observability.js'
-import { isExperimentalName, type RecencyEntry } from './recency.js'
-import type { JournalRecord } from './store.js'
+import { isExperimentalName, type RecencyEntry } from '../risk/recency.js'
+import type { JournalRecord } from '../data/store.js'
 
 /**
  * 面板/图谱的**数据来源** —— 从日志与状态派生观测事实。
@@ -304,4 +304,4 @@ function stageTone(stage: GuardStage): FlowEvent['tone'] {
  * 在本模块与 store.ts 各写了一份（技术债），两处漂移就会让「谁算插件」
  * 出现两个答案。保留本名字是因为 guarded-rows.ts 按此名消费。
  */
-export { declaredDependenciesSync as readDeclaredDependencies } from './store.js'
+export { declaredDependenciesSync as readDeclaredDependencies } from '../data/store.js'

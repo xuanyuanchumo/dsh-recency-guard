@@ -1,7 +1,7 @@
 import { useState, type ReactElement, type ReactNode } from 'react'
 import { t } from './i18n.ts'
-import type { GraphData } from '../../src/graph-data.ts'
-import type { PanelSnapshot } from '../../src/snapshot.ts'
+import type { GraphData } from '../../src/capability/graph-data.ts'
+import type { PanelSnapshot } from '../../src/surface/snapshot.ts'
 import {
   agoLabel,
   capabilityRows,

@@ -1,5 +1,5 @@
 import type { CapabilityRecord } from './capability.js'
-import type { GuardStage } from './lifecycle.js'
+import type { GuardStage } from '../core/lifecycle.js'
 
 /**
  * 图谱数据模型 —— 面板里那张可交互图的数据契约。

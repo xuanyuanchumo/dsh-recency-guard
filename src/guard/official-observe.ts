@@ -1,5 +1,5 @@
-import { isOfficialExperimental, type BundleLike } from './recency.js'
-import type { JournalEvent, Store } from './store.js'
+import { isOfficialExperimental, type BundleLike } from '../risk/recency.js'
+import type { JournalEvent, Store } from '../data/store.js'
 
 /**
  * 官方实验性插件观测（v0.8.1）—— 独立模块。

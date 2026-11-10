@@ -20,7 +20,7 @@ import {
   mayWeightByCooccurrence,
   verifyCooccurrence,
   type CooccurrenceSample,
-} from '../../src/cooccurrence.js'
+} from '../../src/observe/cooccurrence.js'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

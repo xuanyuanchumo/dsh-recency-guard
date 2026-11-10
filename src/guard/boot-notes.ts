@@ -20,7 +20,7 @@
  * （index.ts 复杂度 118，预算 100）。
  */
 
-import type { JournalEvent } from './store.js'
+import type { JournalEvent } from '../data/store.js'
 import type { AbnormalExitVerdict } from './abnormal-boot.js'
 
 /**

@@ -20,9 +20,9 @@
  *    绝不把缺失渲染成 0。
  */
 
-import type { GuardState } from './store.js'
-import type { RecencyEntry } from './recency.js'
-import type { CooccurrenceView, DecisionEvidenceView } from './decision-views.js'
+import type { GuardState } from '../data/store.js'
+import type { RecencyEntry } from '../risk/recency.js'
+import type { CooccurrenceView, DecisionEvidenceView } from '../guard/decision-views.js'
 
 /**
  * 生命周期视图（由 StageMachine 投影而来）。

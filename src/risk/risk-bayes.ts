@@ -63,8 +63,8 @@ import {
   undefinedMetric,
   type Metric,
   type MetricMeta,
-} from './observability.js'
-import { riskFactors, riskScore, type RiskInput } from './lifecycle.js'
+} from '../observe/observability.js'
+import { riskFactors, riskScore, type RiskInput } from '../core/lifecycle.js'
 
 // ─────────────────────────── 常量与策略 ───────────────────────────
 

@@ -11,7 +11,7 @@
  * Node 风格 req/res —— 用桩对象直接调用 handler，断言 writeHead/end
  * 的调用序列。这样测试同时钉住「handler 完全拥有响应」的契约。
  */
-import { registerRoutes, ROUTE_PATHS, type RouteContext, type NodeRequest, type NodeResponse } from '../../src/routes.ts'
+import { registerRoutes, ROUTE_PATHS, type RouteContext, type NodeRequest, type NodeResponse } from '../../src/surface/routes.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

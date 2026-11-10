@@ -19,7 +19,7 @@
  * - 决策文件有/无 evidence 时，表达式对同一 disable 名单给出**相同结果**；
  * - 决策文件损坏/缺字段时表达式 fail-open（放行），绝不拦死。
  */
-import { guardExpression, type Decision } from '../../src/decision.js'
+import { guardExpression, type Decision } from '../../src/guard/decision.js'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

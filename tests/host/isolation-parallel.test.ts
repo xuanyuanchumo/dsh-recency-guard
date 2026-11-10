@@ -43,17 +43,17 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { Store } from '../../src/store.js'
-import { computeRevision, type RevisionFacts } from '../../src/change-guard.js'
+import { Store } from '../../src/data/store.js'
+import { computeRevision, type RevisionFacts } from '../../src/core/change-guard.js'
 import {
   partitionDir,
   projectKey,
   readPartitionIndex,
   registerPartition,
   writePartitionIndex,
-} from '../../src/isolation.js'
-import { decisionPath, pointerPath, readDecision, readPointer, writePointer } from '../../src/decision.js'
-import type { GuardState, JournalEvent, PrebootDecision } from '../../src/store.js'
+} from '../../src/core/isolation.js'
+import { decisionPath, pointerPath, readDecision, readPointer, writePointer } from '../../src/guard/decision.js'
+import type { GuardState, JournalEvent, PrebootDecision } from '../../src/data/store.js'
 
 // ─────────────────────────── 测试骨架 ───────────────────────────
 

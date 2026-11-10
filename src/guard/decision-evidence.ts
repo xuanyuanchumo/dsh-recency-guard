@@ -33,12 +33,12 @@
  * 崩溃路径上 journal 封顶 1000 条、历史封顶几十条，量级可忽略。
  */
 
-import type { RecencyEntry } from './recency.js'
-import type { JournalRecord } from './store.js'
+import type { RecencyEntry } from '../risk/recency.js'
+import type { JournalRecord } from '../data/store.js'
 import type { CrashHistoryEntry } from './recovery-policy.js'
 import type { DecisionSuspect } from './decision.js'
-import { deriveRiskInputs } from './observations.js'
-import { riskFactors, riskScore } from './lifecycle.js'
+import { deriveRiskInputs } from '../observe/observations.js'
+import { riskFactors, riskScore } from '../core/lifecycle.js'
 
 /**
  * 连续作为头号嫌疑的轮数。

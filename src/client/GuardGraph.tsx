@@ -60,7 +60,7 @@ import {
   type MinimapCanvas,
 } from './minimap-model.ts'
 import { EdgeDetails, GraphDetails, GraphMinimap, GraphToolbar, GraphTooltip, edgeKindKey } from './GraphParts.tsx'
-import type { GraphData, GraphNode } from '../../src/graph-data.ts'
+import type { GraphData, GraphNode } from '../../src/capability/graph-data.ts'
 
 /**
  * 小地图画布尺寸（模块级常量，而不是每次渲染新建对象）。

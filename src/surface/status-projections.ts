@@ -14,9 +14,9 @@
  * 直接构造输入验证，不需要起一个 Store。
  */
 import type { BayesView, CalibrationView } from './status-view.js'
-import { bayesMetric, bayesRisk, type BayesRiskInput } from './risk-bayes.js'
-import { calibratedConfirmRounds, calibrationExplanation, falsePositiveRate, falsePositiveSamples } from './risk-calibration.js'
-import type { JournalRecord } from './store.js'
+import { bayesMetric, bayesRisk, type BayesRiskInput } from '../risk/risk-bayes.js'
+import { calibratedConfirmRounds, calibrationExplanation, falsePositiveRate, falsePositiveSamples } from '../risk/risk-calibration.js'
+import type { JournalRecord } from '../data/store.js'
 
 /**
  * 贝叶斯并行读数投影（M2 / RQ1）。

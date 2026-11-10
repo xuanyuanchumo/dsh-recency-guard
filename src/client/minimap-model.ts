@@ -14,8 +14,8 @@
  * 往返误差 < 1e-9。
  */
 
-import type { GraphNode } from '../../src/graph-data.ts'
-import { LAYOUT } from '../../src/graph-data.ts'
+import type { GraphNode } from '../../src/capability/graph-data.ts'
+import { LAYOUT } from '../../src/capability/graph-data.ts'
 import type { Point, Rect } from './viewport.ts'
 
 /**

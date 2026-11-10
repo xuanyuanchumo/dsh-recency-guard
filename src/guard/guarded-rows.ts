@@ -1,9 +1,9 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { readPatchRows, readPatchRowsFromText, guardedRowText, validatePatchText, ensurePatchBackup } from './patch.js'
+import { readPatchRows, readPatchRowsFromText, guardedRowText, validatePatchText, ensurePatchBackup } from '../profile/patch.js'
 import { guardExpression } from './decision.js'
-import { isOfficial, isExperimentalName } from './recency.js'
-import { readDeclaredDependencies } from './observations.js'
+import { isOfficial, isExperimentalName } from '../risk/recency.js'
+import { readDeclaredDependencies } from '../observe/observations.js'
 
 /**
  * 守护行的安装与维护。

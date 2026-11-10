@@ -10,7 +10,7 @@
  * 这样做的理由：渲染层最危险的缺陷不是样式错了，而是**数据为空/不可判定时
  * 画了一个像真值的 0**。而那个判断发生在投影层，可被纯函数测试抓住。
  */
-import type { PanelSnapshot } from '../../src/snapshot.js'
+import type { PanelSnapshot } from '../../src/surface/snapshot.js'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 

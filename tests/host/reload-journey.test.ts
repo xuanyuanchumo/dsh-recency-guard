@@ -22,9 +22,9 @@
  * J5 有哨兵时走既有通道（不重复计数）
  * J6 反复重载 N 次后计数仍为 0（不会累积成假崩溃）
  */
-import { classifyAbnormalExit, assessConfidence } from '../../src/recovery-policy.ts'
-import { assessAbnormalExit } from '../../src/abnormal-boot.ts'
-import type { RecencyEntry } from '../../src/recency.ts'
+import { classifyAbnormalExit, assessConfidence } from '../../src/guard/recovery-policy.ts'
+import { assessAbnormalExit } from '../../src/guard/abnormal-boot.ts'
+import type { RecencyEntry } from '../../src/risk/recency.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

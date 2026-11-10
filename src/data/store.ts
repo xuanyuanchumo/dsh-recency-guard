@@ -2,8 +2,8 @@ import { mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises'
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
-import type { DecisionSuspect } from './decision.js'
-import { readCooccurrenceSync, writeCooccurrenceSync, readObservation, readObservationSync, writeObservation } from './cooccurrence-store.js'
+import type { DecisionSuspect } from '../guard/decision.js'
+import { readCooccurrenceSync, writeCooccurrenceSync, readObservation, readObservationSync, writeObservation } from '../observe/cooccurrence-store.js'
 
 /**
  * Journal / state store for dsh-recency-guard.

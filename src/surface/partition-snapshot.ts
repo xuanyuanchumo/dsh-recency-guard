@@ -1,6 +1,6 @@
-import { readPartitionIndex } from './isolation.js'
-import { Store } from './store.js'
-import { readHostVersion } from './self-describe.js'
+import { readPartitionIndex } from '../core/isolation.js'
+import { Store } from '../data/store.js'
+import { readHostVersion } from '../core/self-describe.js'
 
 /**
  * 跨分区只读快照 —— 数据面 `?partition=` 查询的宿主侧实现（v0.11）。

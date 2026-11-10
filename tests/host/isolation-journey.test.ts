@@ -24,8 +24,8 @@
 import { mkdtempSync, rmSync, existsSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { projectKey, normalizeWorkspace, partitionDir, projectLabel } from '../../src/isolation.ts'
-import { writePointer, pointerPath, readPointer } from '../../src/decision.ts'
+import { projectKey, normalizeWorkspace, partitionDir, projectLabel } from '../../src/core/isolation.ts'
+import { writePointer, pointerPath, readPointer } from '../../src/guard/decision.ts'
 import { readFileSync, writeFileSync } from 'node:fs'
 
 let failures = 0

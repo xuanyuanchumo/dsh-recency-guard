@@ -24,8 +24,8 @@ import {
 import { DataFlowBody, DiagnosticsBody, GraphStructureBar, MarkovBody } from './InsightCards.tsx'
 import { panelForm, partitionView, shortenPath, type PanelForm } from './panel-model.ts'
 import { VIEWPORT_HEIGHT_NARROW, VIEWPORT_HEIGHT_WIDE } from './graph-model.ts'
-import type { PanelSnapshot } from '../../src/snapshot.ts'
-import type { GraphData } from '../../src/graph-data.ts'
+import type { PanelSnapshot } from '../../src/surface/snapshot.ts'
+import type { GraphData } from '../../src/capability/graph-data.ts'
 
 /**
  * 管理面板 —— 守护的全部可见面。

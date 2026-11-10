@@ -6,8 +6,8 @@ import {
   exposedNamesOf,
   type CapabilityRecord,
 } from './capability.js'
-import { ROUTE_SURFACE, ROUTE_PATHS, type RouteSurfaceEntry } from './routes.js'
-import type { GuardStage } from './lifecycle.js'
+import { ROUTE_SURFACE, ROUTE_PATHS, type RouteSurfaceEntry } from '../surface/routes.js'
+import type { GuardStage } from '../core/lifecycle.js'
 
 /**
  * 能力清单 —— 本插件对外承诺的全部能力，及其生产/消费关系。

@@ -24,8 +24,8 @@
  * 展示失败不得把一次成功的工具调用变成失败调用（观测设施不拖垮主流程）。
  */
 
-import type { Metric } from './observability.js'
-import { definedMetric } from './observability.js'
+import type { Metric } from '../observe/observability.js'
+import { definedMetric } from '../observe/observability.js'
 import type { DisplayModel, JsonSafe, ToolOutcome } from './tool-render.js'
 
 /**

@@ -1,6 +1,6 @@
 import { renderOutcome, formatStatus, formatHistory, formatRecover, formatRestore, formatReenable, formatBackups, formatArchive, formatArchives, type ToolOutcome } from './tool-render.js'
-import type { Store, JournalEvent } from './store.js'
-import { auditEnvelope } from './change-guard.js'
+import type { Store, JournalEvent } from '../data/store.js'
+import { auditEnvelope } from '../core/change-guard.js'
 
 /**
  * `recency_guard` 工具的 action 分派（v0.8.1 从 index.ts 抽出）。

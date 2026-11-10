@@ -14,9 +14,9 @@
  *    因此只在一个函数里推导，并由测试钉死。
  */
 
-import type { GuardStage, StageTransition } from '../../src/lifecycle.ts'
-import type { GraphData } from '../../src/graph-data.ts'
-import type { PanelSnapshot } from '../../src/snapshot.ts'
+import type { GuardStage, StageTransition } from '../../src/core/lifecycle.ts'
+import type { GraphData } from '../../src/capability/graph-data.ts'
+import type { PanelSnapshot } from '../../src/surface/snapshot.ts'
 import { t } from './i18n.ts'
 
 /**

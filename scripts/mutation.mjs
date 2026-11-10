@@ -644,6 +644,9 @@ async function main() {
   // 1) 生成变异计划
   const plan = []
   const untested = []
+  // 每个变异子的原始生成点数（不截断、不剔除惰性区间）：零计划 FATAL 时要
+  // 打印它，否则下次排查又得靠猜是「没扫到文件」还是「变异子没生成点」。
+  const generated = Object.fromEntries(MUTATORS.map((mutator) => [mutator.id, 0]))
   for (const source of sources) {
     const tests = testsFor(source, testFiles)
     if (tests.length === 0) {
@@ -652,6 +655,9 @@ async function main() {
     }
     const text = readFileSync(source, 'utf8')
     const inert = inertRanges(text)
+    for (const mutator of MUTATORS) {
+      for (const _ of mutator.generate(text)) generated[mutator.id] += 1
+    }
     // 每个文件每类变异子最多取 2 个，避免单个大文件垄断变异池。
     for (const mutator of MUTATORS) {
       let count = 0
@@ -671,6 +677,31 @@ async function main() {
           mutated: mutant.mutated,
         })
       }
+    }
+  }
+
+  // 零变异体自检：0 个变异体 ≠ 「测试全杀光」。
+  // 全量口径下 sources 非空而 plan 为空，几乎只可能是漏扫（collectSources
+  // 未递归 / testsFor 后缀不匹配）。--filter 命中的空结果是合法过滤结果，
+  // 只告警，不误报成工具故障。
+  const generatedSummary = MUTATORS.map((mutator) => `${mutator.id}=${generated[mutator.id]}`).join('，')
+  if (sources.length === 0) {
+    if (args.filter) {
+      console.error(`[mutation] 警告：--filter "${args.filter}" 没有匹配到任何源码文件（生成点：${generatedSummary}）。`)
+    } else {
+      console.error(`[mutation] FATAL: 在 ${srcDir} 下未扫描到任何源码文件（生成点：${generatedSummary}）`)
+      console.error('[mutation] collectSources 可能漏扫（例如 src 已改为子目录布局而 walk 未递归）。')
+      return 1
+    }
+  } else if (plan.length === 0) {
+    if (args.filter) {
+      console.error(
+        `[mutation] 警告：--filter "${args.filter}" 下发现在 ${sources.length} 个源码文件，但没有可执行变异点（生成点：${generatedSummary}）。这是过滤结果，不是工具故障。`,
+      )
+    } else {
+      console.error(`[mutation] FATAL: 扫描 ${sources.length} 个源码文件，变异计划为空（生成点：${generatedSummary}）`)
+      console.error('[mutation] 这几乎一定是漏扫（collectSources 未递归 / testsFor 后缀不匹配），不能当成 0% 或 100% 报告。')
+      return 1
     }
   }
 

@@ -1,4 +1,4 @@
-import { describeError } from './recency.js'
+import { describeError } from '../risk/recency.js'
 
 /**
  * 事件驱动加速器（v0.8.1）—— 订阅宿主 `plugin-manager/changed`。

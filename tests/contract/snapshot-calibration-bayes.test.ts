@@ -9,12 +9,12 @@
  * 面板上却什么都看不到。所以这里测的不是算法，而是**接线本身**：
  * 给定输入后，快照里必须真的出现那两个字段，且它们与源模块的读数一致。
  */
-import { buildPanelSnapshot, type SnapshotInput } from '../../src/snapshot.js'
-import { bayesRisk } from '../../src/risk-bayes.js'
-import { falsePositiveSamples, falsePositiveRate, calibratedConfirmRounds } from '../../src/risk-calibration.js'
-import { riskScore } from '../../src/lifecycle.js'
-import { emptyPartitionIndex } from '../../src/isolation.js'
-import type { JournalRecord } from '../../src/store.js'
+import { buildPanelSnapshot, type SnapshotInput } from '../../src/surface/snapshot.js'
+import { bayesRisk } from '../../src/risk/risk-bayes.js'
+import { falsePositiveSamples, falsePositiveRate, calibratedConfirmRounds } from '../../src/risk/risk-calibration.js'
+import { riskScore } from '../../src/core/lifecycle.js'
+import { emptyPartitionIndex } from '../../src/core/isolation.js'
+import type { JournalRecord } from '../../src/data/store.js'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

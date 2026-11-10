@@ -1,5 +1,5 @@
-import type { RecencyEntry } from './recency.js'
-import { calibratedConfirmRounds, type FalsePositiveStats } from './risk-calibration.js'
+import type { RecencyEntry } from '../risk/recency.js'
+import { calibratedConfirmRounds, type FalsePositiveStats } from '../risk/risk-calibration.js'
 
 /**
  * 恢复决策的置信分级与两阶段状态机（v0.9.0，借鉴 compat-guardian）。

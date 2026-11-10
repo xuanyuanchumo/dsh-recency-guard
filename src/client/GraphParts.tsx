@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import { useRef } from 'react'
 import { t } from './i18n.ts'
-import type { GraphNode } from '../../src/graph-data.ts'
+import type { GraphNode } from '../../src/capability/graph-data.ts'
 import {
   KIND_ORDER,
   kindKey,

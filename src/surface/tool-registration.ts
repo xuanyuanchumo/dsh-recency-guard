@@ -21,7 +21,7 @@
  * **「注册出来的工具对象上有这三个方法」**，并走宿主同一条数据流。
  */
 
-import { TOOL_SURFACE } from './capability.js'
+import { TOOL_SURFACE } from '../capability/capability.js'
 import { dispatchToolAction, renderToolOutcome, type ToolDispatchDeps } from './tool-dispatch.js'
 import { presentCallOf, presentResultOf, presentationMetaOf } from './tool-presentation.js'
 

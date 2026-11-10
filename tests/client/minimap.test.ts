@@ -1,4 +1,4 @@
-import type { GraphNode } from '../../src/graph-data.ts'
+import type { GraphNode } from '../../src/capability/graph-data.ts'
 import { graphBounds } from '../../src/client/graph-model.ts'
 // v0.12 拆分：小地图几何独立成 minimap-model.ts（graph-model 复杂度热点越预算）。
 // graphBounds 留在 graph-model —— 它是节点集合的度量，不是小地图专属。

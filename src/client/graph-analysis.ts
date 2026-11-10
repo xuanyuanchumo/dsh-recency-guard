@@ -29,7 +29,7 @@
  * - 自环不计入度数：`produces` 自指在能力图里是数据错误，不是强连接。
  */
 
-import type { GraphEdge, GraphNode } from '../../src/graph-data.ts'
+import type { GraphEdge, GraphNode } from '../../src/capability/graph-data.ts'
 
 /** 一个节点的度数摘要。 */
 export interface NodeDegree {

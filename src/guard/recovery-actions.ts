@@ -21,8 +21,8 @@
  *    重算可能把**另一个**插件排到头号，从而把真正的嫌疑重新放回来。
  */
 
-import type { Store } from './store.js'
-import { describeError } from './recency.js'
+import type { Store } from '../data/store.js'
+import { describeError } from '../risk/recency.js'
 
 /** 恢复动作依赖的宿主与守护能力（窄接口：测试不必构造整个 Guard）。 */
 export interface RecoveryDeps {

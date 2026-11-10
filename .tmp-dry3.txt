@@ -1,0 +1,119 @@
+
+变异计划（44 个变异体，来自 44 个源码文件）
+
+  src/core/atomic-sync.ts:48  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 1 个：tests/unit/atomic-write.test.ts
+  src/core/atomic-sync.ts:53  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 1 个：tests/unit/atomic-write.test.ts
+  src/core/isolation.ts:173  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 6 个：tests/contract/snapshot-calibration-bayes.test.ts, tests/host/isolation-journey.test.ts, tests/host/isolation-parallel.test.ts, tests/unit/atomic-write.test.ts, tests/unit/core.test.ts, tests/unit/resilience-fallback.test.ts
+  src/core/isolation.ts:212  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 6 个：tests/contract/snapshot-calibration-bayes.test.ts, tests/host/isolation-journey.test.ts, tests/host/isolation-parallel.test.ts, tests/unit/atomic-write.test.ts, tests/unit/core.test.ts, tests/unit/resilience-fallback.test.ts
+  src/core/lifecycle.ts:256  [comparison] 比较方向 >= → >（i > 0）
+      测试 6 个：tests/contract/snapshot-calibration-bayes.test.ts, tests/unit/core.test.ts, tests/unit/decision-evidence.test.ts, tests/unit/lifecycle-steps.test.ts, tests/unit/risk-bayes.test.ts, tests/unit/risk-frequency.test.ts
+  src/core/lifecycle.ts:435  [comparison] 比较方向 <= → <（changeCount < 1）
+      测试 6 个：tests/contract/snapshot-calibration-bayes.test.ts, tests/unit/core.test.ts, tests/unit/decision-evidence.test.ts, tests/unit/lifecycle-steps.test.ts, tests/unit/risk-bayes.test.ts, tests/unit/risk-frequency.test.ts
+  src/data/archive.ts:105  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 2 个：tests/unit/core.test.ts, tests/unit/resilience-fallback.test.ts
+  src/data/archive.ts:113  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 2 个：tests/unit/core.test.ts, tests/unit/resilience-fallback.test.ts
+  src/data/store.ts:231  [comparison] 比较方向 <= → <（pid < 0）
+      测试 8 个：tests/contract/snapshot-calibration-bayes.test.ts, tests/host/isolation-parallel.test.ts, tests/unit/core.test.ts, tests/unit/decision-evidence.test.ts, tests/unit/risk-calibration.test.ts, tests/unit/status-projections.test.ts, tests/unit/store-lock.test.ts, tests/unit/versioned-backup.test.ts
+  src/data/store.ts:707  [comparison] 比较方向 > → >=（limit >= 0）
+      测试 8 个：tests/contract/snapshot-calibration-bayes.test.ts, tests/host/isolation-parallel.test.ts, tests/unit/core.test.ts, tests/unit/decision-evidence.test.ts, tests/unit/risk-calibration.test.ts, tests/unit/status-projections.test.ts, tests/unit/store-lock.test.ts, tests/unit/versioned-backup.test.ts
+  src/data/store.ts:185  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 8 个：tests/contract/snapshot-calibration-bayes.test.ts, tests/host/isolation-parallel.test.ts, tests/unit/core.test.ts, tests/unit/decision-evidence.test.ts, tests/unit/risk-calibration.test.ts, tests/unit/status-projections.test.ts, tests/unit/store-lock.test.ts, tests/unit/versioned-backup.test.ts
+  src/data/store.ts:210  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 8 个：tests/contract/snapshot-calibration-bayes.test.ts, tests/host/isolation-parallel.test.ts, tests/unit/core.test.ts, tests/unit/decision-evidence.test.ts, tests/unit/risk-calibration.test.ts, tests/unit/status-projections.test.ts, tests/unit/store-lock.test.ts, tests/unit/versioned-backup.test.ts
+  src/guard/decision-evidence.ts:57  [comparison] 比较方向 >= → >（i > 0）
+      测试 1 个：tests/unit/decision-evidence.test.ts
+  src/guard/decision.ts:113  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 6 个：tests/contract/decision-compat.test.ts, tests/host/isolation-journey.test.ts, tests/host/isolation-parallel.test.ts, tests/unit/atomic-write.test.ts, tests/unit/patch-safety.test.ts, tests/unit/resilience-fallback.test.ts
+  src/guard/decision.ts:126  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 6 个：tests/contract/decision-compat.test.ts, tests/host/isolation-journey.test.ts, tests/host/isolation-parallel.test.ts, tests/unit/atomic-write.test.ts, tests/unit/patch-safety.test.ts, tests/unit/resilience-fallback.test.ts
+  src/guard/guarded-rows.ts:74  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 3 个：tests/unit/core.test.ts, tests/unit/patch-safety.test.ts, tests/unit/resilience-fallback.test.ts
+  src/guard/guarded-rows.ts:105  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 3 个：tests/unit/core.test.ts, tests/unit/patch-safety.test.ts, tests/unit/resilience-fallback.test.ts
+  src/guard/recovery-actions.ts:138  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 1 个：tests/unit/core.test.ts
+  src/guard/recovery-actions.ts:144  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 1 个：tests/unit/core.test.ts
+  src/guard/recovery-policy.ts:123  [comparison] 比较方向 < → <=（abnormalSeq <= required）
+      测试 5 个：tests/host/reload-journey.test.ts, tests/unit/decision-evidence.test.ts, tests/unit/hazard-threshold.test.ts, tests/unit/recovery-policy.test.ts, tests/unit/risk-calibration.test.ts
+  src/guard/recovery-policy.ts:230  [comparison] 比较方向 >= → >（i > 0）
+      测试 5 个：tests/host/reload-journey.test.ts, tests/unit/decision-evidence.test.ts, tests/unit/hazard-threshold.test.ts, tests/unit/recovery-policy.test.ts, tests/unit/risk-calibration.test.ts
+  src/guard/sentinel.ts:79  [comparison] 比较方向 <= → <（pid < 0）
+      测试 3 个：tests/fault-injection/fault-injection.test.ts, tests/unit/core.test.ts, tests/unit/resilience-fallback.test.ts
+  src/guard/sentinel.ts:43  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 3 个：tests/fault-injection/fault-injection.test.ts, tests/unit/core.test.ts, tests/unit/resilience-fallback.test.ts
+  src/guard/sentinel.ts:54  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 3 个：tests/fault-injection/fault-injection.test.ts, tests/unit/core.test.ts, tests/unit/resilience-fallback.test.ts
+  src/observe/control-band.ts:38  [comparison] 比较方向 < → <=（i <= crashTimes）
+      测试 1 个：tests/unit/observability-math.test.ts
+  src/observe/control-band.ts:40  [comparison] 比较方向 > → >=（gap >= 0）
+      测试 1 个：tests/unit/observability-math.test.ts
+  src/observe/markov.ts:122  [comparison] 比较方向 > → >=（samples >= 0）
+      测试 1 个：tests/unit/observability-math.test.ts
+  src/observe/markov.ts:166  [comparison] 比较方向 < → <=（i <= a）
+      测试 1 个：tests/unit/observability-math.test.ts
+  src/observe/observability.ts:109  [comparison] 比较方向 <= → <（sampleSize < 0）
+      测试 3 个：tests/client/insight-cards.test.ts, tests/unit/core.test.ts, tests/unit/observability-math.test.ts
+  src/observe/observability.ts:120  [comparison] 比较方向 < → <=（sampleSize <= 1）
+      测试 3 个：tests/client/insight-cards.test.ts, tests/unit/core.test.ts, tests/unit/observability-math.test.ts
+  src/observe/preventive.ts:101  [comparison] 比较方向 > → >=（sigma >= 0）
+      测试 1 个：tests/unit/observability-math.test.ts
+  src/observe/preventive.ts:107  [comparison] 比较方向 > → >=（iqr >= 0）
+      测试 1 个：tests/unit/observability-math.test.ts
+  src/observe/survival.ts:113  [comparison] 比较方向 <= → <（g < 0）
+      测试 1 个：tests/unit/observability-math.test.ts
+  src/observe/survival.ts:116  [comparison] 比较方向 > → >=（zeros >= 0）
+      测试 1 个：tests/unit/observability-math.test.ts
+  src/profile/patch.ts:76  [comparison] 比较方向 < → <=（i <= scanned）
+      测试 2 个：tests/unit/patch-safety.test.ts, tests/unit/resilience-fallback.test.ts
+  src/profile/patch.ts:90  [comparison] 比较方向 < → <=（j <= scanned）
+      测试 2 个：tests/unit/patch-safety.test.ts, tests/unit/resilience-fallback.test.ts
+  src/profile/patch.ts:63  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 2 个：tests/unit/patch-safety.test.ts, tests/unit/resilience-fallback.test.ts
+  src/profile/patch.ts:127  [try-catch] 删除 try/catch 兜底（保留 try 体）
+      测试 2 个：tests/unit/patch-safety.test.ts, tests/unit/resilience-fallback.test.ts
+  src/risk/risk-bayes.ts:146  [comparison] 比较方向 <= → <（x < 0）
+      测试 2 个：tests/contract/snapshot-calibration-bayes.test.ts, tests/unit/risk-bayes.test.ts
+  src/risk/risk-bayes.ts:147  [comparison] 比较方向 < → <=（x <= 1）
+      测试 2 个：tests/contract/snapshot-calibration-bayes.test.ts, tests/unit/risk-bayes.test.ts
+  src/risk/risk-calibration.ts:315  [comparison] 比较方向 < → <=（i <= events）
+      测试 2 个：tests/contract/snapshot-calibration-bayes.test.ts, tests/unit/risk-calibration.test.ts
+  src/risk/risk-calibration.ts:350  [comparison] 比较方向 < → <=（i <= events）
+      测试 2 个：tests/contract/snapshot-calibration-bayes.test.ts, tests/unit/risk-calibration.test.ts
+  src/surface/tool-render.ts:196  [comparison] 比较方向 > → >=（omitted >= 0）
+      测试 3 个：tests/host/display-truncation.test.ts, tests/host/tool-render-evidence.test.ts, tests/unit/core.test.ts
+  src/surface/tool-render.ts:199  [comparison] 比较方向 > → >=（extra >= 0）
+      测试 3 个：tests/host/display-truncation.test.ts, tests/host/tool-render-evidence.test.ts, tests/unit/core.test.ts
+
+无直接测试的文件（15，不进入变异池 —— 这本身是缺口信号）：
+  src/core/self-describe.ts
+  src/guard/boot-notes.ts
+  src/guard/decision-views.ts
+  src/guard/event-watch.ts
+  src/guard/official-observe.ts
+  src/guard/startup-record.ts
+  src/observe/cooccurrence-store.ts
+  src/observe/observations.ts
+  src/profile/patch-yaml.ts
+  src/surface/partition-snapshot.ts
+  src/surface/status-view.ts
+  src/surface/tool-dispatch.ts
+  src/surface/tool-presentation.ts
+  src/surface/tool-registration.ts
+  src/surface/tool-text.ts
+
+等价变异体账本（.cycles/verify/mutation-equivalents.json）：
+  有效条目 0（全量跑时从有意义分母剔除对应存活体）
+  STALE-EQUIVALENT 5
+  被拒条目 0
+    STALE  src/control-band.ts:38 [comparison] 文件不存在：src/control-band.ts
+    STALE  src/observability.ts:120 [comparison] 文件不存在：src/observability.ts
+    STALE  src/store.ts:231 [comparison] 文件不存在：src/store.ts
+    STALE  src/risk-bayes.ts:147 [comparison] 文件不存在：src/risk-bayes.ts
+    STALE  src/survival.ts:116 [comparison] 文件不存在：src/survival.ts
+

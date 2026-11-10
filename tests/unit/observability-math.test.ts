@@ -31,13 +31,13 @@ import {
   trendMetric,
   undefinedMetric,
   type Metric,
-} from '../../src/observability.js'
+} from '../../src/observe/observability.js'
 // RQ3 预防性健康指标：cycle-12 按「一个数学模型一个文件」拆到独立模块
 // （原落点 observability.ts 复杂度被这两个模型顶上 115 的带外）。
-import { configChangeCusum, loadTimeEwma } from '../../src/preventive.js'
-import { controlBand } from '../../src/control-band.js'
-import { intervalSurvival } from '../../src/survival.js'
-import { markovAnalysis } from '../../src/markov.js'
+import { configChangeCusum, loadTimeEwma } from '../../src/observe/preventive.js'
+import { controlBand } from '../../src/observe/control-band.js'
+import { intervalSurvival } from '../../src/observe/survival.js'
+import { markovAnalysis } from '../../src/observe/markov.js'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

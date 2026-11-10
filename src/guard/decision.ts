@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { writeFileAtomicSync } from './atomic-sync.js'
+import { writeFileAtomicSync } from '../core/atomic-sync.js'
 
 /**
  * 预启动决策 —— 决定文件、指针文件与守护行的表达式。

@@ -2,19 +2,19 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Store, emptyState, type GuardState, type JournalEvent } from '../../src/store.js'
-import { restoreDisabledExceptPrime, type RecoveryDeps } from '../../src/recovery-actions.js'
-import { pidAlive } from '../../src/sentinel.js'
-import { appendPatchText } from '../../src/guarded-rows.js'
+import { Store, emptyState, type GuardState, type JournalEvent } from '../../src/data/store.js'
+import { restoreDisabledExceptPrime, type RecoveryDeps } from '../../src/guard/recovery-actions.js'
+import { pidAlive } from '../../src/guard/sentinel.js'
+import { appendPatchText } from '../../src/guard/guarded-rows.js'
 import {
   suspectBundles,
   rankByRecency,
   pickSuspects,
   diffVersions,
-} from '../../src/recency.js'
-import { CapabilityGraph, declaredExposedNames } from '../../src/capability.js'
-import { buildCapabilityGraph, verifyCapabilityContract, CAPABILITY_SPECS } from '../../src/capability-specs.js'
-import { StageMachine, canTransition, riskScore, crashTrend, ALL_STAGES } from '../../src/lifecycle.js'
+} from '../../src/risk/recency.js'
+import { CapabilityGraph, declaredExposedNames } from '../../src/capability/capability.js'
+import { buildCapabilityGraph, verifyCapabilityContract, CAPABILITY_SPECS } from '../../src/capability/capability-specs.js'
+import { StageMachine, canTransition, riskScore, crashTrend, ALL_STAGES } from '../../src/core/lifecycle.js'
 import {
   crashRate,
   meanRecoveryTime,
@@ -27,8 +27,8 @@ import {
   cusumChangePoint,
   computeMetrics,
   crashPressure,
-} from '../../src/observability.js'
-import { renderOutcome, formatStatus, formatArchive, formatArchives } from '../../src/tool-render.js'
+} from '../../src/observe/observability.js'
+import { renderOutcome, formatStatus, formatArchive, formatArchives } from '../../src/surface/tool-render.js'
 import {
   normalizeWorkspace,
   projectKey,
@@ -36,9 +36,9 @@ import {
   registerPartition,
   findPartition,
   emptyPartitionIndex,
-} from '../../src/isolation.js'
-import { archiveAndReset, listArchives, readArchiveManifest } from '../../src/archive.js'
-import { buildGraphData, connectedComponents, computeBounds, buildAdjacency } from '../../src/graph-data.js'
+} from '../../src/core/isolation.js'
+import { archiveAndReset, listArchives, readArchiveManifest } from '../../src/data/archive.js'
+import { buildGraphData, connectedComponents, computeBounds, buildAdjacency } from '../../src/capability/graph-data.js'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {
