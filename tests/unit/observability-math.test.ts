@@ -584,6 +584,28 @@ function main(): void {
     JSON.stringify(configChangeCusum(cfgBurstTimes)) === JSON.stringify(configChangeCusum(cfgBurstTimes)),
   )
 
+  // ── 变异测试发现的真缺口（cycle-13）：重复时间戳产生的 gap=0 ──
+  //
+  // `controlBand` 用 `gap > 0` 过滤间隔：**同一时刻的多次崩溃不构成间隔**
+  // （它是同一事件的重复上报，不是「过程变密」）。若把守卫改成 `gap >= 0`，
+  // gap=0 会被纳入样本，把 x̄ 与 MR̄ 一起拉偏 —— 于是控制带位置错误，
+  // 而既有断言没有一条能发现（变异体存活）。
+  //
+  // 这条断言用「中心线必须只由 3 个正间隔决定」钉住它：
+  // 时间戳 [0, 1s, 1s, 3s, 6s] 的正间隔是 1000/2000/3000 ⇒ x̄ = 2000。
+  // 若把 0 算进去，x̄ = (1000+0+2000+3000)/4 = 1500，断言立刻红。
+  console.log('\n== 控制带：重复时间戳不得计入间隔（gap > 0 守卫）==')
+  {
+    const dup = controlBand([0, 1000, 1000, 3000, 6000])
+    check('重复时间戳 ⇒ 仍可判定（有 3 个正间隔）', dup.defined, dup)
+    check('重复时间戳 ⇒ 间隔数只算正的 3 个（不是 4 个）', dup.inputs?.gaps === 3, dup.inputs)
+    check('重复时间戳 ⇒ 中心线由 3 个正间隔决定（2000，而非含 0 的 1500）', dup.value?.center === 2000, dup.value)
+    // 反向：全同一时刻 ⇒ 一个正间隔都没有 ⇒ 诚实不可判定（不是「受控」）。
+    const allSame = controlBand([5000, 5000, 5000, 5000])
+    check('全部同一时刻 ⇒ 不可判定（零间隔不构成样本）', !allSame.defined, allSame)
+    check('全部同一时刻 ⇒ reason 说明间隔不足', (allSame.reason ?? '').includes('间隔样本'), allSame.reason)
+  }
+
   console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}\n`)
   process.exit(failures === 0 ? 0 : 1)
 }

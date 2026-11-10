@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { writeFileAtomicSync } from './atomic-sync.js'
 
 /**
  * 预启动决策 —— 决定文件、指针文件与守护行的表达式。
@@ -176,9 +177,20 @@ export function writePointer(profileDir: string, partitionKey: string, partition
 }
 
 function writeSafe(path: string, content: string): void {
-  const dir = dirname(path)
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(path, content, 'utf8')
+  // 原子提交（v0.15，isolation-dev 跨进程实测的缺陷修复）。
+  //
+  // 旧实现是 `writeFileSync`：它在 open('w') 时**先截断目标**再写内容，
+  // 并发的读者会读到 0 字节（实测 507 次采样中 4 次空指针）。守护行
+  // 表达式读到空指针 ⇒ catch ⇒ 放行 ⇒ 该轮守护整体失效。
+  //
+  // 换成「临时文件 + rename」后，读者看到的要么是旧内容、要么是新内容，
+  // 不存在中间态。这里保留 try/catch：写入失败只降级不抛 ——
+  // 决策文件写不进去是「下轮还能重试」的事，不该让当前崩溃路径挂掉。
+  try {
+    writeFileAtomicSync(path, content)
+  } catch {
+    /* best effort：决策/指针写失败不拖垮崩溃路径 */
+  }
 }
 
 /**

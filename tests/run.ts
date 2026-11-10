@@ -28,6 +28,11 @@ const LAYER_BY_DIR: Record<string, TestFile['layer']> = {
   host: 'Host',
   client: 'Client',
   contract: 'Contract',
+  // E4.2 故障注入（v0.15）：真实 cordis Loader + dsh-app-boot 启动判决。
+  // 归 Host 层：它测的是宿主挂载与崩溃恢复链路，不是纯函数。
+  // 代价：npm test 时长约 +47s（子进程启动 + 崩溃检测轮），这是 E4.2 判据
+  // 「检出率 100%」必须付的成本 —— 放慢 CI 也胜过把整层从门禁里摘掉。
+  'fault-injection': 'Host',
 }
 
 /** 收集测试文件。 */

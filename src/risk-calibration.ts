@@ -22,17 +22,38 @@
  *   `reenableOne`，最后写一条 `kind: 'restore'`）⇒ **不是证据**：那是常规
  *   流程（除头号嫌疑外全恢复），它发生得越多越说明不了 guard 对错。
  *
- * 判别它俩只能靠**记录形态**（`enable` 记录本身不带 actor 字段，而且本次
- * 任务不允许改 `recovery-actions.ts`）：系统恢复的形态是「连续若干条
- * `enable` 紧跟一条 `restore`」。所以规则是**向后回溯的连续配对**：一段
- * 连续的 `enable` 若被一条 `restore` 收尾，整段判为系统恢复；否则判为用户
- * 主动放行。这条规则的失效条件写在「诚实边界」里。
+ * ## 判别来源：显式证据优先，启发式兜底（v0.15 / TD-1）
  *
- * 注意「连续」是严格的：**任何其它记录都会打断配对**（含启动时的 note）。
- * 系统恢复只发生在启动路径上，而启动路径本身会写若干记录，所以「用户的
- * enable 恰好与系统恢复的 enable 相邻」在真实序列里几乎不可达 —— 这正是
- * 这条启发式够用的原因。真要精确，需要 `restore` 记录显式列出被恢复的
- * bundle（它的 detail 里其实有，但依赖文案格式，比形态配对更脆）。
+ * 判别它俩需要一个 `enable` 记录本身没有的字段（actor）。v0.14.0 只能靠
+ * **记录形态**：系统恢复的形态是「连续若干条 `enable` 紧跟一条 `restore`」，
+ * 于是规则是**向后回溯的连续配对** —— 一段连续的 `enable` 若被一条 `restore`
+ * 收尾，整段判为系统恢复；否则判为用户主动放行。
+ *
+ * 这是启发式，失效条件是真实存在的（见「诚实边界」#6）。TD-1 的修法是让
+ * `restore` 记录**显式列出**它恢复了哪些 bundle（`JournalEvent.bundles`），
+ * 本模块据此直接判定来源，不再依赖相邻性：
+ *
+ * 1. **显式证据（新 journal）**：`restore` 带 `bundles: string[]` ⇒ 对每个声明
+ *    的 bundle，把它**之前最近一条尚未被认领的** `enable` 判为系统恢复。
+ *    即使中间夹了别的记录（note、启动记录）也照样成立 —— 这正是启发式漏判
+ *    的那一类。
+ * 2. **启发式（老 journal，无该字段）**：`bundles` 缺失 ⇒ 原样走 v0.14.0 的
+ *    形态配对。**这条路径必须逐字节不变**，否则升级会把历史 profile 的
+ *    误伤率读数整体改写一遍。
+ * 3. **显式证据只升级、不降级**：未被声明的 `enable` 保留启发式的判定。
+ *    原因不是保守，而是 `reenableOne` 在**管理器拒绝**时也写 `enable` 记录
+ *    ——「段里有 enable 但没被 restore 声明」是**失败的恢复尝试**，不是用户
+ *    放行；降级会把系统的失败噪声算成误伤，白抬阈值。
+ *
+ * 老与新混在同一个 journal 里时按**每条 restore 自己有没有字段**分别处理：
+ * 升级过的那段与 v0.14.0 结论相同（只多认出一些系统恢复），没升级的段
+ * 逐字节等于 v0.14.0。这条「同序带/不带字段结论相同」的不变式由测试钉住。
+ *
+ * 注意「连续」的严格性仍然有效：**任何其它记录都会打断启发式配对**（含启动
+ * 时的 note）。系统恢复只发生在启动路径上，而启动路径本身会写若干记录，
+ * 所以「用户的 enable 恰好与系统恢复的 enable 相邻」在真实序列里几乎不可达
+ * —— 这正是启发式够用的原因，也是显式证据只需补「漏判」而不必把全部来源
+ * 判定推倒重来的原因。
  *
  * ## 数学模型：误伤率 + Wilson 置信区间
  *
@@ -108,9 +129,14 @@
  * 5. **安全网不被削弱**：`assessConfidence` 的兜底升级（crashSeq ≥ 3）在
  *    校准层之后仍然生效。所以即使校准把阈值抬到 4，崩溃循环也会在第 3 次
  *    触发兜底 —— 校准换来的是「多观察一轮」，不是「永远不救」。
- * 6. **配对规则的失效条件**：若将来有人在「用户主动 + 系统恢复」之间插入
- *    别的事件，或系统恢复中途失败留下孤立的 `enable`，配对会把证据归类错。
- *    所以本模块只做**上限 2 轮**的调整，误分类的代价被压在有限轮数内。
+ * 6. **哪些情况仍然只靠启发式**（v0.15 / TD-1 之后的诚实边界）：
+ *    - 老 journal（`restore` 无 `bundles` 字段）⇒ 整份走形态配对；
+ *    - 新 journal 里**未被声明**的 enable（含管理器拒绝恢复时 `reenableOne`
+ *      仍写下的那条）⇒ 保留启发式判定，显式证据不降级；
+ *    - `restore` 声明了 bundle 却找不到对应 enable ⇒ 记 `unattributedRestores`，
+ *      不配给任何 enable（宁可少判也不瞎配对）。
+ *    剩下的误分类风险因此只剩「老 journal 的形态配对」，代价仍被**上限 2 轮**
+ *    的调整幅度压在有限轮数内。
  */
 
 import type { JournalRecord } from './store.js'
@@ -209,6 +235,20 @@ export interface FalsePositiveStats {
   systemRestored: number
   /** 用户主动 enable 但追溯不到自动关闭的次数（既不是误伤也不是分母）。 */
   unattributed: number
+  /**
+   * `restore` 显式声明了 bundle、但窗口内找不到可配对 `enable` 的次数
+   * （v0.15 / TD-1）。
+   *
+   * 为什么不并进 `unattributed`：后者是**用户行为口径**（用户开了个 guard
+   * 没关过的插件），本项是**证据链一致性口径**（restore 说它恢复了 X，但
+   * journal 里没有 X 的那条 enable）。混在一起会让面板把「记录断了一行」
+   * 读成「用户又主动放行一次」，两种故障的处置完全不同。两者都标
+   * unattributed，但必须分桶才白盒。
+   *
+   * 真实可达路径：journal 1000 行上限截断、或记录被手工改过。生产路径上
+   * `reenableOne` 写 enable 之后才写 restore，二者相邻，不可能缺。
+   */
+  unattributedRestores: number
   /** 逐条误伤样本（面板时间线用，旧 → 新）。 */
   samples: FalsePositiveSample[]
 }
@@ -240,15 +280,17 @@ interface EnableMark {
 type DisableStack = Map<string, string[]>
 
 /**
- * 从 journal 采集误伤样本 —— 纯函数，O(m)（m = journal 行数，封顶 1000）。
+ * 从 journal 采集误伤样本 —— 纯函数。
  *
- * ## 两遍扫描，各自解决一个问题
+ * ## 三段扫描，各自解决一个问题
  *
- * 1. **来源判定**：一段连续的 `enable` 是否被紧随的 `restore` 收尾
- *    ⇒ 系统恢复；否则 ⇒ 用户主动。必须成段判定，因为单独的 `enable`
- *    不带 actor 字段（`recovery-actions.ts` 里同一个 `reenableOne` 同时
- *    服务两条路径，唯一的差别就是「调用者后来有没有写 restore」）。
- * 2. **归因**：按时间顺序把每条 enable 与同一 bundle 的**最近一次尚未
+ * 1. **启发式来源判定**（v0.14 起）：一段连续的 `enable` 是否被紧随的
+ *    `restore` 收尾 ⇒ 系统恢复；否则 ⇒ 用户主动。必须成段判定，因为单独的
+ *    `enable` 不带 actor 字段（`recovery-actions.ts` 里同一个 `reenableOne`
+ *    同时服务两条路径，唯一的差别是「调用者后来有没有写 restore」）。
+ * 2. **显式证据覆盖**（v0.15 / TD-1）：`restore` 声明了 `bundles` ⇒ 按声明把
+ *    对应的 `enable` 升级为系统恢复。只升级不降级，理由见 `applyExplicitRestores`。
+ * 3. **归因**：按时间顺序把每条 enable 与同一 bundle 的**最近一次尚未
  *    被消费的**自动关闭配对。配上的用户放行 = 一次误伤（两条记录提供
  *    时戳，样本可回放）；配不上的用户 enable（插件不是 guard 关的、
  *    或重复放行）单独计数，绝不混进分子。
@@ -256,18 +298,28 @@ type DisableStack = Map<string, string[]>
  * 为什么必须消费掉已配对的关闭：否则「关 A → 系统恢复 A → 又关 A →
  * 用户放行 A」会被算成两次误伤（第一次其实是系统恢复），虚高误伤率
  * 会让阈值被无谓抬高。
+ *
+ * 复杂度：主体 O(m)（m = journal 行数，封顶 1000）。显式证据段最坏是
+ * 「声明数 × 同 bundle 的 enable 数」，但 m ≤ 1000 且声明数受 bundle 数
+ * 限制，不会把启动路径的读盘成本拖出线性量级。
  */
 export function falsePositiveSamples(journal: readonly JournalRecord[]): FalsePositiveStats {
   const events = Array.isArray(journal) ? journal : []
 
-  // 第一遍：来源判定（连续 enable 段 + 收尾记录）。
+  // 第一遍：启发式来源判定（连续 enable 段 + 收尾记录）。
+  // `byBundle` 是给第二遍的显式证据定位用的「同 bundle 的 enable 下标表」，
+  // 免得每条恢复声明都从头扫一遍 journal。
   const marks = new Map<number, EnableMark>()
+  const byBundle = new Map<string, number[]>()
   let run: number[] = []
   for (let i = 0; i < events.length; i += 1) {
     const event = events[i]
     if (!event) continue
     if (event.kind === 'enable' && typeof event.bundle === 'string') {
       marks.set(i, { bundle: event.bundle, source: 'user' })
+      const indexes = byBundle.get(event.bundle)
+      if (indexes === undefined) byBundle.set(event.bundle, [i])
+      else indexes.push(i)
       run.push(i)
       continue
     }
@@ -281,12 +333,17 @@ export function falsePositiveSamples(journal: readonly JournalRecord[]): FalsePo
     run = []
   }
 
-  // 第二遍：归因（自动关闭入栈，enable 出栈）。
+  // 第二遍：显式证据（v0.15 / TD-1）。老 journal 没有 `bundles` 字段 ⇒
+  // 这一遍对每条记录都拿不到证据、一个字也不改，结论与 v0.14.0 逐字节一致。
+  const unattributedRestores = applyExplicitRestores(events, marks, byBundle)
+
+  // 第三遍：归因（自动关闭入栈，enable 出栈）。
   const stats: FalsePositiveStats = {
     falsePositives: 0,
     autoDisables: 0,
     systemRestored: 0,
     unattributed: 0,
+    unattributedRestores,
     samples: [],
   }
   const open: DisableStack = new Map()
@@ -321,6 +378,115 @@ export function falsePositiveSamples(journal: readonly JournalRecord[]): FalsePo
     })
   }
   return stats
+}
+
+/**
+ * 取一条 `restore` 记录声明的 bundle 列表（v0.15 / TD-1）。
+ *
+ * 返回 `undefined` = **这条记录没有可用证据**，调用方必须回退到相邻性启发式。
+ * 覆盖三种情形：不是 `restore`、字段缺失（老 journal）、字段形状坏掉。
+ *
+ * 为什么坏形状也整体回退、而不是把能认的那几项当证据：journal 是磁盘上可
+ * 读可编辑的 JSON，`[123]` / `["a", null]` 这种记录若被拆开认一半，就等于让
+ * 「一条坏记录」静默改写统计口径。宁可整条不认证据 —— 回退后的行为与
+ * v0.14.0 逐字节一致，坏记录的代价被限制在「这次没享受到新证据」，而不是
+ * 「误伤率被悄悄改了一个数」。
+ *
+ * 空数组 `[]` 是**有效证据**（这条 restore 真的一个都没恢复：只剩首要嫌疑
+ * 时就是这形态），与「字段缺失」严格区分。当前实现只升级不降级，两者对
+ * 判定结果等价，但语义不同 —— 将来若引入降级规则，这个区分必须还在。
+ */
+function declaredBundles(event: JournalRecord): string[] | undefined {
+  if (event.kind !== 'restore') return undefined
+  const raw = event.bundles
+  if (!Array.isArray(raw)) return undefined
+  if (!raw.every((item) => typeof item === 'string')) return undefined
+  return raw as string[]
+}
+
+/**
+ * 用 restore 的显式 bundle 列表改判来源 —— **只升级，不降级**。
+ *
+ * ## 配对规则：往前找「最近一条、同 bundle、尚未被认领」的 enable
+ *
+ * 生产路径上 `restoreDisabledExceptPrime` 对每个 bundle 调一次 `reenableOne`，
+ * 它写 `enable` 之后才轮到收尾的 `restore`，中间没有别的记录插进来。所以
+ * 声明里的每个 bundle 必然有一条**紧贴其前**的 `enable`（与其它 bundle 的
+ * enable 相邻，但不会跨过 note 之外的记录）。往前找最近一条即命中；已被
+ * 更早的 restore 认领过的跳过，否则一条 enable 会被两条 restore 各算一次
+ * 「系统恢复」，把分母对应的关闭栈弹空。
+ *
+ * ## 找不到对应 enable 时不瞎配对
+ *
+ * 声明了 bundle 却在它**之前**找不到未认领的 enable（journal 1000 行上限
+ * 截断、记录被手工改过）⇒ 记一次 `unattributedRestores`。三条禁止：
+ * - 不许退而配一条**之后**才出现的 enable：restore 不可能恢复一个未来才
+ *   开启的插件，方向本身就是错的；
+ * - 不许拿别的 bundle 顶替（宁可少认证据，不可乱认）；
+ * - 不许顺手弹掉自动关闭栈：没有 enable 就没有「谁被放行」这条事实可配对，
+ *   硬弹等于凭空宣布「这次关闭已被系统恢复消化」。代价是后续那条用户
+ *   enable 仍可能被算成误伤（偏保守方向），收益是每个结论都由观测到的
+ *   记录撑着 —— 与「无数据不等于零」是同一条纪律。
+ *
+ * ## 为什么只升级不降级（这条同时是向后兼容的保证）
+ *
+ * `reenableOne` 在**管理器拒绝**时也会写一条 `enable`（它把结果原样塞进
+ * `result`，失败者也留痕）。所以一段 restore 前的 enable 里，合法地包含
+ * 「没被恢复成功的 bundle」。若用「未声明 ⇒ 降级为用户放行」来改判，这些
+ * 失败的**系统尝试**会变成误伤证据 —— 误伤率被系统噪声抬高、阈值被无谓
+ * 上调。v0.14.0「诚实边界」#6 点名的正是这类误分类，显式证据不该把它放大。
+ *
+ * 于是显式证据的作用面被限定为：把启发式**漏判成用户主动**的系统恢复补
+ * 回来（相邻性被 note 打断、或 restore 前没有紧邻的连续段）。这也正是启发
+ * 式唯一的漏判方向 —— 启发式从不需要「多加证据」，只需要「补漏」。
+ *
+ * @returns 声明了但配不上 enable 的 bundle 数（进 `unattributedRestores`）
+ */
+function applyExplicitRestores(
+  events: readonly JournalRecord[],
+  marks: Map<number, EnableMark>,
+  byBundle: ReadonlyMap<string, number[]>,
+): number {
+  let unattributed = 0
+  const claimed = new Set<number>()
+  for (let i = 0; i < events.length; i += 1) {
+    const event = events[i]
+    if (!event) continue
+    const declared = declaredBundles(event)
+    if (declared === undefined || declared.length === 0) continue
+    // 同一个 bundle 在同一条 restore 里重复出现只算一次（生产路径不可能重复，
+    // 但手工记录可能重复，重复认领会把一条 enable 记两次系统恢复）。
+    for (const bundle of new Set(declared)) {
+      const index = nearestPrecedingEnable(byBundle, bundle, i, claimed)
+      if (index === undefined) {
+        unattributed += 1
+        continue
+      }
+      claimed.add(index)
+      const mark = marks.get(index)
+      if (mark !== undefined) mark.source = 'system'
+    }
+  }
+  return unattributed
+}
+
+/** 在 `before` 之前找最近一条同 bundle、尚未被认领的 enable 下标。 */
+function nearestPrecedingEnable(
+  byBundle: ReadonlyMap<string, number[]>,
+  bundle: string,
+  before: number,
+  claimed: ReadonlySet<number>,
+): number | undefined {
+  const indexes = byBundle.get(bundle)
+  if (indexes === undefined) return undefined
+  // indexes 是按 journal 顺序 push 的升序表，从尾部往前即「最近优先」。
+  for (let k = indexes.length - 1; k >= 0; k -= 1) {
+    const index = indexes[k]
+    if (index === undefined || index >= before) continue
+    if (claimed.has(index)) continue
+    return index
+  }
+  return undefined
 }
 
 /** 一条记录是否是 guard 的**自动**关闭（`manual` 是用户自己关的，不进分母）。 */

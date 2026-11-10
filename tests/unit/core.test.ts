@@ -2,7 +2,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Store } from '../../src/store.js'
+import { Store, emptyState, type GuardState, type JournalEvent } from '../../src/store.js'
+import { restoreDisabledExceptPrime, type RecoveryDeps } from '../../src/recovery-actions.js'
 import { pidAlive } from '../../src/sentinel.js'
 import { appendPatchText } from '../../src/guarded-rows.js'
 import {
@@ -517,6 +518,60 @@ async function main() {
   // 「探活不会因为平台差异抛异常」，具体存在性交给上面两个确定用例
   // （自己的 pid 必然活、2^31-1 必然死）。
   check('pidAlive(1) 返回布尔且不抛（存在性是平台事实，不据此判定）', typeof pidAlive(1) === 'boolean')
+
+  // ---------- v0.15 / TD-1：restore 事件显式列出被恢复的 bundle ----------
+  // 消费侧（risk-calibration 的来源判定）自己有一节断言；这里钉**生产侧**。
+  // 缺了这节，`bundles` 字段可以一直是空的/错的，而所有消费侧测试照样全绿
+  // —— 因为它们的 journal 是手工构造的。
+  console.log('\n== restore 事件显式列出 bundles（TD-1）==')
+  {
+    const appended: JournalEvent[] = []
+    let state: GuardState = {
+      ...emptyState(),
+      // 顺序即语义：最后一项是首要嫌疑（保持关闭），前面两项才尝试恢复。
+      autoDisabled: [
+        { name: 'dsh-a', disabledAt: 't1', reason: 'auto-recency', crashSeq: 1 },
+        { name: 'dsh-b', disabledAt: 't2', reason: 'auto-recency', crashSeq: 1 },
+        { name: 'dsh-prime', disabledAt: 't3', reason: 'auto-recency', crashSeq: 1 },
+      ],
+    }
+    const deps: RecoveryDeps = {
+      store: {
+        readState: async () => state,
+        updateState: async (fn: (s: GuardState) => GuardState | Promise<GuardState>) => {
+          state = await fn(state)
+          return state
+        },
+        append: async (event: JournalEvent | JournalEvent[]) => {
+          appended.push(...(Array.isArray(event) ? event : [event]))
+        },
+        readBackup: async () => null,
+      },
+      pluginManager: {
+        // dsh-a 被管理器接受；dsh-b 被拒绝（生产上 reenableOne 仍会写一条 enable）。
+        setBundleEnabled: async (name: string) => ({ application: name === 'dsh-b' ? 'failed' : 'applied' }),
+        setPluginEnabled: async () => ({ application: 'applied' }),
+      },
+      suspectRows: async () => [],
+      publishDecision: async () => {},
+      transition: () => {},
+      warn: () => {},
+      toJson: (value: unknown) => value,
+    }
+    const result = await restoreDisabledExceptPrime(deps)
+    const restoreRow = appended.filter((e) => e.kind === 'restore').pop()
+    check('restore 事件带结构化 bundles 字段', Array.isArray(restoreRow?.bundles), restoreRow)
+    check(
+      '只列真正被重新启用的 bundle（失败者与首要嫌疑都不列）',
+      JSON.stringify(restoreRow?.bundles) === JSON.stringify(['dsh-a']),
+      { bundles: restoreRow?.bundles, kept: result.keptDisabled },
+    )
+    check(
+      'restore 的 bundles 与返回值的 reenabled 同源（不是第二份真相）',
+      JSON.stringify(restoreRow?.bundles) === JSON.stringify(result.reenabled),
+      { bundles: restoreRow?.bundles, reenabled: result.reenabled },
+    )
+  }
 
   console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}\n`)
   process.exit(failures === 0 ? 0 : 1)

@@ -29,10 +29,11 @@
  *
  * 依赖面：只依赖 observability 的读数原语（Metric / MetricMeta / 两个构造器 /
  * sampleConfidence / round4 / median / medianAbsoluteDeviation / quantile /
- * ewmaLevel），不反向依赖任何上层模块。
+ * ewmaLevel / **ewmaAlpha**），不反向依赖任何上层模块。
  */
 import {
   definedMetric,
+  ewmaAlpha,
   ewmaLevel,
   median,
   medianAbsoluteDeviation,
@@ -43,22 +44,6 @@ import {
   type Metric,
   type MetricMeta,
 } from './observability.js'
-
-/**
- * EWMA 的 α：α = 1 − 2^(−1/H)，H < 1 时夹到 1（与 observability.ewmaAlpha 同口径）。
- *
- * 为什么要在这里重写一行而不是从 observability 导入：那一个是**私有**函数，
- * 且被 `ewma` / `ewmaLevel` / `ewmaKernel` 共用（不是本文件专属）。为了复用它
- * 而把 observability 的导出面撑大，等于为一次内部调用改动共享热点文件的契约 ——
- * 代价高于一行公式的重复。
- *
- * 防漂移：两边口径若被改坏，`loadTimeEwma` 的 `bandFactor` 会变，而单测里
- * 已把 H=3 时的 bandFactor = 0.3391 钉死（0.3391 正是由本式算出），
- * 所以「悄悄改了一边」立刻会被断言抓住。
- */
-function ewmaAlpha(halfLife: number): number {
-  return 1 - Math.pow(2, -1 / Math.max(1, halfLife))
-}
 
 // ═════════════════ RQ3 · 预防性健康指标（只预警，不行动）═════════════════
 //

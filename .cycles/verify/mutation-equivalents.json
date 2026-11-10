@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "cycle": "cycle-13",
+  "metric": "E4.1 有意义杀灭率",
+  "note": "每条都已证等价（reason）+ 有断言钉住等价所依赖的事实（proof）。缺任一字段的条目会被 scripts/mutation.mjs 拒绝登记。未登记 ≠ 已确认测试缺口：存疑条目一律留在分母。",
+  "entries": [
+    {
+      "file": "src/control-band.ts",
+      "line": 38,
+      "mutator": "comparison",
+      "label": "比较方向 < → <=（i <= crashTimes）",
+      "original": "i < crashTimes",
+      "mutated": "i <= crashTimes",
+      "reason": "多出的一轮取 i === crashTimes.length：crashTimes[i] 为 undefined，被 ?? 0 兜底成 0，于是 gap = 0 − 最后一个时刻 = 负值；紧接着的 gap > 0 守卫把它过滤，gaps 数组与后续全部断言不变。",
+      "proof": "tests/unit/observability-math.test.ts:倒序时间戳 ⇒ 诚实不可判定（负间隔全过滤）—— 该断言钉住「负间隔会被 gap > 0 过滤」这个等价性的承重事实。"
+    },
+    {
+      "file": "src/observability.ts",
+      "line": 120,
+      "mutator": "comparison",
+      "label": "比较方向 < → <=（sampleSize <= 1）",
+      "original": "sampleSize < 1",
+      "mutated": "sampleSize <= 1",
+      "reason": "唯一分歧点是 n === 1。变异版本命中守卫直接 return 1；原版本落到底部公式 max(1, min(4, round(log10(1) + 0.5))) = max(1, round(0.5)) = 1。两条路径同为 1，且 n < 1 与 n > 1 的行为完全相同。",
+      "proof": "tests/unit/observability-math.test.ts:位数夹在 [1,4]（displayDigits(0) === 1 钉住守卫分支返回 1）与 3 个样本只配 1 位有效数字（displayDigits(3) === 1 钉住下限夹到 1）。"
+    },
+    {
+      "file": "src/store.ts",
+      "line": 231,
+      "mutator": "comparison",
+      "label": "比较方向 <= → <（pid < 0）",
+      "original": "pid <= 0",
+      "mutated": "pid < 0",
+      "reason": "唯一分歧点是 pid === 0。变异版本不再把 0 判成 incomplete，但随后 !incomplete && processAlive(0) 中 processAlive(0) 为 false，因此同样不进 report.kept，继续走到 rmSync + report.removed。与「incomplete ⇒ 不探活 ⇒ 直接删」的分支终点相同（删掉该锁文件）。",
+      "proof": "tests/unit/core.test.ts:pidAlive(0) === false（非法 pid 不是进程）—— 该断言钉住 processAlive(0) 为 false，即两条路径都不保留 pid=0 的锁。"
+    },
+    {
+      "file": "src/risk-bayes.ts",
+      "line": 147,
+      "mutator": "comparison",
+      "label": "比较方向 < → <=（x <= 1）",
+      "original": "x < 1",
+      "mutated": "x <= 1",
+      "reason": "唯一分歧点是 x === 1。变异版本走递推 lgamma(2) − log(1) = lnΓ(2) − 0；Γ(2) = 1 ⇒ lnΓ(2) = 0。原路径 lnΓ(1) = 0。数学上恒等；实现上 z=1 与 z=0 两条 Lanczos 路径的数值差约 1e-15，远小于先验断言的 1e-8 容差，故可观测行为不变。",
+      "proof": "tests/unit/risk-bayes.test.ts:先验 95% 下界 = 0.025（均匀分布的解析分位）与 先验均值 = 0.5（均为 1e-8/1e-12 容差）—— 先验 Beta(1,1) 的 logBeta(1,1) 三次走 lgamma(1)，容差钉住该处 x=1 的数值不变。"
+    },
+    {
+      "file": "src/survival.ts",
+      "line": 116,
+      "mutator": "comparison",
+      "label": "比较方向 > → >=（zeros >= 0）",
+      "original": "zeros > 0",
+      "mutated": "zeros >= 0",
+      "reason": "进入该分支的必要条件是 gaps 含非有限值或 ≤ 0 的间隔。crashSeries 先 filter(Number.isFinite) 再 sort，因此 gaps 恒 ≥ 0 ⇒ 只有「零间隔」能触发该分支 ⇒ zeros > 0 在分支内恒真。改成 >= 0 只替换了不可达分支（非有限/负间隔）的文案，返回的 Metric 与原因不变。",
+      "proof": "tests/unit/observability-math.test.ts:乱序时间戳会被排序 ⇒ 不产生负间隔（故负间隔分支不可达）—— 这条断言就是为钉住该不可达性而加的（见 mutation-attribution.md §3.4）。"
+    }
+  ]
+}

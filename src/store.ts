@@ -48,6 +48,25 @@ export type JournalKind =
 export interface JournalEvent {
   kind: JournalKind
   bundle?: string
+  /**
+   * 本次事件**确实作用到**的 bundle 名列表（v0.15 / TD-1）。
+   *
+   * 与 `bundle` 的分工是「批量 vs 单目标」：一条 `enable` 只启用一个插件，
+   * 所以用 `bundle`；而一条 `restore` 会重新启用若干个插件，此前只在自由文本
+   * `detail` 里写名字，消费方（`risk-calibration.ts` 的来源判定）只能靠
+   * 「连续 enable 段是否被一条 restore 收尾」的形态启发式反推那是系统恢复
+   * 还是用户主动 —— 这就是本次要还的技术债。
+   *
+   * 语义边界（写错比不写更糟）：
+   * - **只列成功的**：restore 的 `bundles` 只放真正 `applied` 的插件；被管理器
+   *   拒绝的留在 `autoDisabled` 待下轮重试，把它们写进来等于宣布一件没发生的事，
+   *   来源判定会据此把一次失败的恢复当成「系统已恢复」。
+   * - **省略 ≠ 空**：老 journal（v0.14.0 及更早）没有这个字段，消费方必须回退到
+   *   启发式；`[]` 则是「这条 restore 真的一个都没恢复」的显式事实。两者都让
+   *   当前实现不改判定（见 risk-calibration 的「只升级不降级」），但语义不同，
+   *   消费方不许用 `event.bundles ?? []` 抹平差异。
+   */
+  bundles?: string[]
   version?: string
   prevVersion?: string
   detail?: string

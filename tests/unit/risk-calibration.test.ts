@@ -7,7 +7,9 @@
  *    读成「误伤率 0%」（Metric 契约，见 observability.ts 头注）。
  * 2. **区分证据来源**：「用户主动 reenable」是证据；「系统自动恢复」不是。
  *    这是本任务最容易做错的地方 —— journal 里两者都是 `kind: 'enable'`，
- *    唯一差别是系统恢复那一段**被一条 `restore` 收尾**。
+ *    v0.14.0 唯一的差别是系统恢复那一段**被一条 `restore` 收尾**；
+ *    v0.15 / TD-1 起优先消费 `restore.bundles` 的**显式证据**，相邻性启发式
+ *    退为老 journal 的兜底（两节各自钉住，见文件后半）。
  * 3. **样本充足时阈值收敛**：误伤率被足够样本证伪 ⇒ 回到基线；
  *    误伤率超线 ⇒ 上调，且**只升不降**（永不增加误伤）。
  * 4. **解释文案可读**：面板要能显示「本轮为何提高阈值」，不做黑盒。
@@ -15,6 +17,11 @@
  * 另有一节专门钉**向后兼容**：不传 `falsePositiveStats` 时
  * `assessConfidence` 必须与 v0.13.0 逐位一致 —— 这是硬要求，
  * 用「显式 undefined vs 省略」的 JSON 逐字节比对作为机器门。
+ *
+ * TD-1（v0.15）再追加一节**黄金对照**：`golden` 字符串是在改代码**之前**用
+ * v0.14.0 跑出来的原始 JSON，对同一事件序列分「带 / 不带 `bundles` 字段」
+ * 两个方向各断言一次逐字节相等 —— 老 journal 行为不许漂移，新字段也不许
+ * 在启发式本来判得对的地方改判。
  */
 import {
   CALIBRATION_MIN_SAMPLES,
@@ -56,13 +63,43 @@ function userReenable(bundle: string, t: string): JournalRecord {
   return rec('enable', { bundle }, t)
 }
 
-/** 系统自动恢复的一段（连续 enable + 一条 restore 收尾）。 */
-function systemRestore(bundles: string[], t: string): JournalRecord[] {
-  return [...bundles.map((bundle) => rec('enable', { bundle }, t)), rec('restore', { detail: '重新启用 x' }, t)]
+/** 系统自动恢复的一段（连续 enable + 一条 restore 收尾）。
+ *
+ * `declare` 打开时给 restore 带上显式 `bundles`（v0.15 / TD-1 的生产形态）；
+ * 关闭时保持 v0.14.0 的老形态（只有自由文本 detail），用于逐字节对照。
+ */
+function systemRestore(bundles: string[], t: string, declare = false): JournalRecord[] {
+  const restore = declare
+    ? rec('restore', { bundles: [...bundles], detail: '重新启用 x' }, t)
+    : rec('restore', { detail: '重新启用 x' }, t)
+  return [...bundles.map((bundle) => rec('enable', { bundle }, t)), restore]
 }
 
 function stats(over: Partial<FalsePositiveStats> = {}): FalsePositiveStats {
-  return { falsePositives: 0, autoDisables: 0, systemRestored: 0, unattributed: 0, samples: [], ...over }
+  return {
+    falsePositives: 0,
+    autoDisables: 0,
+    systemRestored: 0,
+    unattributed: 0,
+    unattributedRestores: 0,
+    samples: [],
+    ...over,
+  }
+}
+
+/**
+ * 摘掉 v0.15 新增字段后的 JSON —— 与 v0.14.0 的输出做**逐字节**比对用。
+ *
+ * 为什么这样才叫逐字节：`JSON.stringify` 按对象插入序输出键，而
+ * `falsePositiveSamples` 字面量的键序在 v0.14.0 与本版一致（新字段插在
+ * `unattributed` 之后、`samples` 之前，删掉它不改变其余键的相对顺序）。
+ * 于是字符串相等 = 键序、值、samples 数组内部顺序全部相等；比「各字段
+ * 分别相等」强得多 —— 后者漏掉键序与字段增删。
+ */
+function legacyShape(s: FalsePositiveStats): string {
+  const clone: Partial<FalsePositiveStats> = { ...s }
+  delete clone.unattributedRestores
+  return JSON.stringify(clone)
 }
 
 function entry(bundle: string): RecencyEntry {
@@ -450,6 +487,296 @@ function main() {
       ours: decision.required,
       naive: naiveDecision.required,
     })
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  console.log('\n== 显式证据（TD-1）：restore 的 bundles 直判来源 ==')
+  {
+    // ① 启发式唯一的漏判方向：enable 与 restore 之间被一条 note 打断。
+    //    v0.14.0 只能把这条 enable 判成「用户主动放行」—— 假误伤。
+    const interrupted = (declare: boolean): JournalRecord[] => [
+      autoDisable('a', 't1'),
+      userReenable('a', 't2'),
+      rec('note', { detail: '启动记录' }, 't3'),
+      declare
+        ? rec('restore', { bundles: ['a'], detail: 'x' }, 't4')
+        : rec('restore', { detail: 'x' }, 't4'),
+    ]
+    const byHeuristic = falsePositiveSamples(interrupted(false))
+    const byEvidence = falsePositiveSamples(interrupted(true))
+    check(
+      '无字段：被打断 ⇒ 启发式误判为用户放行（v0.14.0 的已知缺口）',
+      byHeuristic.falsePositives === 1 && byHeuristic.systemRestored === 0,
+      byHeuristic,
+    )
+    check('带 bundles：同一条 restore 直判系统恢复（补回漏判）', byEvidence.systemRestored === 1, byEvidence)
+    check(
+      '带 bundles：不再产生假误伤样本',
+      byEvidence.falsePositives === 0 && byEvidence.samples.length === 0,
+      byEvidence,
+    )
+    check('带 bundles：分母（自动关闭数）不受来源判定影响', byEvidence.autoDisables === 1, byEvidence)
+
+    // ② 就近配对：声明只认领「之前最近一条」enable，不认领更早那条。
+    {
+      const s = falsePositiveSamples([
+        autoDisable('x', 't1'),
+        autoDisable('x', 't2'),
+        rec('enable', { bundle: 'x' }, 't3'),
+        rec('note', { detail: 'n' }, 't4'),
+        rec('enable', { bundle: 'x' }, 't5'),
+        rec('note', { detail: 'n' }, 't6'),
+        rec('restore', { bundles: ['x'], detail: 'x' }, 't7'),
+      ])
+      check('就近配对：最近那条 enable（t5）被认领为系统恢复', s.systemRestored === 1, s)
+      // 若错配成更早的 t3，样本会落在 t5 上 —— 这条断言是这个错误的判别式。
+      check('就近配对：更早那条 enable（t3）仍判用户放行', s.samples[0]?.reenabledAt === 't3', s.samples)
+      check('就近配对：认领后按 LIFO 消费关闭栈（t2 先出）', s.samples[0]?.autoDisabledAt === 't2', s.samples)
+    }
+
+    // ③ 声明了 bundle 但窗口内无对应 enable ⇒ 诚实的 unattributed，不瞎配对。
+    {
+      const s = falsePositiveSamples([
+        rec('restore', { bundles: ['ghost'], detail: 'x' }, 't1'),
+        userReenable('ghost', 't2'),
+      ])
+      check('声明但无 enable ⇒ unattributedRestores=1', s.unattributedRestores === 1, s)
+      check('不把之后才出现的同名 enable 当系统恢复（方向不许倒过来）', s.systemRestored === 0, s)
+      check('该 enable 仍按用户放行口径计数', s.unattributed === 1, s)
+      check(
+        '两个 unattributed 分桶（用户行为 ≠ 证据链缺口）',
+        s.unattributed === 1 && s.unattributedRestores === 1,
+        s,
+      )
+    }
+
+    // ④ 只升级不降级：管理器拒绝恢复时 `reenableOne` 仍写 enable，那一条
+    //    不能被降级成「用户放行」，否则系统失败噪声会抬高误伤率。
+    {
+      const s = falsePositiveSamples([
+        autoDisable('a', 't1'),
+        autoDisable('b', 't2'),
+        rec('enable', { bundle: 'a' }, 't3'),
+        rec('enable', { bundle: 'b' }, 't4'), // b 恢复失败，仍写了 enable
+        rec('restore', { bundles: ['a'], detail: 'x' }, 't5'), // 只声明成功的 a
+      ])
+      check(
+        '未声明的 enable 保留启发式判定（失败的恢复不算误伤）',
+        s.falsePositives === 0 && s.systemRestored === 2,
+        s,
+      )
+    }
+
+    // ⑤ 显式空数组 = 有效证据但无升级对象：结论与「字段缺失」一致。
+    {
+      const absent = falsePositiveSamples([
+        autoDisable('a', 't1'),
+        userReenable('a', 't2'),
+        rec('restore', { detail: 'x' }, 't3'),
+      ])
+      const emptyDecl = falsePositiveSamples([
+        autoDisable('a', 't1'),
+        userReenable('a', 't2'),
+        rec('restore', { bundles: [], detail: 'x' }, 't3'),
+      ])
+      check('bundles: [] 不改判定（与字段缺失同结论）', legacyShape(emptyDecl) === legacyShape(absent), { emptyDecl, absent })
+    }
+
+    // ⑥ 坏形状整体回退启发式（不拆开「认一半」的证据）。
+    {
+      const baseline = legacyShape(
+        falsePositiveSamples([
+          autoDisable('a', 't1'),
+          userReenable('a', 't2'),
+          rec('restore', { detail: 'x' }, 't3'),
+        ]),
+      )
+      const mixedArray = legacyShape(
+        falsePositiveSamples([
+          autoDisable('a', 't1'),
+          userReenable('a', 't2'),
+          rec('restore', { bundles: ['a', 123], detail: 'x' }, 't3'),
+        ]),
+      )
+      const notArray = legacyShape(
+        falsePositiveSamples([
+          autoDisable('a', 't1'),
+          userReenable('a', 't2'),
+          rec('restore', { bundles: 'a', detail: 'x' }, 't3'),
+        ]),
+      )
+      check('bundles 元素含非字符串 ⇒ 整条不认证据，回退启发式', mixedArray === baseline, { mixedArray, baseline })
+      check('bundles 不是数组 ⇒ 回退启发式', notArray === baseline, { notArray, baseline })
+    }
+
+    // ⑦ 同一条 restore 里重复声明同一 bundle ⇒ 去重，不重复认领。
+    {
+      const s = falsePositiveSamples([
+        autoDisable('a', 't1'),
+        userReenable('a', 't2'),
+        rec('restore', { bundles: ['a', 'a'], detail: 'x' }, 't3'),
+      ])
+      check('重复声明去重：只认领一次、不留下 unattributedRestores', s.systemRestored === 1 && s.unattributedRestores === 0, s)
+    }
+
+    // ⑧ 两条 restore 争一条 enable ⇒ 先到先得，后一条诚实记为 unattributed。
+    {
+      const s = falsePositiveSamples([
+        autoDisable('a', 't1'),
+        userReenable('a', 't2'),
+        rec('restore', { bundles: ['a'], detail: 'x' }, 't3'),
+        rec('restore', { bundles: ['a'], detail: 'x' }, 't4'),
+      ])
+      check('同一条 enable 不被两条 restore 各认一次', s.systemRestored === 1, s)
+      check('后来者记为 unattributedRestores（不重复消费证据）', s.unattributedRestores === 1, s)
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  console.log('\n== 端到端（TD-1）：显式证据把被打断的恢复段补回正确读数 ==')
+  {
+    const build = (declare: boolean): JournalRecord[] => {
+      const journal: JournalRecord[] = []
+      for (let i = 0; i < 12; i += 1) journal.push(autoDisable(`p${i}`, `2026-11-01T00:00:0${i}.000Z`))
+      for (const bundle of ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7']) {
+        journal.push(rec('enable', { bundle }, '2026-11-02T00:00:00.000Z'))
+      }
+      // 关键：note 必须夹在「enable 段」与「restore」**之间**，启发式才断链。
+      // 真实启动路径确实会在这里写记录（note / 异常退出观测），这不是构造性刁难。
+      journal.push(rec('note', { detail: '恢复前的记录' }, '2026-11-02T00:00:01.000Z'))
+      journal.push(
+        declare
+          ? rec('restore', { bundles: ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'], detail: 'x' }, '2026-11-02T00:00:02.000Z')
+          : rec('restore', { detail: 'x' }, '2026-11-02T00:00:02.000Z'),
+      )
+      journal.push(userReenable('p8', '2026-11-03T00:00:00.000Z'))
+      journal.push(userReenable('p9', '2026-11-03T00:00:01.000Z'))
+      return journal
+    }
+    const blind = falsePositiveSamples(build(false))
+    const informed = falsePositiveSamples(build(true))
+    check('被打断且无证据 ⇒ 8 次系统恢复被误算成用户放行（v0.14.0 缺口）', blind.falsePositives === 10, blind)
+    check('被打断且无证据 ⇒ 误伤率 83% 把阈值错误抬到 4 轮', calibratedConfirmRounds(2, blind).required === 4, calibratedConfirmRounds(2, blind))
+    check('带显式证据 ⇒ 误伤回到 2（系统恢复不再计入）', informed.falsePositives === 2, informed)
+    check('带显式证据 ⇒ 系统恢复计数 8', informed.systemRestored === 8, informed)
+    check('带显式证据 ⇒ 阈值回到 3 轮（与未被打断的形态一致）', calibratedConfirmRounds(2, informed).required === 3, calibratedConfirmRounds(2, informed))
+    const rate = falsePositiveRate(informed)
+    check(
+      '带显式证据 ⇒ 误伤率读数 16.7%（2/12）',
+      rate.defined && Math.abs((rate.value?.rate ?? 0) - Math.round((2 / 12) * 10000) / 10000) < 1e-9,
+      rate.value,
+    )
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  console.log('\n== 向后兼容：同序带/不带字段 == v0.14.0 逐字节一致 ==')
+  {
+    // `golden` 是**改代码之前**用 v0.14.0 的 falsePositiveSamples 跑出的原始
+    // JSON 字符串，逐字抄录。断言是两个方向：
+    //   ① 同一序列不带 bundles，今天必须仍等于它（老 journal 行为不变）；
+    //   ② 同一序列带 bundles，在**启发式可判定**的场景里也必须等于它
+    //      （显式证据不得在原本判对的地方改判）。
+    // 注意「启发式可判定」是这里的限定：被 note 打断的序列本来就不是可判定
+    // 场景，它在上面「显式证据」一节单独钉（那里带/不带字段结论必须不同）。
+    const goldens: Array<{ name: string; golden: string; build: (declare: boolean) => JournalRecord[] }> = [
+      {
+        name: '空 journal',
+        golden: '{"falsePositives":0,"autoDisables":0,"systemRestored":0,"unattributed":0,"samples":[]}',
+        build: () => [],
+      },
+      {
+        name: '用户放行',
+        golden:
+          '{"falsePositives":1,"autoDisables":1,"systemRestored":0,"unattributed":0,"samples":[{"bundle":"a","autoDisabledAt":"t1","reenabledAt":"t2"}]}',
+        build: () => [autoDisable('a', 't1'), userReenable('a', 't2')],
+      },
+      {
+        name: '系统恢复两件',
+        golden: '{"falsePositives":0,"autoDisables":2,"systemRestored":2,"unattributed":0,"samples":[]}',
+        build: (declare) => [autoDisable('a', 't1'), autoDisable('b', 't2'), ...systemRestore(['a', 'b'], 't3', declare)],
+      },
+      {
+        name: '系统恢复后用户再放行',
+        golden:
+          '{"falsePositives":1,"autoDisables":2,"systemRestored":1,"unattributed":0,"samples":[{"bundle":"a","autoDisabledAt":"t3","reenabledAt":"t4"}]}',
+        build: (declare) => [
+          autoDisable('a', 't1'),
+          ...systemRestore(['a'], 't2', declare),
+          autoDisable('a', 't3'),
+          userReenable('a', 't4'),
+        ],
+      },
+      {
+        name: '用户放行 guard 没关过的插件',
+        golden: '{"falsePositives":0,"autoDisables":0,"systemRestored":0,"unattributed":1,"samples":[]}',
+        build: () => [userReenable('never', 't1')],
+      },
+      {
+        name: 'manual 关闭不进分母',
+        golden: '{"falsePositives":0,"autoDisables":0,"systemRestored":0,"unattributed":1,"samples":[]}',
+        build: () => [rec('disable', { bundle: 'x', detail: 'manual' }, 't1'), userReenable('x', 't2')],
+      },
+      {
+        name: '历史 kind=auto-disable',
+        golden:
+          '{"falsePositives":1,"autoDisables":1,"systemRestored":0,"unattributed":0,"samples":[{"bundle":"y","autoDisabledAt":"t1","reenabledAt":"t2"}]}',
+        build: () => [rec('auto-disable', { bundle: 'y' }, 't1'), userReenable('y', 't2')],
+      },
+      {
+        name: '半段被打断（只声明后半段）',
+        golden:
+          '{"falsePositives":1,"autoDisables":1,"systemRestored":1,"unattributed":0,"samples":[{"bundle":"a","autoDisabledAt":"t1","reenabledAt":"t2"}]}',
+        build: (declare) => [
+          autoDisable('a', 't1'),
+          userReenable('a', 't2'),
+          rec('note', { detail: 'n' }, 't3'),
+          userReenable('b', 't4'),
+          declare ? rec('restore', { bundles: ['b'], detail: 'x' }, 't5') : rec('restore', { detail: 'x' }, 't5'),
+        ],
+      },
+      {
+        name: 'restore 之后的 enable',
+        golden: '{"falsePositives":0,"autoDisables":0,"systemRestored":0,"unattributed":1,"samples":[]}',
+        build: (declare) => [
+          declare ? rec('restore', { bundles: [], detail: 'x' }, 't1') : rec('restore', { detail: 'x' }, 't1'),
+          userReenable('x', 't2'),
+        ],
+      },
+      {
+        name: '两条 restore 连发',
+        golden: '{"falsePositives":0,"autoDisables":1,"systemRestored":2,"unattributed":0,"samples":[]}',
+        build: (declare) => [
+          autoDisable('x', 't1'),
+          ...systemRestore(['x'], 't2', declare),
+          ...systemRestore(['x'], 't3', declare),
+        ],
+      },
+      {
+        name: '端到端 12 关 8 恢复 2 用户放行',
+        golden:
+          '{"falsePositives":2,"autoDisables":12,"systemRestored":8,"unattributed":0,"samples":[{"bundle":"p8","autoDisabledAt":"2026-11-01T00:00:08.000Z","reenabledAt":"2026-11-03T00:00:00.000Z"},{"bundle":"p9","autoDisabledAt":"2026-11-01T00:00:09.000Z","reenabledAt":"2026-11-03T00:00:01.000Z"}]}',
+        build: (declare) => {
+          const journal: JournalRecord[] = []
+          for (let i = 0; i < 12; i += 1) journal.push(autoDisable(`p${i}`, `2026-11-01T00:00:0${i}.000Z`))
+          journal.push(...systemRestore(['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'], '2026-11-02T00:00:00.000Z', declare))
+          journal.push(userReenable('p8', '2026-11-03T00:00:00.000Z'))
+          journal.push(userReenable('p9', '2026-11-03T00:00:01.000Z'))
+          return journal
+        },
+      },
+    ]
+    for (const c of goldens) {
+      const withoutField = legacyShape(falsePositiveSamples(c.build(false)))
+      check(`兼容 ${c.name}：不带字段 == v0.14.0（逐字节）`, withoutField === c.golden, {
+        got: withoutField,
+        want: c.golden,
+      })
+      const withField = legacyShape(falsePositiveSamples(c.build(true)))
+      check(`兼容 ${c.name}：带字段 == v0.14.0（启发式可判定）`, withField === c.golden, {
+        got: withField,
+        want: c.golden,
+      })
+    }
   }
 
   console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}\n`)

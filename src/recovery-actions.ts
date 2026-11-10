@@ -98,6 +98,12 @@ export async function restoreDisabledExceptPrime(deps: RecoveryDeps): Promise<Re
   deps.transition('recovered', `已恢复 ${reenabled.length} 个插件`)
   await deps.store.append({
     kind: 'restore',
+    // 结构化列出「真正被重新启用的」bundle（v0.15 / TD-1）：来源判定
+    // （risk-calibration 的误伤采样）从此不必再从自由文本 detail 反推。
+    // 只放 `reenabled`：失败者留在 autoDisabled 待下轮重试，若把它们也写进
+    // bundles，统计层会把「一次被拒绝的恢复」当成「系统已恢复」，从而把
+    // 后续的用户放行错判成误伤。`keptDisabled`（首要嫌疑）同理不列。
+    bundles: [...reenabled],
     detail: `重新启用 ${reenabled.join(', ') || '无'}${failed.length > 0 ? `；未启用（管理器拒绝，保留待重试） ${failed.join(', ')}` : ''}`,
   })
   await deps.publishDecision(

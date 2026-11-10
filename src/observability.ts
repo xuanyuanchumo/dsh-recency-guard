@@ -369,8 +369,19 @@ export function ewmaLevel(values: readonly number[], halfLife = 3): number {
   return round4(ewmaKernel(values, halfLife) / warmup)
 }
 
-/** EWMA 的 α：α = 1 − 2^(−1/H)；H < 1 时夹到 1（避免 α > 0.5 的非法语义）。 */
-function ewmaAlpha(halfLife: number): number {
+/**
+ * EWMA 的 α：α = 1 − 2^(−1/H)；H < 1 时夹到 1（避免 α > 0.5 的非法语义）。
+ *
+ * **为什么导出**（v0.15 TD-3）：`preventive.ts` 的 RQ3 模型需要同一个 α 口径。
+ * 此前那里重写了一份私有副本 —— 一份公式两处实现，靠单测钉住 `bandFactor`
+ * 防漂移。那不是好的去重方式：防漂移的正当手段是**单一实现**，
+ * 不是「两处都写对 + 断言盯着」。
+ *
+ * 导出的边界很窄：**只导出这一个标量函数**，不动 `ewmaKernel` / `ewmaLevel`
+ * 这些还需要保留封装的原语。加一个 `export` 关键字不增加分支/函数计数，
+ * 因此不推高本文件的复杂度预算（band-detector 按 branches+functions 计分）。
+ */
+export function ewmaAlpha(halfLife: number): number {
   return 1 - Math.pow(2, -1 / Math.max(1, halfLife))
 }
 

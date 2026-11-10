@@ -1,81 +1,56 @@
 # 变异测试报告（M4 / RQ4）
-**生成时间**：2026-11-10T12:14:51.842Z
-**命令**：`node scripts/mutation.mjs`
-## 1. 汇总
+**生成时间**：2026-11-10T14:16:00.305Z
+**命令**：`node scripts/mutation.mjs --metric meaningful --filter src/survival.ts`
+## 1. 汇总（双口径）
 | 项 | 值 |
 |---|---|
-| 变异体总数 | 40 |
-| 断言杀死 | 19 |
+| 变异体总数 | 2 |
+| 断言杀死 | 1 |
 | 语法杀死（不计入杀灭率） | 0 |
-| 存活 | 21 |
-| **断言杀灭率** | **47.5%**（19/40） |
-| 无直接测试的源码文件 | 18 |
-> 判定口径：只有「变异体可解析、且被断言抓住」才计入杀灭率。
-> 语法杀死说明变异把文件改坏了，测试失败不构成测试强度的证据（07 §5.2）。
-## 2. 断言杀死明细
+| 存活 | 1 |
+| ├ 已证等价（账本剔除） | 1 |
+| └ 未归因（留在分母 = 真实缺口/未证等价） | 0 |
+| **原始口径杀灭率** | **50.0%**（1/2） |
+| **有意义口径杀灭率** | **100.0%**（1/1） |
+| 门禁采用口径 | `meaningful` |
+| 账本有效条目 | 5（.cycles/verify/mutation-equivalents.json） |
+| 账本 STALE-EQUIVALENT | 0 |
+| 账本被拒条目（缺 reason/proof） | 0 |
+| 账本未生效条目 | 4 |
+| 无直接测试的源码文件 | 0 |
+> 判定口径：只有「变异体可解析、且被断言抓住」才计入杀灭率；语法杀死不计入。
+> **原始口径**不剔除任何存活体；**有意义口径**只剔除账本中已证等价、且本轮源码核对通过的存活体。
+> `--min-kill-rate` 自 cycle-13 起**默认按有意义口径判定**（此前为原始口径）；`--metric raw` 可显式切回。
+> 未归因的存活体一律留在分母里 —— **存疑不等于等价**，否则治理会变成自我豁免。
+## 2. 等价体剔除明细
+| 文件:行 | 变异子 | 变异 | 等价理由（为什么行为不变） | 证明（钉住不可达性的断言） |
+|---|---|---|---|---|
+| `src/survival.ts:116` | comparison | 比较方向 > → >=（zeros >= 0） | 进入该分支的必要条件是 gaps 含非有限值或 ≤ 0 的间隔。crashSeries 先 filter(Number.isFinite) 再 sort，因此 gaps 恒 ≥ 0 ⇒ 只有「零间隔」能触发该分支 ⇒ zeros > 0 在分支内恒真。改成 >= 0 只替换了不可达分支（非有限/负间隔）的文案，返回的 Metric 与原因不变。 | tests/unit/observability-math.test.ts:乱序时间戳会被排序 ⇒ 不产生负间隔（故负间隔分支不可达）—— 这条断言就是为钉住该不可达性而加的（见 mutation-attribution.md §3.4）。 |
+## 3. 账本自检（腐烂必须可见）
+### 3.1 STALE-EQUIVALENT
+> 条目指向的 file:line 当前已无法由同一变异子生成同一变异（行号漂移或文本改写）。
+> 这些条目**不参与剔除**，必须在下一次改动账本时修正 —— 否则账本会悄悄失效。
+无 —— 所有账本条目的 file:line 均可复核。
+### 3.2 被拒条目（缺 reason/proof，不登记）
+无 —— 账本内所有条目字段齐全。
+### 3.3 未生效条目（有效但与存活体不匹配）
+- `src/control-band.ts:38` [comparison]：不在本次 --filter 范围内 / 已不在变异计划中
+- `src/observability.ts:120` [comparison]：不在本次 --filter 范围内 / 已不在变异计划中
+- `src/store.ts:231` [comparison]：不在本次 --filter 范围内 / 已不在变异计划中
+- `src/risk-bayes.ts:147` [comparison]：不在本次 --filter 范围内 / 已不在变异计划中
+## 4. 存活变异体
+已证等价 1 个（已从有意义分母剔除）；未归因 0 个（留在分母，按纪律不剔除）。
+- `src/survival.ts:116` [comparison] 比较方向 > → >=（zeros >= 0） 【已证等价 → 剔除】
+> 未归因 ≠ 已确认测试缺口：其中可能包含「需要 IO 故障注入才能判定」的边界
+> （删除 try/catch 类，见 `.cycles/verify/mutation-attribution.md`），以及「行为可能等价但无断言钉住」的条目。
+> 二者都留在分母里，因为**工具判定不了不等于等价**。
+## 5. 断言杀死明细
 | 文件:行 | 变异子 | 变异 | 杀死者 |
 |---|---|---|---|
-| `src/decision-evidence.ts:57` | comparison | 比较方向 >= → >（i > 0） | `tests/unit/decision-evidence.test.ts` |
-| `src/decision.ts:112` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/resilience-fallback.test.ts` |
-| `src/isolation.ts:172` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/resilience-fallback.test.ts` |
-| `src/lifecycle.ts:435` | comparison | 比较方向 <= → <（changeCount < 1） | `tests/unit/risk-frequency.test.ts` |
-| `src/markov.ts:122` | comparison | 比较方向 > → >=（samples >= 0） | `tests/unit/observability-math.test.ts` |
-| `src/observability.ts:109` | comparison | 比较方向 <= → <（sampleSize < 0） | `tests/unit/observability-math.test.ts` |
-| `src/patch.ts:76` | comparison | 比较方向 < → <=（i <= scanned） | `tests/unit/patch-safety.test.ts` |
-| `src/patch.ts:90` | comparison | 比较方向 < → <=（j <= scanned） | `tests/unit/patch-safety.test.ts` |
-| `src/patch.ts:63` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/resilience-fallback.test.ts` |
-| `src/preventive.ts:116` | comparison | 比较方向 > → >=（sigma >= 0） | `tests/unit/observability-math.test.ts` |
-| `src/preventive.ts:122` | comparison | 比较方向 > → >=（iqr >= 0） | `tests/unit/observability-math.test.ts` |
-| `src/recovery-policy.ts:123` | comparison | 比较方向 < → <=（abnormalSeq <= required） | `tests/unit/recovery-policy.test.ts` |
-| `src/recovery-policy.ts:230` | comparison | 比较方向 >= → >（i > 0） | `tests/unit/hazard-threshold.test.ts` |
-| `src/sentinel.ts:79` | comparison | 比较方向 <= → <（pid < 0） | `tests/unit/core.test.ts` |
-| `src/sentinel.ts:43` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/resilience-fallback.test.ts` |
-| `src/store.ts:166` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/store-lock.test.ts` |
 | `src/survival.ts:113` | comparison | 比较方向 <= → <（g < 0） | `tests/unit/observability-math.test.ts` |
-| `src/tool-render.ts:196` | comparison | 比较方向 > → >=（omitted >= 0） | `tests/host/display-truncation.test.ts` |
-| `src/tool-render.ts:199` | comparison | 比较方向 > → >=（extra >= 0） | `tests/host/display-truncation.test.ts` |
-## 3. 存活变异体（测试缺口）
-- `src/archive.ts:105` [try-catch] 删除 try/catch 兜底（保留 try 体）
-- `src/archive.ts:113` [try-catch] 删除 try/catch 兜底（保留 try 体）
-- `src/control-band.ts:38` [comparison] 比较方向 < → <=（i <= crashTimes）
-- `src/control-band.ts:40` [comparison] 比较方向 > → >=（gap >= 0）
-- `src/decision.ts:125` [try-catch] 删除 try/catch 兜底（保留 try 体）
-- `src/guarded-rows.ts:74` [try-catch] 删除 try/catch 兜底（保留 try 体）
-- `src/guarded-rows.ts:105` [try-catch] 删除 try/catch 兜底（保留 try 体）
-- `src/isolation.ts:184` [try-catch] 删除 try/catch 兜底（保留 try 体）
-- `src/lifecycle.ts:256` [comparison] 比较方向 >= → >（i > 0）
-- `src/markov.ts:166` [comparison] 比较方向 < → <=（i <= a）
-- `src/observability.ts:120` [comparison] 比较方向 < → <=（sampleSize <= 1）
-- `src/patch.ts:127` [try-catch] 删除 try/catch 兜底（保留 try 体）
-- `src/risk-bayes.ts:146` [comparison] 比较方向 <= → <（x < 0）
-- `src/risk-bayes.ts:147` [comparison] 比较方向 < → <=（x <= 1）
-- `src/risk-calibration.ts:266` [comparison] 比较方向 < → <=（i <= events）
-- `src/risk-calibration.ts:293` [comparison] 比较方向 < → <=（i <= events）
-- `src/sentinel.ts:54` [try-catch] 删除 try/catch 兜底（保留 try 体）
-- `src/store.ts:212` [comparison] 比较方向 <= → <（pid < 0）
-- `src/store.ts:688` [comparison] 比较方向 > → >=（limit >= 0）
-- `src/store.ts:191` [try-catch] 删除 try/catch 兜底（保留 try 体）
-- `src/survival.ts:116` [comparison] 比较方向 > → >=（zeros >= 0）
-## 4. 语法杀死明细
+## 6. 语法杀死明细
 > 这些变异体把源码改成了不可解析形态。它们不计入杀灭率，但值得记录 ——
 > 若某类变异子的语法杀死率长期偏高，说明该变异子的文本变换需要收窄。
 无。
-## 5. 无直接测试的源码文件
-- `src/abnormal-boot.ts`
-- `src/boot-notes.ts`
-- `src/change-guard.ts`
-- `src/cooccurrence-store.ts`
-- `src/decision-views.ts`
-- `src/event-watch.ts`
-- `src/observations.ts`
-- `src/official-observe.ts`
-- `src/partition-snapshot.ts`
-- `src/patch-yaml.ts`
-- `src/recovery-actions.ts`
-- `src/self-describe.ts`
-- `src/startup-record.ts`
-- `src/status-view.ts`
-- `src/tool-dispatch.ts`
-- `src/tool-presentation.ts`
-- `src/tool-registration.ts`
-- `src/tool-text.ts`
+## 7. 无直接测试的源码文件
+无。

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { writeFileAtomicSync } from './atomic-sync.js'
 
 /**
  * 项目隔离 —— 让同一个守护插件在多个工作区并存时互不污染。
@@ -179,15 +180,72 @@ export function readPartitionIndex(profileDir: string): PartitionIndex {
   }
 }
 
-/** 写分区索引。 */
+/**
+ * 写分区索引。
+ *
+ * ## 为什么不能只「序列化后 writeFileSync」（v0.15 修复）
+ *
+ * isolation-dev 的跨进程实测：4 个子进程并发
+ * `readPartitionIndex → registerPartition → writePartitionIndex`（每条 boot 都这么做），
+ * 最终索引条目数实测出现过 **4/4、3/4、2/4** —— 丢了工作区引用。
+ * 根因是两件事叠加：
+ * 1. `writeFileSync` 先截断再写（并发读者会看到 0 字节，索引整体读不出）；
+ * 2. 无锁的 read-modify-write（后写者用自己读到的旧快照覆盖前者新增的条目）。
+ *
+ * ## 修法分两层（各自解决一个根因）
+ *
+ * 1. **原子提交**：改用 `writeFileAtomicSync`（临时文件 + rename）⇒ 读者
+ *    永远看到完整的旧索引或完整的新索引，不会看到 0 字节。
+ * 2. **写入前重新合并**：把调用方传入的索引与**落盘的最新索引**按 key 求并集，
+ *    再提交。这把「丢失窗口」从「整个 read-modify-write 周期」压缩到
+ *    「最后一次读取到 rename 之间」的极短区间。
+ *
+ * ## 残留缺陷（诚实登记，不假装已解决）
+ *
+ * 第 2 层只是**缩小**窗口，不是消除竞态：两个进程若在「读最新 → rename」之间
+ * 同时进入，仍可能丢一个条目。真正根治需要跨进程文件锁（`withFileLock` 是
+ * async，而本条调用链在同步的 `apply()` 里，改异步会波及启动路径的同步纪律）。
+ * 已登记为 TD-4：把分区索引改成「每分区一个引用文件 + 读取时合成」的
+ * 无共享结构，从结构上消灭 read-modify-write。
+ */
 export function writePartitionIndex(profileDir: string, index: PartitionIndex): void {
   try {
     const dir = join(profileDir, '.recency-guard')
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, PARTITION_INDEX_FILENAME), JSON.stringify(index, null, 2), 'utf8')
+    const path = join(dir, PARTITION_INDEX_FILENAME)
+
+    // 第 2 层：与落盘的最新索引求并集（以落盘为准的 key 集合 + 本索引的更新）。
+    // 为什么以「落盘最新」为基：本进程的 index 可能是几百毫秒前读的旧快照，
+    // 它缺的条目应由落盘版本补回；而本进程对已有 key 的更新（lastSeenAt/label）
+    // 应当覆盖落盘版本。两者按 key 合并，语义上等价于「乐观合并」。
+    const merged = mergePartitionIndexes(readPartitionIndex(profileDir), index)
+
+    // 第 1 层：原子提交。写失败只降级（索引丢失只损失分区可读性，不影响守护）。
+    writeFileAtomicSync(path, JSON.stringify(merged, null, 2))
   } catch {
     /* best effort: 索引丢失只是失去分区可读性，不影响守护本身 */
   }
+}
+
+/**
+ * 按 key 合并两份索引：`base` 提供键集，`incoming` 覆盖同名键。
+ *
+ * 顺序保持 base 在前、incoming 的新键追加在后 —— 索引是给人看的列表，
+ * 顺序稳定比「按时间重排」更重要（面板不应因为一次并发写而跳动）。
+ */
+function mergePartitionIndexes(base: PartitionIndex, incoming: PartitionIndex): PartitionIndex {
+  const byKey = new Map<string, ProjectPartition>()
+  for (const entry of base.partitions) byKey.set(entry.key, entry)
+  for (const entry of incoming.partitions) byKey.set(entry.key, entry)
+  const ordered: ProjectPartition[] = []
+  const seen = new Set<string>()
+  for (const entry of [...base.partitions, ...incoming.partitions]) {
+    if (seen.has(entry.key)) continue
+    seen.add(entry.key)
+    const merged = byKey.get(entry.key)
+    if (merged !== undefined) ordered.push(merged)
+  }
+  return { schemaVersion: 1, partitions: ordered }
 }
 
 /**
