@@ -36,7 +36,8 @@
     "archives": "归档",
     "markov": "转移矩阵",
     "dataflow": "数据流",
-    "diagnostics": "系统诊断"
+    "diagnostics": "系统诊断",
+    "cooccurrence": "共现验证"
   },
   "stage": {
     "idle": "空闲",
@@ -325,5 +326,19 @@
     "minutesAgo": "{count} 分钟前",
     "hoursAgo": "{count} 小时前",
     "daysAgo": "{count} 天前"
+  },
+  "cooccurrence": {
+    "count": "{count} 个样本",
+    "hint": "验证「官方实验插件活跃」是否预示「非官方插件被判定为嫌疑」—— 只验证，不加权",
+    "samples": "样本数",
+    "active": "活跃",
+    "inactive": "不活跃",
+    "activeRate": "活跃侧命中率",
+    "inactiveRate": "不活跃侧命中率",
+    "delta": "差值",
+    "points": "个百分点",
+    "undefined": "不可判定",
+    "mayWeightYes": "可以据此加权",
+    "mayWeightNo": "不应加权"
   }
 }

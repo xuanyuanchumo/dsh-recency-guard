@@ -1480,6 +1480,7 @@ class Guard {
       observations: this.observations(),
       riskInputs: this.riskInputs(),
       decisionSuspects: this.store.readDecisionSync()?.suspects ?? [],
+      cooccurrence: this.cooccurrenceView(),
       restored: state.restored,
       lastRecoveryVerdict: state.lastRecoveryVerdict,
       autoDisabled: state.autoDisabled.map((d) => ({

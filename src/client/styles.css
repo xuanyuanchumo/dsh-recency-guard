@@ -1902,3 +1902,19 @@
 .rg-tone-bg-neutral {
   opacity: 0.75;
 }
+
+/* ---------- 共现验证卡（v0.13 方向④） ---------- */
+/* 只报「能否加权」，不报加权值：加权需要额外的严格化论证。
+   不可判定显示文字而不是 0%，避免被读成「这类崩溃从不关插件」。 */
+.rg-note {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+}
+.rg-note-ok {
+  color: var(--dsw-alias-brand-primary);
+}
+.rg-note-muted {
+  color: var(--dsw-alias-label-tertiary);
+}

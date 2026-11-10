@@ -66,6 +66,22 @@ export interface PanelSnapshot {
       source?: 'journal' | 'mtime'
     }
   }>
+  /**
+   * 共现验证结论（v0.13 方向④）。
+   *
+   * 面板只报「能不能加权」，不报加权值 —— 加权需要额外的严格化论证。
+   * 各命中率可为 `null`（样本不足 ⇒ 不可判定，绝不当作 0）。
+   */
+  cooccurrence: {
+    samples: number
+    activeSamples: number
+    inactiveSamples: number
+    activeHitRate: number | null
+    inactiveHitRate: number | null
+    hitRateDelta: number | null
+    label: string
+    mayWeight: { allowed: boolean; reason: string }
+  }
   /** 能力矩阵摘要。 */
   capability: {
     total: number
@@ -200,6 +216,17 @@ export interface SnapshotInput {
       source?: 'journal' | 'mtime'
     }
   }>
+  /** 共现验证输入（v0.13 方向④；由调用方从共现存储读出）。 */
+  cooccurrence: {
+    samples: number
+    activeSamples: number
+    inactiveSamples: number
+    activeHitRate: number | null
+    inactiveHitRate: number | null
+    hitRateDelta: number | null
+    label: string
+    mayWeight: { allowed: boolean; reason: string }
+  }
   restored: readonly string[]
   autoDisabled: Array<{ name: string; reason: string; crashSeq: number; disabledAt: string }>
   partitions: PartitionIndex
@@ -284,6 +311,7 @@ export function buildPanelSnapshot(input: SnapshotInput, now = Date.now()): Pane
     metrics,
     risks,
     decisionSuspects: [...input.decisionSuspects],
+    cooccurrence: { ...input.cooccurrence },
     backupPolicy: input.backupPolicy,
     lastRecoveryVerdict: input.lastRecoveryVerdict,
     capability: {

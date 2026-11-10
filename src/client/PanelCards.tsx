@@ -640,6 +640,46 @@ export function DecisionEvidenceBody({ snapshot }: { snapshot: PanelSnapshot }):
   )
 }
 
+/* ---------- 共现验证（v0.13 方向④） ---------- */
+
+/**
+ * 共现验证卡片 —— 回答「官方实验插件的活跃是否预示非官方插件出问题」。
+ *
+ * 这张卡的存在本身就是一种纪律：项目**先验证假设再行动**。所以它显示
+ * 「样本数 / 两侧命中率 / 差值 / 能否加权」，而不是显示一个加权值 ——
+ * 加权需要额外的严格化论证，当前还没有。
+ *
+ * 诚实边界：任一侧样本不足 ⇒ 命中率显示「不可判定」而不是 0%
+ * （0% 会被读成「这类崩溃从不关插件」，那是伪造的证据）。
+ */
+export function CooccurrenceBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+  const c = snapshot.cooccurrence
+  const rate = (value: number | null): string => (value === null ? t('cooccurrence.undefined') : `${(value * 100).toFixed(1)}%`)
+  const delta = c.hitRateDelta === null ? t('cooccurrence.undefined') : `${(c.hitRateDelta * 100).toFixed(1)} ${t('cooccurrence.points')}`
+  return (
+    <>
+      <p className="rg-hint">{t('cooccurrence.hint')}</p>
+      <dl className="rg-diagnostics">
+        <dt>{t('cooccurrence.samples')}</dt>
+        <dd>
+          {c.samples}（{t('cooccurrence.active')} {c.activeSamples} / {t('cooccurrence.inactive')} {c.inactiveSamples}）
+        </dd>
+        <dt>{t('cooccurrence.activeRate')}</dt>
+        <dd>{rate(c.activeHitRate)}</dd>
+        <dt>{t('cooccurrence.inactiveRate')}</dt>
+        <dd>{rate(c.inactiveHitRate)}</dd>
+        <dt>{t('cooccurrence.delta')}</dt>
+        <dd>{delta}</dd>
+      </dl>
+      <p className="rg-note">{c.label}</p>
+      <p className={`rg-note rg-note-${c.mayWeight.allowed ? 'ok' : 'muted'}`}>
+        {c.mayWeight.allowed ? t('cooccurrence.mayWeightYes') : t('cooccurrence.mayWeightNo')}
+        {c.mayWeight.reason !== '' && ` · ${c.mayWeight.reason}`}
+      </p>
+    </>
+  )
+}
+
 /* ---------- 项目隔离 ---------- */
 
 export function PartitionsBody({

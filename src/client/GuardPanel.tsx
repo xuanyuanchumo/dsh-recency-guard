@@ -7,6 +7,7 @@ import {
   BackupPolicyBody,
   CapabilityBody,
   Card,
+  CooccurrenceBody,
   DecisionEvidenceBody,
   DecisionsBody,
   EventsBody,
@@ -407,6 +408,15 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
               onToggle={() => toggleCollapse('decision-evidence')}
             >
               <DecisionEvidenceBody snapshot={snapshot} />
+            </Card>
+            <Card
+              id="cooccurrence"
+              title={t('sections.cooccurrence')}
+              hint={t('cooccurrence.count', { count: snapshot.cooccurrence.samples })}
+              collapsed={collapsed.has('cooccurrence')}
+              onToggle={() => toggleCollapse('cooccurrence')}
+            >
+              <CooccurrenceBody snapshot={snapshot} />
             </Card>
             <Card
               id="capabilities"

@@ -36,7 +36,8 @@
     "archives": "Archives",
     "markov": "Transition matrix",
     "dataflow": "Data flow",
-    "diagnostics": "Diagnostics"
+    "diagnostics": "Diagnostics",
+    "cooccurrence": "Co-occurrence"
   },
   "stage": {
     "idle": "idle",
@@ -325,5 +326,19 @@
     "minutesAgo": "{count} min ago",
     "hoursAgo": "{count} h ago",
     "daysAgo": "{count} d ago"
+  },
+  "cooccurrence": {
+    "count": "{count} samples",
+    "hint": "Checks whether official-experimental activity predicts non-official suspects — verification only, no weighting",
+    "samples": "Samples",
+    "active": "active",
+    "inactive": "inactive",
+    "activeRate": "Active hit rate",
+    "inactiveRate": "Inactive hit rate",
+    "delta": "Delta",
+    "points": "pp",
+    "undefined": "undetermined",
+    "mayWeightYes": "Weighting is supported",
+    "mayWeightNo": "Weighting is not supported"
   }
 }
