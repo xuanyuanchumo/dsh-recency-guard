@@ -1,6 +1,8 @@
 import { useState, type ReactElement } from 'react'
 import { t } from './i18n.ts'
 import type { PanelSnapshot } from '../../src/snapshot.ts'
+import type { GraphData } from '../../src/graph-data.ts'
+import { analyzeStructure, structureInsights, type NodeDegree } from './graph-analysis.ts'
 import { dataFlowStages, diagnosticsRows, markovView, stageLabelOf } from './panel-model.ts'
 
 /**
@@ -13,6 +15,57 @@ import { dataFlowStages, diagnosticsRows, markovView, stageLabelOf } from './pan
  * 诚实边界：markov.samples === 0 时显示「不可判定」空态（不画空矩阵）；
  * 诊断行的链接字段为 null 时渲染纯文本（绝不放死链）。
  */
+
+/* ---------- 图谱结构洞察条（v0.13） ---------- */
+
+/**
+ * 图谱结构条 —— 把「图能画」升级为「结构能读」。
+ *
+ * 三个可点击的结构事实（点击即定位到该节点）：
+ * - 枢纽：总度数最高且进出都非零 —— 动它波及最多；
+ * - 只生产不消费：可能是过度生产（白盒可见的浪费）；
+ * - 只消费不生产：可能是消费断链（功能不连通）。
+ *
+ * 诚实边界：空图不画这一条（不伪造「0 个枢纽是健康」的结论）。
+ */
+export function GraphStructureBar({ graph, onLocate }: { graph: GraphData; onLocate: (id: string) => void }): ReactElement | null {
+  const structure = analyzeStructure(graph.nodes, graph.edges)
+  if (structure.empty) return null
+  const insights = structureInsights(structure)
+  const chip = (key: string, list: NodeDegree[], tone: string): ReactElement | null => {
+    if (list.length === 0) return null
+    return (
+      <span className={`rg-struct-chip rg-tone-bg-${tone}`} key={key}>
+        <span className="rg-struct-label">{t(key)}</span>
+        <span className="rg-struct-count">{list.length}</span>
+        {list.slice(0, 2).map((node) => (
+          <button
+            type="button"
+            key={node.id}
+            className="rg-link rg-struct-node"
+            onClick={() => onLocate(node.id)}
+            title={`${node.label} · 进 ${node.inDegree} / 出 ${node.outDegree}`}
+          >
+            {node.label}
+          </button>
+        ))}
+        {list.length > 2 && <span className="rg-struct-more">{t('graphStruct.more', { count: list.length - 2 })}</span>}
+      </span>
+    )
+  }
+  return (
+    <div className="rg-graph-structure" role="group" aria-label={t('graphStruct.title')}>
+      <span className="rg-struct-heading">{t('graphStruct.title')}</span>
+      {chip('graphStruct.hubs', structure.hubs, 'info')}
+      {chip('graphStruct.sources', structure.sources, 'warn')}
+      {chip('graphStruct.sinks', structure.sinks, 'error')}
+      {chip('graphStruct.isolated', structure.isolated, 'neutral')}
+      <span className="rg-struct-summary">{t('graphStruct.edges', { count: structure.edgeCount })}</span>
+      {/* 洞察文本作为可访问性第二通道：色块之外还有一个可读句子。 */}
+      <span className="rg-struct-detail">{insights.join(' · ')}</span>
+    </div>
+  )
+}
 
 /* ---------- 转移矩阵 ---------- */
 

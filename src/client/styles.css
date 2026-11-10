@@ -1836,3 +1836,69 @@
     transition: none;
   }
 }
+
+/* ---------- 图谱结构洞察条（v0.13） ---------- */
+/* 把「能画」升级为「能读结构」：一条横向事实条，每个 chip 可点即定位。
+   色块之外还有一段可读句子（rg-struct-detail），保证灰度/色盲下信息不丢。 */
+.rg-graph-structure {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-m, 8px);
+  background: var(--dsw-alias-bg-layer-1, transparent);
+  font-size: 11px;
+}
+.rg-struct-heading {
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+.rg-struct-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-base);
+}
+.rg-struct-label {
+  color: var(--dsw-alias-label-secondary);
+}
+.rg-struct-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+.rg-struct-node {
+  max-width: 12em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rg-struct-more,
+.rg-struct-summary,
+.rg-struct-detail {
+  color: var(--dsw-alias-label-tertiary);
+}
+.rg-struct-detail {
+  flex-basis: 100%;
+  font-size: 10px;
+  line-height: 1.5;
+}
+/* chip 的语义底色（用极低不透明度，避免抢走节点主色）。 */
+.rg-tone-bg-info {
+  border-color: var(--dsw-alias-brand-primary);
+}
+.rg-tone-bg-warn {
+  border-color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-brand-primary));
+}
+.rg-tone-bg-error {
+  border-color: var(--dsw-alias-state-error-primary);
+}
+.rg-tone-bg-neutral {
+  opacity: 0.75;
+}

@@ -18,7 +18,7 @@ import {
   archiveEntriesOf,
   type ArchiveEntry,
 } from './PanelCards.tsx'
-import { DataFlowBody, DiagnosticsBody, MarkovBody } from './InsightCards.tsx'
+import { DataFlowBody, DiagnosticsBody, GraphStructureBar, MarkovBody } from './InsightCards.tsx'
 import { panelForm, partitionView, shortenPath, type PanelForm } from './panel-model.ts'
 import { VIEWPORT_HEIGHT_NARROW, VIEWPORT_HEIGHT_WIDE } from './graph-model.ts'
 import type { PanelSnapshot } from '../../src/snapshot.ts'
@@ -497,13 +497,16 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
             {graph === null ? (
               <p className="rg-empty">{t('graph.unavailable')}</p>
             ) : (
-              <GuardGraph
-                graph={graph}
-                height={graphHeight}
-                focusId={selectedNodeId}
-                onFocusChange={onGraphFocus}
-                locateRequest={locateRequest}
-              />
+              <>
+                <GraphStructureBar graph={graph} onLocate={locateInGraph} />
+                <GuardGraph
+                  graph={graph}
+                  height={graphHeight}
+                  focusId={selectedNodeId}
+                  onFocusChange={onGraphFocus}
+                  locateRequest={locateRequest}
+                />
+              </>
             )}
           </section>
 

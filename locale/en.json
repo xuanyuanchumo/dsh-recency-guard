@@ -157,6 +157,15 @@
       "note": "note"
     }
   },
+  "graphStruct": {
+    "title": "Structure",
+    "hubs": "Hubs",
+    "sources": "Produces only",
+    "sinks": "Consumes only",
+    "isolated": "Isolated",
+    "edges": "{count} edges",
+    "more": "+{count} more"
+  },
   "decisionEvidence": {
     "empty": "No suspect list yet (no crash-recovery decision has been made)",
     "legacy": "This decision predates factor recording — showing no fake zero values",

@@ -157,6 +157,15 @@
       "note": "备注"
     }
   },
+  "graphStruct": {
+    "title": "结构洞察",
+    "hubs": "枢纽",
+    "sources": "只生产",
+    "sinks": "只消费",
+    "isolated": "孤立",
+    "edges": "{count} 条边",
+    "more": "还有 {count} 个"
+  },
   "decisionEvidence": {
     "empty": "尚无嫌疑名单（未发生过崩溃恢复决策）",
     "legacy": "该决策来自旧版本，未记录因子分解 —— 不显示假的零值",
