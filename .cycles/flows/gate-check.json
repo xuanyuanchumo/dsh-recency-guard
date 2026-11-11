@@ -121,8 +121,20 @@
       "from": "RUNNING",
       "to": "FAILED",
       "at": "2026-11-11T11:12:49.459Z"
+    },
+    {
+      "trigger": "run",
+      "from": "FAILED",
+      "to": "RUNNING",
+      "at": "2026-11-11T11:28:27.721Z"
+    },
+    {
+      "trigger": "any-fail",
+      "from": "RUNNING",
+      "to": "FAILED",
+      "at": "2026-11-11T11:28:27.721Z"
     }
   ],
-  "updatedAt": "2026-11-11T11:12:49.459Z",
+  "updatedAt": "2026-11-11T11:28:27.721Z",
   "ledgerHead": null
 }
