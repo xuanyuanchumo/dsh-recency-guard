@@ -3,12 +3,19 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSy
 import { isAbsolute, join, resolve } from 'node:path'
 import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
 import { writeFileAtomicSync } from '../core/atomic-sync.ts'
+import { parseJournalLines, trimJournalFile } from './journal-io.ts'
+import { SCHEMA_VERSION, parseDecisionText, parseStateText, unsupportedVersionDetail } from './schema-version.ts'
+
+// 再导出：历史 import 站点（tests、index）保持稳定；本文件自己也用这两个常量。
+export { JOURNAL_MAX_LINES } from './journal-io.ts'
+export { SCHEMA_VERSION } from './schema-version.ts'
 import type { DecisionSuspect } from '../guard/decision.ts'
 // 声明式冲突 finding 的形状只在 `conflict-metadata.ts` 定义一次：
 // 决策文件、state、status 投影三处若各写一份，迟早漂移出「字段名对不上」。
 import type { ConflictFinding } from '../guard/conflict-metadata.ts'
 import { readCooccurrenceSync, writeCooccurrenceSync, readObservation, readObservationSync, writeObservation } from '../observe/cooccurrence-store.ts'
 import { cleanStaleLocks, isLockTimeout } from './lock-hygiene.ts'
+import { legacyUnsafeName, pathSafeName } from '../core/path-safe.ts'
 
 /**
  * Journal / state store for dsh-recency-guard.
@@ -24,16 +31,8 @@ import { cleanStaleLocks, isLockTimeout } from './lock-hygiene.ts'
 
 export const STATE_DIRNAME = '.recency-guard'
 
-/**
- * journal 行数上限（超过后丢弃最旧的行）。
- *
- * 为什么要封顶而不是无限追加：journal 是 append-only 的崩溃证据链，
- * 但「无限增长」在长跑 profile 上会把读盘成本（每次 append 都要整读整写）
- * 与快照投影一起拖垮。1000 行足够覆盖最近若干天的安装/崩溃事件历史；
- * 丢弃是**静默**的，因此读到的样本永远要当成「窗口内样本」而非全量
- * —— 这正是统计层用 `sampleSize` 白盒标注样本量的原因。
- */
-export const JOURNAL_MAX_LINES = 1000
+// journal 行数上限的定义在 journal-io.ts（`JOURNAL_MAX_LINES`，已在文件头再导出）。
+// 这里保留原有文档位置的原因：它是**数据容器**的容量事实，读者会先在 store 找它。
 
 export type JournalKind =
   | 'install'
@@ -158,6 +157,25 @@ export interface GuardState {
    * 不新造一套策略。
    */
   abnormalExitSeq?: number
+  /**
+   * 状态文件的 schema 版本（T15-03）。
+   *
+   * 选 `schemaVersion` 而不是更短的 `v`：与 `cooccurrence-store.ts` 的
+   * `schemaVersion: 1`、归档 manifest 的 `schemaVersion: 1` 统一口径 ——
+   * 三个数据文件用同一个字段名，读的人不必记「哪个文件用哪个写法」。
+   * 代价只是每次崩溃多写 17 字节，相对于「版本判据统一」不值一提。
+   *
+   * 省略 = v1（向后兼容：v0.16 及更早写出的文件没有这个字段）。
+   */
+  schemaVersion?: 1
+  /**
+   * 读到**未知版本**时标记（T15-03）。
+   *
+   * 只有读取端降级出的安全空态会带它；正常读盘恒为 undefined。
+   * 为什么必须有：未知版本意味着「这个文件是新版/被改坏」，
+   * 静默重建会把损坏掩盖成「干净启动」，而这正是 TD 记录要防的。
+   */
+  corrupt?: boolean
 }
 
 export interface PrebootDecision {
@@ -191,7 +209,16 @@ export interface PrebootDecision {
    * 它是数据面事实：status / 工具 / 面板 / rescue 都要能读到，不许静默吞掉。
    */
   unresolved?: ConflictFinding[]
+  /**
+   * 决策文件的 schema 版本（T15-03；省略 = v1，向后兼容）。
+   *
+   * 与 `state.json` / 归档 manifest / cooccurrence 同口径（`schemaVersion`）。
+   * 决策文件是「下次启动拦谁」的唯一输入：读到未知版本时**绝不能**按
+   * 猜测解释 `disable`（可能语义已变），必须降级为空决策并留痕。
+   */
+  schemaVersion?: 1
 }
+
 
 export function emptyState(): GuardState {
   return { bootMarker: null, crashSeq: 0, autoDisabled: [], stabilized: false, restored: [] }
@@ -223,10 +250,33 @@ export class Store {
   }
 
   /**
+   * 读写降级记录（T15-03）。
+   *
+   * - `state` / `decision`：读到未知 schemaVersion 即置 true（安全空态）；
+   * - 供 status / 面板投影成 `corrupt` 字段，让「文件坏了」可被看见，
+   *   而不是只能从「怎么突然什么都没了」反推。
+   */
+  readonly corruption = { state: false, decision: false }
+  /** 已知损坏的文件路径（面板/工具展示用，去重）。 */
+  private readonly corruptionPaths = new Set<string>()
+  /** 已写过 journal 的版本组合：避免每次读盘都追加同一条 note（快照每 5s 读一次）。 */
+  private readonly reportedCorruption = new Set<string>()
+
+  /** 可注入的文本读（T15-02）：只为测试能覆盖 `trimJournalIfNeeded` 的失败分支。 */
+  private readonly readText: (path: string) => Promise<string>
+
+  /**
    * @param profileDir profile 目录
    * @param partitionKey 分区键；缺省时用 `default`（单项目 profile）。
+   * @param backupRootOverride 备份根覆盖（环境变量/配置）。
+   * @param io 可注入 IO（**默认走真实 fs，行为逐位不变**；仅供测试注入失败）。
    */
-  constructor(profileDir: string, partitionKey = 'default', backupRootOverride?: string) {
+  constructor(
+    profileDir: string,
+    partitionKey = 'default',
+    backupRootOverride?: string,
+    io?: { readFile?: (path: string) => Promise<string> },
+  ) {
     this.rootDir = join(profileDir, STATE_DIRNAME)
     this.dir = join(this.rootDir, 'projects', partitionKey)
     this.journalPath = join(this.dir, 'journal.jsonl')
@@ -234,6 +284,31 @@ export class Store {
     this.statePath = join(this.dir, 'state.json')
     this.decisionPath = join(this.dir, 'decision.json')
     this.backupsDir = resolveBackupsDir(backupRootOverride, this.dir, partitionKey)
+    this.readText = io?.readFile ?? ((path) => readFile(path, 'utf8'))
+  }
+
+  /** 损坏事实的快照（只读投影：status / 面板用）。 */
+  corruptionReport(): { state: boolean; decision: boolean; files: string[] } {
+    return { state: this.corruption.state, decision: this.corruption.decision, files: [...this.corruptionPaths] }
+  }
+
+  /**
+   * 记录一次「未知 schemaVersion」降级：置标记 + 首次写 journal note。
+   *
+   * 为什么去重：快照每 5 秒读一次 state，若每次都写一条 note，一天能写
+   * 一万条同一事实的日志，把真正的证据冲掉。每个 (文件, 版本) 只报一次。
+   */
+  private noteCorruption(kind: 'state' | 'decision', file: string, version: unknown): void {
+    this.corruption[kind] = true
+    this.corruptionPaths.add(file)
+    const key = `${kind}:${String(version)}`
+    if (this.reportedCorruption.has(key)) return
+    this.reportedCorruption.add(key)
+    this.appendSync({
+      kind: 'note',
+      detail: unsupportedVersionDetail(file, version),
+      degraded: true,
+    })
   }
 
   async init(): Promise<void> {
@@ -294,22 +369,8 @@ export class Store {
    * 而裁剪要读全文件再原子替换。崩溃路径改用纯追加，把上限交给这里。
    */
   private async trimJournalIfNeeded(): Promise<void> {
-    try {
-      if (!existsSync(this.journalPath)) return
-      if (journalLines(await readFile(this.journalPath, 'utf8')).length <= JOURNAL_MAX_LINES) return
-      await withFileLock(
-        this.journalPath,
-        async () => {
-          // 锁内重读：锁外那份可能已被别的进程追加过，按最新内容裁剪。
-          const latest = journalLines(await readFile(this.journalPath, 'utf8'))
-          if (latest.length <= JOURNAL_MAX_LINES) return
-          await writeFileAtomic(this.journalPath, serializeJournal(latest), { mode: 0o644 })
-        },
-        { waitMs: 3000 },
-      )
-    } catch {
-      /* best effort：裁剪失败只影响文件大小，不影响证据完整性 */
-    }
+    // 实现见 journal-io.ts：可注入读（默认真实 fs）只为让失败分支可测。
+    await trimJournalFile(this.journalPath, this.readText)
   }
 
   /**
@@ -421,7 +482,7 @@ export class Store {
       // 崩溃路径读到这里的人正是「下一次启动的恢复判定」—— 读到空 state
       // 等于把崩溃证据清零，崩溃循环立刻失去升级依据。
       // 临时文件 + rename 保持同步语义（不加 await），只把窗口消灭掉。
-      writeFileAtomicSync(this.statePath, JSON.stringify(state, null, 2))
+      writeFileAtomicSync(this.statePath, JSON.stringify({ ...state, schemaVersion: SCHEMA_VERSION }, null, 2))
     } catch {
       /* best effort */
     }
@@ -442,15 +503,33 @@ export class Store {
   async readState(): Promise<GuardState> {
     if (!existsSync(this.statePath)) return emptyState()
     try {
-      const parsed = JSON.parse(await readFile(this.statePath, 'utf8'))
-      return { ...emptyState(), ...parsed }
+      return this.parseState(await this.readText(this.statePath))
     } catch {
       return emptyState()
     }
   }
 
   async writeState(state: GuardState): Promise<void> {
-    await writeFileAtomic(this.statePath, JSON.stringify(state, null, 2), { mode: 0o644 })
+    await writeFileAtomic(this.statePath, JSON.stringify({ ...state, schemaVersion: SCHEMA_VERSION }, null, 2), { mode: 0o644 })
+  }
+
+  /**
+   * 解析 state 文本（v1 宽容读；未知版本安全降级）。
+   *
+   * 三条路径（T15-03 判据）：
+   * - `schemaVersion === 1` ⇒ 正常；
+   * - **缺失** ⇒ 按 v1 读（v0.16 及更早的文件没有该字段，老 profile 必须能读）；
+   * - **其它值** ⇒ 返回 `{...emptyState(), corrupt:true}`（**不覆盖文件**）、
+   *   写一条 degraded journal note。为什么不能「尽力解释」：`crashSeq` /
+   *   `autoDisabled` 的语义可能在新版本里已变，按旧语义解释会做出错误恢复决策。
+   */
+  private parseState(text: string): GuardState {
+    const parsed = parseStateText(text)
+    if (parsed.corruptVersion !== undefined) {
+      this.noteCorruption('state', 'state.json', parsed.corruptVersion)
+      return { ...emptyState(), corrupt: true }
+    }
+    return parsed.state ?? emptyState()
   }
 
   /** Serialized read-modify-write across processes. */
@@ -499,7 +578,7 @@ export class Store {
         crashedRun: true,
       }
       const tmp = `${this.statePath}.tmp`
-      writeFileSync(tmp, JSON.stringify(next, null, 2), 'utf8')
+      writeFileSync(tmp, JSON.stringify({ ...next, schemaVersion: SCHEMA_VERSION }, null, 2), 'utf8')
       renameSync(tmp, this.statePath)
     } catch {
       /* best effort: without the marker the next boot simply starts fresh */
@@ -510,9 +589,25 @@ export class Store {
   readStateSync(): GuardState {
     try {
       if (!existsSync(this.statePath)) return emptyState()
-      return { ...emptyState(), ...JSON.parse(readFileSync(this.statePath, 'utf8')) }
+      return this.parseState(readFileSync(this.statePath, 'utf8'))
     } catch {
       return emptyState()
+    }
+  }
+
+  /** Read the decision file synchronously（v1 宽容读；未知版本 ⇒ null + 留痕）。 */
+  readDecisionSync(): PrebootDecision | null {
+    try {
+      if (!existsSync(this.decisionPath)) return null
+      const parsed = parseDecisionText(readFileSync(this.decisionPath, 'utf8'))
+      if (parsed.corruptVersion !== undefined) {
+        // 不覆盖、不解释：`disable` 的语义可能已变，按旧语义拦人会拦错人。
+        this.noteCorruption('decision', 'decision.json', parsed.corruptVersion)
+        return null
+      }
+      return parsed.decision ?? null
+    } catch {
+      return null
     }
   }
 
@@ -531,7 +626,7 @@ export class Store {
       // 同 writeStateSync：崩溃路径保持同步语义，但改为原子提交。
       // 这里是**最不能撕**的一个文件：守护行的 `disabled` 表达式在
       // import 模块之前读它，读到半个 JSON ⇒ catch ⇒ 放行 ⇒ 崩溃重演。
-      writeFileAtomicSync(this.decisionPath, JSON.stringify(decision, null, 2))
+      writeFileAtomicSync(this.decisionPath, JSON.stringify({ ...decision, schemaVersion: SCHEMA_VERSION }, null, 2))
     } catch {
       /* best effort */
     }
@@ -575,7 +670,7 @@ export class Store {
         // 锁内重读：锁外读到的快照可能已被别的进程改过。
         const current = this.readDecisionSync()
         const next = mutate(current)
-        await writeFileAtomic(this.decisionPath, JSON.stringify(next, null, 2), { mode: 0o644 })
+        await writeFileAtomic(this.decisionPath, JSON.stringify({ ...next, schemaVersion: SCHEMA_VERSION }, null, 2), { mode: 0o644 })
         return next
       },
       { waitMs: 3000 },
@@ -583,19 +678,12 @@ export class Store {
   }
 
   /** Read the decision file synchronously. */
-  readDecisionSync(): PrebootDecision | null {
-    try {
-      if (!existsSync(this.decisionPath)) return null
-      return JSON.parse(readFileSync(this.decisionPath, 'utf8')) as PrebootDecision
-    } catch {
-      return null
-    }
-  }
+  // 实现集中在 state 段落（`readDecisionSync` 的 v1/未知版本判据与 state 同源）。
 
   // ---------- config backups ----------
 
   async writeBackup(bundle: string, config: unknown): Promise<string> {
-    const file = join(this.backupsDir, `${sanitize(bundle)}.json`)
+    const file = join(this.backupsDir, `${pathSafeName(bundle)}.json`)
     await writeFileAtomic(
       file,
       JSON.stringify({ bundle, savedAt: new Date().toISOString(), config }, null, 2),
@@ -632,10 +720,10 @@ export class Store {
     options: { retain?: number } = {},
   ): Promise<string | null> {
     try {
-      const dir = join(this.backupsDir, 'versions', sanitize(bundle))
+      const dir = join(this.backupsDir, 'versions', pathSafeName(bundle))
       await mkdir(dir, { recursive: true })
       const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-      const file = join(dir, `${sanitize(version) || 'unknown'}@${stamp}.json`)
+      const file = join(dir, `${pathSafeName(version) || 'unknown'}@${stamp}.json`)
       await writeFileAtomic(
         file,
         JSON.stringify({ bundle, version, savedAt: new Date().toISOString(), config }, null, 2),
@@ -650,7 +738,7 @@ export class Store {
 
   /** 一个插件的时间线备份清单（旧 → 新），供工具与面板对账。 */
   async listVersionedBackups(bundle: string): Promise<Array<{ file: string; version: string; savedAt: string }>> {
-    const dir = join(this.backupsDir, 'versions', sanitize(bundle))
+    const dir = join(this.backupsDir, 'versions', pathSafeName(bundle))
     if (!existsSync(dir)) return []
     let files: string[]
     try {
@@ -713,13 +801,18 @@ export class Store {
   }
 
   async readBackup(bundle: string): Promise<{ bundle: string; savedAt: string; config: unknown } | null> {
-    const file = join(this.backupsDir, `${sanitize(bundle)}.json`)
-    if (!existsSync(file)) return null
-    try {
-      return JSON.parse(await readFile(file, 'utf8'))
-    } catch {
-      return null
+    // 新命名优先；再回退到旧版（不安全）投影写出的位置 —— 只读兼容，
+    // 让升级后仍能取回作用域包名的存量备份。
+    const candidates = [join(this.backupsDir, `${pathSafeName(bundle)}.json`), join(this.backupsDir, `${legacyUnsafeName(bundle)}.json`)]
+    for (const file of candidates) {
+      if (!existsSync(file)) continue
+      try {
+        return JSON.parse(await readFile(file, 'utf8'))
+      } catch {
+        /* 试下一个候选：损坏的新文件不该让旧位置的可用备份被忽略 */
+      }
     }
+    return null
   }
 
   async listBackups(): Promise<string[]> {
@@ -729,41 +822,25 @@ export class Store {
   }
 }
 
-/** 切分 journal 行（丢掉空行）。 */
-function journalLines(raw: string): string[] {
-  return raw ? raw.split('\n').filter(Boolean) : []
-}
-
-/** 序列化 journal：先封顶（保留最后 JOURNAL_MAX_LINES 行）再拼回。 */
-function serializeJournal(lines: readonly string[]): string {
-  return `${lines.slice(-JOURNAL_MAX_LINES).join('\n')}\n`
-}
-
 /**
- * 解析 journal 行，容忍崩溃时写坏的尾部半行。
+ * 文件名安全的名称投影（备份文件名 / 时间线目录用）。
  *
- * 为什么容忍而不是报错：崩溃路径上的写可能被进程死亡截断，让一行残缺的
- * JSON 使整份 journal 不可读，等于把守护者自己的证据链也弄丢了。
- * `limit <= 0` 返回空数组（「读 0 行」就是一行都不读；旧实现里
- * `slice(-0)` 会返回全部行，是个静默的语义反转）。
+ * ## 与 `cooccurrence-store.ts` 的 `sanitizeName` 是同一缺陷的两份拷贝
+ *
+ * 旧实现 `[^A-Za-z0-9._@/-]` 的**白名单包含 `/` 且不折叠 `..`**：
+ * `pathSafeName('../x')` 仍是 `../x`，`join(backupsDir, '../x.json')` 会跳出
+ * 备份目录（`..` 两个点都是白名单字符，正则不可能拦住组合语义）。
+ * 作用域包名 `@scope/pkg` 也会被当成分隔符建出子目录，而读取端按文件路径
+ * 找 ⇒ ENOENT（T15 实测）。
+ *
+ * 修法与 `sanitizeName` 完全一致，并由 `tests/unit/path-sanitize.test.ts`
+ * 的**跨实现对拍**钉住两份不漂移。
+ *
+ * 存量兼容：旧版本可能已经把作用域包写成了嵌套目录，`readBackup` 用
+ * `legacySanitize` 做只读回退（**只读，绝不再按旧规则写**）。
  */
-function parseJournalLines(raw: string, limit: number): JournalRecord[] {
-  const lines = journalLines(raw)
-  const take = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), lines.length) : 0
-  const out: JournalRecord[] = []
-  for (const line of lines.slice(lines.length - take)) {
-    try {
-      out.push(JSON.parse(line))
-    } catch {
-      /* skip a torn tail line from a crash mid-write */
-    }
-  }
-  return out
-}
 
-function sanitize(name: string): string {
-  return name.replace(/[^A-Za-z0-9._@/-]/g, '_')
-}
+
 
 /**
  * 解析备份根目录。

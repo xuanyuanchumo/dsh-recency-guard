@@ -160,8 +160,26 @@ function multiply(pi: readonly number[], rows: readonly MarkovRow[]): number[] {
   })
 }
 
-/** L∞ 距离（逐分量最大绝对差）。 */
-function infinityNorm(a: readonly number[], b: readonly number[]): number {
+/**
+ * L∞ 距离（逐分量最大绝对差）。
+ *
+ * ## 为什么导出（T15-02 未归因清零）
+ *
+ * 它原本是私有函数，而生产调用点**恒**传等长向量（两处都由
+ * `MARKOV_STAGES.map(...)` 产生）⇒ 外部永远观察不到长度不等的行为，
+ * 针对 `i < a.length` 的变异体因此在池里**永不**被杀（不可达代码）。
+ * 按纪律：不可达代码**不许**补假测试、**不许**进等价账本，要显式转成
+ * 可观测契约。导出后，下面这段「定义域外的实际行为」成为可断言事实，
+ * 而不再是没人知道的死分支。
+ *
+ * ## 定义域（调用方必须保证）
+ *
+ * 幂法里两个入参来自同一个 `MARKOV_STAGES.map`，长度恒等于阶段数。
+ * 长度不等时本函数**不抛**，按 `a.length` 逐分量比较、
+ * 缺失分量按 0 计 —— 这个兜底是为了「观测设施不拖垮守护流程」，
+ * **不是**允许调用方传不等长向量。
+ */
+export function infinityNorm(a: readonly number[], b: readonly number[]): number {
   let max = 0
   for (let i = 0; i < a.length; i += 1) max = Math.max(max, Math.abs((a[i] ?? 0) - (b[i] ?? 0)))
   return max

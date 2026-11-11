@@ -24,6 +24,7 @@ import type { GuardState } from '../data/store.ts'
 import type { RecencyEntry } from '../risk/recency.ts'
 import type { CooccurrenceView, DecisionEvidenceView } from '../guard/decision-views.ts'
 import type { ConflictFinding } from '../guard/conflict-metadata.ts'
+import { emptyPreventive, type PreventiveView } from './preventive-view.ts'
 
 /**
  * 生命周期视图（由 StageMachine 投影而来）。
@@ -90,6 +91,21 @@ export interface StatusInput {
    * 和「上次想解决但解决不了」需要不同的处置。
    */
   unresolved?: readonly ConflictFinding[]
+  /**
+   * RQ3 预防性读数（T15-01）。
+   *
+   * 与面板快照的 `preventive` **同一形状、同一投影函数**
+   * （`preventive-view.ts`）：两条消费路径各算一遍必然漂移，而「命令窗口
+   * 说受控、面板说预警」比只有一条读数更糟。
+   */
+  preventive?: PreventiveView
+  /**
+   * schema 版本降级事实（T15-03）。
+   *
+   * 为什么必须上屏：未知版本时守护会退到安全空态（看起来像「干净启动」），
+   * 若不同时显示「文件版本不受支持」，用户会把数据损坏误读成系统正常。
+   */
+  corruption?: { state: boolean; decision: boolean; files?: string[] }
 }
 
 /** 单个插件的贝叶斯读数投影（命令窗口形态）。 */
@@ -177,6 +193,10 @@ export function buildStatusOutput(input: StatusInput): Record<string, unknown> {
     // 「已经试过但治不了」混成一件事，用户无法判断下一步该做什么。
     conflicts: input.conflicts ?? [],
     unresolved: input.unresolved ?? [],
+    // RQ3 预防性读数（T15-01）：缺省 ⇒ 空读数（不可判定，不是「无预警」）。
+    preventive: input.preventive ?? emptyPreventive(),
+    // T15-03：未知 schemaVersion 的降级必须与状态同屏，否则会被读成「干净启动」。
+    corrupt: input.corruption ?? { state: false, decision: false },
     lifecycle: {
       stage: lifecycle.stage,
       stabilityScore: lifecycle.stabilityScore,

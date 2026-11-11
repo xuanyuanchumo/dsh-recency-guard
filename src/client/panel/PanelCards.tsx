@@ -2,6 +2,7 @@ import { useState, type ReactElement, type ReactNode } from 'react'
 import { t } from '../i18n/i18n.ts'
 import type { GraphData } from '../../shared/graph-contract.ts'
 import type { PanelSnapshotView } from './snapshot-view.ts'
+import { preventiveSummary } from './preventive-model.ts'
 import {
   agoLabel,
   capabilityRows,
@@ -740,6 +741,66 @@ export function CooccurrenceBody({ snapshot }: { snapshot: PanelSnapshotView }):
         {c.mayWeight.allowed ? t('cooccurrence.mayWeightYes') : t('cooccurrence.mayWeightNo')}
         {c.mayWeight.reason !== '' && ` · ${c.mayWeight.reason}`}
       </p>
+    </>
+  )
+}
+
+/* ---------- RQ3 预防性预警（只预警，不关闭任何插件） ---------- */
+
+/**
+ * 预警卡 —— 展示加载频率代理与配置变更 CUSUM。
+ *
+ * 硬纪律（07 §4.3）：这张卡**没有任何动作按钮**，文案也明确写「只预警，
+ * 不关闭任何插件」。预警是观测事实，关闭仍走 RQ1/RQ2 取证。
+ *
+ * 不可判定：只显示宿主给的原因，不渲染数值行（把无数据画成 0 是本项目
+ * 最忌讳的假绿）；整段字段缺失（旧宿主/跨分区）则整卡显示不可得。
+ */
+export function PreventiveBody({ snapshot }: { snapshot: PanelSnapshotView }): ReactElement {
+  const summary = preventiveSummary(snapshot)
+  if (!summary.available) return <p className="rg-empty">{t('preventive.unavailable')}</p>
+  return (
+    <>
+      <p className="rg-notice rg-preventive-alertonly">{summary.note}</p>
+      {summary.reads.map((read) => (
+        <section key={read.key} className="rg-preventive-read">
+          <h4 className="rg-card-subtitle">
+            {read.title}
+            {read.defined && (
+              <span className={`rg-badge ${read.alert ? 'rg-badge-warn' : 'rg-badge-neutral'}`}>
+                {read.alert ? t('preventive.alertYes') : t('preventive.alertNo')}
+              </span>
+            )}
+          </h4>
+          {read.defined ? (
+            <>
+              <p className="rg-card-note" title={read.label}>
+                {read.label}
+              </p>
+              <dl className="rg-dl rg-dl-compact">
+                {read.rows.map((row) => (
+                  <div key={row.key} className="rg-dl-pair">
+                    <dt>{row.label}</dt>
+                    <dd>{row.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </>
+          ) : (
+            // 不可判定 ⇒ 只说原因；绝不渲染 0 值（也绝不显示「一切正常」）。
+            <p className="rg-empty">{read.reason ?? t('metrics.undefined')}</p>
+          )}
+        </section>
+      ))}
+      {summary.source !== null && (
+        <p className="rg-card-note" title={summary.source.note}>
+          {t('preventive.source', {
+            boots: summary.source.bootSamples,
+            changes: summary.source.changeSamples,
+            units: summary.source.units,
+          })}
+        </p>
+      )}
     </>
   )
 }

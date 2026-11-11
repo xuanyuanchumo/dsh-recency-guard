@@ -17,7 +17,7 @@
 npm run build          # esbuild 双产物：dist/index.js + dist/client.js
 npx tsc --noEmit       # 类型
 npm run lint           # 类型 + 未使用符号
-npm test               # 分层运行器：Core 29 / Host 10 / Client 20 / Contract 7 = 68
+npm test               # 分层运行器：Core 42 / Host 10 / Client 24 / Contract 8 = 84
 ```
 
 判据：**四条全零错误**。分批跑会掩盖相互影响，必须顺序跑完。
@@ -366,7 +366,32 @@ npx tsx tests/unit/quarantine-plan.test.ts   # roundBudget / 预算耗尽分支
   `commitPartitionIndex` 注入点可稳定复现失败分支；
 - **死分支可断言**：`roundBudget(P)=P+1`，注入更小预算可命中 `terminatedBy:'cap'`。
 
-### 8.6 全量基线
+### 8.6 v0.17 新增门禁（RQ3 / RQ4 / TD）
 
-`npm test` = **68/68**（Core 29 / Host 10 / Client 20 / Contract 7）；
+```bash
+npx tsx tests/unit/preventive-wiring.test.ts        # RQ3：生产消费者 + 关闭链路零依赖
+npx tsx tests/client/preventive-card.test.ts        # 面板预警卡（诚实空态/不可判定）
+npx tsx tests/client/poll-adaptive.test.ts           # 自适应轮询纯函数 + 接线结构
+npx tsx tests/contract/width-parity.test.ts          # rescue vs host 宽度逐字符对拍
+npx tsx tests/unit/pure-projections.test.ts          # schemaVersion 纯解析/投影
+```
+
+判据：
+
+- **RQ3 有生产消费者**：`grep "from.*preventive" src/` > 0（`preventive-view.ts` 消费
+  `preventive.ts`），且 `PanelSnapshot.preventive` / `status.preventive` / 面板卡片都能显示；
+- **只预警不行动**：关闭决策链路（`crash-decision` / `quarantine-plan` / `recovery-*`）
+  对 `preventive` **零依赖**（源码扫描断言）；`composeCrashDecision` 参数无 preventive 字段；
+- **代理诚实**：`loadTime` 单位是 `per-minute` 启动频率（不是毫秒加载耗时），
+  `source.note` 原样上屏；样本不足 ⇒ `defined:false` + `reason`，不填 0；
+- **跨实现对拍**：同一语料下 `rescue.mjs` 与 `tool-text.ts` 的 `displayWidth` /
+  `padWidth` 逐条相等，并校验**绝对期望值**（防止「一致地错」）；
+- **schema 版本**：`schemaVersion===1` 正常、缺失按 v1、未知 ⇒ 安全空态/`null` +
+  `degraded:true` note，且**原文件字节不被改写**；
+- **自适应轮询**：5s→10s→15s 封顶、变化回 5s、夹紧 [3s,30s]；指纹剔除 `at` /
+  `diagnostics.snapshotMs`；组件必须用递归 `setTimeout`（不是 `setInterval`）。
+
+### 8.7 全量基线
+
+`npm test` = **84/84**（Core 42 / Host 10 / Client 24 / Contract 8）；
 `npx tsc --noEmit` 0；`npm run lint` 0；`npm run build` 双产物成功。

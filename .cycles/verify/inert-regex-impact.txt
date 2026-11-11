@@ -1,0 +1,11 @@
+旧 inert 下非惰性生成点: 112
+新 inert 下非惰性生成点: 118
+新增可见生成点: 6
+
+此前被误判为惰性（静默丢弃）的位置：
+ - src/host/profile/patch-yaml.ts:88  i < lines
+ - src/host/profile/patch-yaml.ts:101  j < lines
+ - src/host/profile/patch-yaml.ts:101  j <= i
+ - src/host/profile/patch-yaml.ts:116  k <= closing
+ - src/host/profile/patch-yaml.ts:125  i < value
+ - src/host/profile/patch-yaml.ts:149  i < lines

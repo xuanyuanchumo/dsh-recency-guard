@@ -57,7 +57,7 @@ check(
 )
 
 console.log('\n[数据流四步可读]')
-const flowRule = ruleBody(styles, '.rg-card-body:has(.rg-dataflow)')
+const flowRule = ruleBody(styles, '.rg-card-body:has(.rg-dataflow),')
 check('数据流卡 body 规则存在', flowRule.length > 0)
 check('按内容伸展（height:auto）而不是固定 240px 裁切', /height:\s*auto/.test(flowRule), flowRule)
 check('仍保留 max-height 兜底（超出时可滚动）', /max-height:/.test(flowRule))
@@ -67,6 +67,15 @@ check(
     readFileSync(join(root, 'src/client/panel/panel-model.ts'), 'utf8').includes(`key: '${key}'`),
   ),
 )
+
+console.log('\n[预警卡：内容不得被静默裁切]')
+const preventiveRule = ruleBody(styles, ".rg-card[data-card-id='preventive'] .rg-card-body")
+check('预警卡 body 规则存在（按卡片 id 命中，不依赖 :has）', preventiveRule.length > 0)
+check('预警卡按内容伸展（height:auto）', /height:\s*auto/.test(preventiveRule), preventiveRule)
+check('预警卡有 max-height 上限', /max-height:\s*\d+px/.test(preventiveRule), preventiveRule)
+check('预警卡超出时显式滚动（overflow-y:auto）', /overflow-y:\s*auto/.test(preventiveRule), preventiveRule)
+check('预警卡不得 overflow:hidden', !/overflow:\s*hidden/.test(preventiveRule) && !/overflow-y:\s*hidden/.test(preventiveRule))
+check('预警卡不得固定 height（只允许 auto；max-height 不算）', !/(?<!max-)height:\s*\d+px/.test(preventiveRule), preventiveRule)
 
 if (failures > 0) {
   console.log(`\n${failures} 个断言失败`)

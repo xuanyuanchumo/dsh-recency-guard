@@ -17,12 +17,14 @@ import {
   LifecycleBody,
   MetricsBody,
   PartitionsBody,
+  PreventiveBody,
   RisksBody,
   archiveEntriesOf,
   type ArchiveEntry,
 } from './PanelCards.tsx'
 import { DataFlowBody, DiagnosticsBody, GraphStructureBar, MarkovBody } from './InsightCards.tsx'
 import { PanelErrorBoundary } from './PanelErrorBoundary.tsx'
+import { POLL_BASE_MS, nextPollDelay, pollContentFingerprint, type PollOutcome } from './poll-adaptive.ts'
 import { degradedRoutes, panelForm, partitionView, shortenPath, type DegradedRoute, type PanelForm } from './panel-model.ts'
 import { VIEWPORT_HEIGHT_NARROW, VIEWPORT_HEIGHT_WIDE } from '../graph/graph-model.ts'
 import type { PanelSnapshotView } from './snapshot-view.ts'
@@ -60,8 +62,13 @@ export interface GuardPanelProps {
   postAction: (action: PanelAction, payload?: Record<string, unknown>) => Promise<FetchResult<unknown>>
 }
 
-/** 轮询间隔（毫秒）。 */
-const POLL_INTERVAL = 5000
+/**
+ * 轮询间隔（毫秒）。
+ *
+ * v0.17：不再是常量 —— 间隔由 `nextPollDelay` 按内容指纹自适应，
+ * 这里只保留基准值（首帧/内容变化时使用的 5s）。
+ */
+const POLL_BASE = POLL_BASE_MS
 
 /** 可折叠卡片的持久化键（localStorage：跨轮询/跨会话记住折叠态）。 */
 const COLLAPSE_KEY = 'recency-guard-collapsed'
@@ -92,6 +99,10 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
   const [failure, setFailure] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [polling, setPolling] = useState(true)
+  /** 当前轮询间隔（状态栏要显示真实值，而不是写死的 5s）。 */
+  const [pollDelay, setPollDelay] = useState(POLL_BASE)
+  /** 连续未变的轮数（>0 时状态栏提示「数据稳定，已放慢刷新」）。 */
+  const [stableRounds, setStableRounds] = useState(0)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => loadCollapsed())
   const [form, setForm] = useState<PanelForm>('wide')
   /** 选中的节点（图谱与能力清单共用这一份选中态）。 */
@@ -120,9 +131,13 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
   const [conflictNotice, setConflictNotice] = useState(false)
   const rootRef = useRef<HTMLElement | null>(null)
   const mounted = useRef(true)
+  /** 上一次成功快照的指纹（null = 还没有基准）。 */
+  const fingerprintRef = useRef<string | null>(null)
+  /** 连续未变轮数（ref 而不是 state：轮询循环读取它时不能等一次渲染）。 */
+  const sameRoundsRef = useRef(0)
 
   const load = useCallback(
-    async (partitionKey: string | null): Promise<void> => {
+    async (partitionKey: string | null): Promise<PollOutcome> => {
       const [snapshotResult, graphResult, archivesResult] = await Promise.all([
         props.fetchSnapshot(partitionKey ?? undefined),
         props.fetchGraph(partitionKey ?? undefined),
@@ -132,7 +147,7 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
           ? props.fetchArchives(partitionKey ?? undefined)
           : Promise.resolve({ ok: false as const, reason: 'archives-absent' }),
       ])
-      if (!mounted.current) return
+      if (!mounted.current) return { changed: true, sameRounds: 0 }
       if (snapshotResult.ok) {
         setSnapshot(snapshotResult.data)
         setFailure(null)
@@ -157,23 +172,79 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
           archivesInjected: props.fetchArchives !== undefined,
         }),
       )
+
+      /**
+       * 内容指纹 → 退避状态。
+       *
+       * 只在**快照成功**时更新基准：失败不是「内容变了」，但必须尽快恢复
+       * 正常轮询（返回 changed=true 让下一轮回到 5s），同时保留上一次成功
+       * 的指纹作为比较基准 —— 失败后恢复成功、内容与失败前相同，仍然算
+       * 「未变」，退避不会因为一次网络抖动被清零。
+       */
+      if (!snapshotResult.ok) {
+        sameRoundsRef.current = 0
+        return { changed: true, sameRounds: 0 }
+      }
+      // 指纹覆盖**两条独立路由**：snapshot + graph。只哈希 snapshot 时，
+// 「插件已安装、图谱多了一个节点」会被判成稳定，最长等 15s 才刷新。
+      const fingerprint = pollContentFingerprint(
+        snapshotResult.data,
+        graphResult.ok ? graphResult.data : null,
+      )
+      const previous = fingerprintRef.current
+      const changed = previous === null || previous !== fingerprint
+      const sameRounds = changed ? 0 : Math.min(sameRoundsRef.current + 1, 999)
+      fingerprintRef.current = fingerprint
+      sameRoundsRef.current = sameRounds
+      return { changed, sameRounds }
     },
     [props.fetchSnapshot, props.fetchGraph, props.fetchArchives],
   )
 
+  /**
+   * 轮询循环 —— `setTimeout` 递归而不是 `setInterval`。
+   *
+   * 为什么必须换：间隔本身是**上一步的结论**（稳定退避/变化回速），
+   * setInterval 的周期在创建时就固定了；用 setInterval 再改周期只能
+   * 反复重建定时器，期间的 tick 会同时挂在旧/新两个定时器上（双拉取）。
+   *
+   * 暂停/卸载的清理是硬要求：一个残留的 timer 会在用户暂停后继续打宿主，
+   * 让「暂停即真停」变成假话（面板上画面冻结、后台还在请求）。
+   * `cancelled` 是防「卸载后才 resolve 的 load 又 schedule 一个新 timer」
+   * 的唯一开关 —— 只 clearTimeout 当前句柄是不够的。
+   */
   useEffect(() => {
     mounted.current = true
-    void load(requestedKey)
-    // 轮询可暂停：调试或截图时暂停轮询，画面不再跳动（数据时间停在暂停时刻）。
-    if (!polling) {
-      return () => {
-        mounted.current = false
-      }
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const afterLoad = (outcome: PollOutcome): void => {
+      if (cancelled) return
+      const delay = nextPollDelay({
+        sameRounds: outcome.sameRounds,
+        changed: outcome.changed,
+        baseMs: POLL_BASE,
+      })
+      setPollDelay(delay)
+      setStableRounds(outcome.sameRounds)
+      if (!polling) return
+      timer = setTimeout(() => {
+        void run()
+      }, delay)
     }
-    const timer = setInterval(() => void load(requestedKey), POLL_INTERVAL)
+
+    const run = async (): Promise<void> => {
+      const outcome = await load(requestedKey)
+      afterLoad(outcome)
+    }
+
+    // 首帧总是立刻拉一次（暂停态也拉：画面停在暂停时刻，而不是空白）。
+    void run()
+
     return () => {
+      cancelled = true
+      if (timer !== null) clearTimeout(timer)
       mounted.current = false
-      clearInterval(timer)
     }
   }, [load, polling, requestedKey])
 
@@ -306,6 +377,14 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
           )}
         </div>
         <div className="rg-actions">
+          {/* 轮询间隔放在**操作区**而不是只放页脚：页脚在所有卡片/图谱之后，
+              要滚过 16 张卡才看得到 —— 用户调「暂停/刷新」时的上下文在这里。 */}
+          {polling && (
+            <span className="rg-poll-chip" role="status" title={t('panel.pollingHint')}>
+              {t('panel.pollingOn', { seconds: Math.max(1, Math.round(pollDelay / 1000)) })}
+              {stableRounds > 0 && pollDelay > POLL_BASE && <> · {t('panel.pollingBackoff')}</>}
+            </span>
+          )}
           <button
             type="button"
             className={`rg-button${polling ? '' : ' rg-button-paused'}`}
@@ -509,6 +588,15 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
             </Card>
             <h2 className="rg-group-title">{t('groups.observation')}</h2>
             <Card
+              id="preventive"
+              title={t('sections.preventive')}
+              hint={t('preventive.hint')}
+              collapsed={collapsed.has('preventive')}
+              onToggle={() => toggleCollapse('preventive')}
+            >
+              <PreventiveBody snapshot={snapshot} />
+            </Card>
+            <Card
               id="risks"
               title={t('sections.risks')}
               hint={t('risks.count', { count: snapshot.risks.length })}
@@ -616,7 +704,16 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
 
           <footer className="rg-foot">
             <span>{t('panel.snapshotAt', { time: snapshot.at.replace('T', ' ').slice(0, 19) })}</span>
-            <span>{polling ? t('panel.pollingOn', { seconds: POLL_INTERVAL / 1000 }) : t('panel.stale', { minutes: staleMinutes })}</span>
+            <span>
+              {polling
+                ? t('panel.pollingOn', { seconds: Math.max(1, Math.round(pollDelay / 1000)) })
+                : t('panel.stale', { minutes: staleMinutes })}
+              {/* 退避必须说出来：用户看到刷新变慢时，需要知道是「数据稳定」
+                  而不是「面板卡住了」。只在真的放慢时追加，不制造噪声。 */}
+              {polling && stableRounds > 0 && pollDelay > POLL_BASE && (
+                <> · {t('panel.pollingBackoff')}</>
+              )}
+            </span>
           </footer>
         </>
         </PanelErrorBoundary>

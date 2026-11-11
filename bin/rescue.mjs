@@ -45,6 +45,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const GUARD_DIR = '.recency-guard'
 
@@ -173,7 +174,36 @@ function fmtTime(iso) {
  * 的时刻）。这里只实现 status/history 用到的列对齐所需的宽度判定，
  * 完整的折行/中和原语仍在 src/tool-text.ts（工具输出走那条路）。
  */
-function codePointWidth(cp) {
+/**
+ * 零宽码点：它们**不占列**，但也不能从文本里删掉。
+ *
+ * 为什么 rescue 也要判：它有自己的宽度实现（零依赖纪律，崩溃后 node_modules
+ * 可能损坏），但有独立实现就必须有**跨实现对拍**（tests/contract/width-parity）。
+ * 此前这一份没跟上 tool-text 的修复 ⇒ 组合字符被算 2 列、零宽空格算 1 列，
+ * 状态/历史两块表在中英混排时会整体右移。
+ */
+function isZeroWidth(codePoint) {
+  return (
+    (codePoint >= 0x0300 && codePoint <= 0x036f) ||
+    (codePoint >= 0x1ab0 && codePoint <= 0x1aff) ||
+    (codePoint >= 0x1dc0 && codePoint <= 0x1dff) ||
+    (codePoint >= 0x20d0 && codePoint <= 0x20ff) ||
+    (codePoint >= 0xfe20 && codePoint <= 0xfe2f) ||
+    (codePoint >= 0xfe00 && codePoint <= 0xfe0f) ||
+    (codePoint >= 0x1f3fb && codePoint <= 0x1f3ff) ||
+    codePoint === 0x200b ||
+    codePoint === 0x200c ||
+    codePoint === 0x200d ||
+    codePoint === 0x200e ||
+    codePoint === 0x200f ||
+    codePoint === 0x2060 ||
+    codePoint === 0xfeff ||
+    codePoint === 0x00ad
+  )
+}
+
+export function codePointWidth(cp) {
+  if (isZeroWidth(cp)) return 0
   const wide =
     (cp >= 0x1100 && cp <= 0x115f) ||
     (cp >= 0x2e80 && cp <= 0x303e) ||
@@ -191,15 +221,32 @@ function codePointWidth(cp) {
   return wide ? 2 : 1
 }
 
-/** 文本的显示列宽（CJK 全宽算 2 列；`length` 数的是码元，中文会错一半）。 */
-function displayWidth(text) {
+/**
+ * 文本的显示列宽（CJK 全宽算 2 列；`length` 数的是码元，中文会错一半）。
+ *
+ * ZWJ 序列（`👨‍👩‍👧`）按**一个字形**算：连接符之后的码点不累加，
+ * 否则一个家庭 emoji 会被算成 6 列，padWidth 会把整张表推歪。
+ */
+export function displayWidth(text) {
   let width = 0
-  for (const ch of String(text)) width += codePointWidth(ch.codePointAt(0) ?? 0)
+  let joined = false
+  for (const ch of String(text)) {
+    const codePoint = ch.codePointAt(0) ?? 0
+    if (codePoint === 0x200d) {
+      joined = true
+      continue
+    }
+    if (joined) {
+      joined = false
+      continue
+    }
+    width += codePointWidth(codePoint)
+  }
   return width
 }
 
 /** 按显示列右填充（`padEnd` 对 CJK 会少补空格 ⇒ 后续列错位，实测踩过）。 */
-function padWidth(text, width) {
+export function padWidth(text, width) {
   const pad = width - displayWidth(text)
   return pad > 0 ? text + ' '.repeat(pad) : String(text)
 }
@@ -526,4 +573,10 @@ function main() {
   process.exit(code)
 }
 
-main()
+// 只有「被当作 CLI 直接执行」时才跑 main：`tests/contract/width-parity.test.ts`
+// 需要 import 本文件的宽度实现做**跨实现对拍**（零依赖脚本不能 import 宿主
+// 模块，但宿主测试可以 import 它）。不 guard 的话一次 import 就会去解析
+// process.argv 并 exit，测试进程当场死掉。
+const invokedAsCli =
+  typeof process.argv[1] === 'string' && import.meta.url === pathToFileURL(process.argv[1]).href
+if (invokedAsCli) main()

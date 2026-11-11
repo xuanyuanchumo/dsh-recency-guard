@@ -1,4 +1,4 @@
-# 架构与功能域划分（v0.16.0）
+# 架构与功能域划分（v0.17.0）
 
 > 本文回答一件事：**`src/` 为什么这样分**。
 > 它不是目录说明书，而是「每条边界在防哪种缺陷」的论证。
@@ -22,7 +22,8 @@ src/
 ├── index.ts                     # host bundle 入口：四件套 name/inject/Config/apply
 ├── host/                        # 只在宿主进程运行（可用 node:fs / 进程 / 路由 / IO）
 │   ├── core/                    #   基础原语：生命周期状态机、revision、分区键、自描述、同步原子写
-│   ├── data/                    #   持久化与归档：Store、archive、锁卫生（lock-hygiene）
+│   ├── data/                    #   持久化与归档：Store、archive、锁卫生（lock-hygiene）、
+│   │                            #     journal 文本层（journal-io）、schema 版本判据（schema-version）
 │   ├── guard/                   #   崩溃守护主线：决策、恢复、信号、异常终止、守护行安装
 │   │                            #   + 确定性冲突（conflict-*）、贪心隔离（quarantine-plan）、
 │   │                            #     决策组装（crash-decision）、启动编排（boot-orchestration）、
@@ -31,16 +32,16 @@ src/
 │   ├── observe/                 #   观测与数学模型：指标、生存分析、控制带、预防性预警、转移矩阵、共现
 │   ├── risk/                    #   风险与归因：新近性、贝叶斯并行读数、误伤校准
 │   ├── capability/              #   能力模型与图谱（产出方）
-│   └── surface/                 #   对外面：工具注册/分派/渲染、路由、状态投影、面板快照
+│   └── surface/                 #   对外面：工具注册/分派/渲染、路由、状态投影、面板快照、预防性投影
 ├── client/                      # 只在浏览器运行（禁止 node:*，禁止 import host）
-│   ├── panel/                   #   面板：容器、卡片、洞察、投影、可空视图、错误边界
+│   ├── panel/                   #   面板：容器、卡片、洞察、投影、可空视图、错误边界、自适应轮询
 │   ├── graph/                   #   图谱：渲染、模型、分析、小地图、视口、交互/布局/调色
 │   ├── api/                     #   客户端取数的唯一出口
 │   └── i18n/                    #   自持字典
 └── shared/                      # 跨运行时契约层（Definition）：只放类型 + 纯常量
 ```
 
-### 2.1 仓库根的两份 manifest（v0.16.0）
+### 2.1 仓库根的两份 manifest（v0.17.0）
 
 | 文件 | 谁消费 | 声明什么 |
 | --- | --- | --- |
@@ -183,9 +184,11 @@ Q5 目前仍报 FAIL，两条依据逐一核对：
 npx tsc --noEmit                              # 类型
 npm run lint                                  # 未使用导出/参数
 npm run build                                 # 双产物（host + client）
-npm test                                      # 62 个测试，含边界与可空契约
+npm test                                      # 78 个测试，含边界与可空契约
 npx tsx tests/contract/client-host-boundary.test.ts   # 单跑边界门
 npx tsx tests/contract/panel-snapshot-nullability.test.ts  # 可空清单门
+npx tsx tests/contract/width-parity.test.ts                # 跨实现宽度对拍
+npx tsx tests/unit/preventive-wiring.test.ts               # RQ3 只预警不行动（源码扫描）
 npx tsx tests/unit/journal-append-race.test.ts            # journal 真追加
 npx tsx tests/unit/boot-crashseq-race.test.ts             # CAS 清零
 node scripts/mutation.mjs --dry-run           # 变异池是否覆盖新布局（递归）

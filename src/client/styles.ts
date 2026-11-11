@@ -291,12 +291,26 @@ export const GRAPH_CSS = `
   flex: 0 0 auto;
 }
 
-/* 数据流卡：4 个步骤必须完整可读（真机第 4 步被裁掉一半）。
-   卡片 body 的默认限高是给长清单用的；数据流是固定 4 行，按内容伸展
-   （仍留 max-height 兜底，超出时内部滚动是显式的）。 */
-.rg-card-body:has(.rg-dataflow) {
+/* 轮询间隔徽标（操作区）：比按钮弱、但不用滚到页脚就能读到。 */
+.rg-poll-chip {
+  align-self: center;
+  padding: 2px 8px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-full, 999px);
+  font-size: var(--dsw-font-xxxs-11, 11px);
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+}
+
+/* 数据流 / 预警卡：内容必须完整可读（v0.16 数据流第 4 步、v0.17 预警卡
+   CUSUM 说明行两次被固定 240px body 裁掉）。这两张卡内容长度有限且用户
+   必须读全，因此按内容伸展；仍保留 max-height + **显式** overflow-y:auto
+   （超出时滚动条可见，不是静默裁切）。 */
+.rg-card-body:has(.rg-dataflow),
+.rg-card[data-card-id='preventive'] .rg-card-body {
   height: auto;
-  max-height: 320px;
+  max-height: 360px;
+  overflow-y: auto;
 }
 
 /* 减少动态效果：节点拖动、布局过渡与图例都不得播放动画。 */

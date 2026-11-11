@@ -296,6 +296,16 @@ interface StatusLike {
    */
   conflicts?: Array<{ kind: string; message: string; plugins: string[]; source: { file: string; line: number } }>
   unresolved?: Array<{ kind: string; message: string; plugins: string[] }>
+  /**
+   * RQ3 预防性读数（T15-01；缺失 = 旧调用方 ⇒ 整段省略，诚实降级）。
+   *
+   * 命令窗口必须看得到预警：排障现场常在这里。两条读数都**只预警不行动**，
+   * 所以文案里不允许出现「已关闭/已隔离」一类动词。
+   */
+  preventive?: {
+    loadTime?: { defined: boolean; label: string; reason: string | null; samples: number; value: { alert: boolean } | null }
+    configChanges?: { defined: boolean; label: string; reason: string | null; samples: number; value: { alert: boolean } | null }
+  }
   /** 分区键（与 workspace 成对出现）。 */
   projectKey?: string
   /** 插件自身版本（v0.10 R18；缺失时省略该行）。 */
@@ -344,6 +354,18 @@ export function formatStatus(s: StatusLike): ToolOutcome {
     const v = s.lastRecoveryVerdict
     facts.push([v.act ? '恢复判定（已行动）' : '恢复判定（观察中）', v.label])
     facts.push(['判定轮次', v.rounds + '/' + v.required])
+  }
+  // RQ3 预防性读数（T15-01）：只预警不行动，文案直接抄投影层的 label
+  // （可判定）与 reason（不可判定）—— 命令窗口不得自己编近义词。
+  if (s.preventive !== undefined) {
+    const rows: Array<[string, { defined: boolean; label: string; reason: string | null } | undefined]> = [
+      ['启动频率（代理）', s.preventive.loadTime],
+      ['配置变更频率', s.preventive.configChanges],
+    ]
+    for (const [key, metric] of rows) {
+      if (metric === undefined) continue
+      facts.push([key, metric.defined ? metric.label : `不可判定（${metric.reason ?? '原因缺失'}）`])
+    }
   }
   // 反馈入口（v0.10 R18）：工具面也带一条 Issues 指引 —— 命令窗口往往是
   // 排障现场，那时用户不会想到去面板找反馈按钮。

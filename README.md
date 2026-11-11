@@ -1,13 +1,13 @@
 # dsh-recency-guard
 
-**v0.16.0** · [GitHub](https://github.com/xuanyuanchumo/dsh-recency-guard) · [问题反馈](https://github.com/xuanyuanchumo/dsh-recency-guard/issues) · MIT
+**v0.17.0** · [GitHub](https://github.com/xuanyuanchumo/dsh-recency-guard) · [问题反馈](https://github.com/xuanyuanchumo/dsh-recency-guard/issues) · MIT
 
 > DeepSeek Harness 的**插件崩溃恢复守护**：记录第三方 / 实验性插件的安装与更新时序并备份配置；
 > 崩溃后的**下一次启动之前**，把最近更新的嫌疑插件挡在门外；稳定启动后，再把非首要嫌疑放回来。
 >
-> 版本基线（2026-11-11，北京时间）：**0.16.0**。版本四锚点（`package.json` / 本 README /
+> 版本基线（2026-11-11，北京时间）：**0.17.0**。版本四锚点（`package.json` / 本 README /
 > `docs/agents/` / [`dsh-plugin.json`](dsh-plugin.json)）一致。
-> 测试分四层，当前 **68/68 全绿**（Core 29 / Host 10 / Client 20 / Contract 7）。
+> 测试分四层，当前 **84/84 全绿**（Core 42 / Host 10 / Client 24 / Contract 8）。
 
 ---
 
@@ -51,10 +51,10 @@ dsh plugin --profile <profile名> add dsh-recency-guard
 锁定版本：
 
 ```bash
-dsh plugin --profile <profile名> add dsh-recency-guard@0.16.0
+dsh plugin --profile <profile名> add dsh-recency-guard@0.17.0
 ```
 
-> 版本对应：本 README 描述本仓库 **0.16.0** 源码。npm 上实际可安装的版本以
+> 版本对应：本 README 描述本仓库 **0.17.0** 源码。npm 上实际可安装的版本以
 > `npm view dsh-recency-guard version` 为准；若 `latest` 落后于本文版本，请按下面的源码方式安装，
 > 或等待对应版本发布。发布顺序见 [`docs/agents/conventions.md`](docs/agents/conventions.md) §6。
 
@@ -137,6 +137,8 @@ dsh plugin --profile <profile名> add link:/绝对路径/dsh-recency-guard
 | 恢复与配置备份 | `restore` / `backups` | [`recovery-actions.ts`](src/host/guard/recovery-actions.ts)、[`recovery-policy.ts`](src/host/guard/recovery-policy.ts) | [`core.test.ts`](tests/unit/core.test.ts)、[`versioned-backup.test.ts`](tests/unit/versioned-backup.test.ts) |
 | 生命周期状态机 | 生命周期卡 + 迁移史 | [`lifecycle.ts`](src/host/core/lifecycle.ts) | [`lifecycle-steps.test.ts`](tests/unit/lifecycle-steps.test.ts) |
 | 量化指标与数学模型 | 指标卡 / 控制带 / 转移矩阵 | [`observability.ts`](src/host/observe/observability.ts)、[`markov.ts`](src/host/observe/markov.ts)、[`control-band.ts`](src/host/observe/control-band.ts) | [`observability-math.test.ts`](tests/unit/observability-math.test.ts)、[`hazard-threshold.test.ts`](tests/unit/hazard-threshold.test.ts) |
+| **预防性预警（只预警不行动）** | 面板/`status` 的启动频率控制带与配置变更 CUSUM；不可判定显示原因 | [`preventive.ts`](src/host/observe/preventive.ts)、[`preventive-view.ts`](src/host/surface/preventive-view.ts) | [`observability-math.test.ts`](tests/unit/observability-math.test.ts)、[`preventive-card.test.ts`](tests/client/preventive-card.test.ts) |
+| **自适应刷新** | 稳定时 5s→10s→15s 退避，变化立即回 5s；暂停即真停 | [`poll-adaptive.ts`](src/client/panel/poll-adaptive.ts)、[`GuardPanel.tsx`](src/client/panel/GuardPanel.tsx) | [`poll-adaptive.test.ts`](tests/client/poll-adaptive.test.ts) |
 | 管理面板 | 中央面板 + 侧栏图标 | [`GuardPanel.tsx`](src/client/panel/GuardPanel.tsx)、[`snapshot-view.ts`](src/client/panel/snapshot-view.ts)、[`PanelShell.tsx`](src/client/panel/PanelShell.tsx) | [`panel-v014.test.ts`](tests/client/panel-v014.test.ts)、[`panel-scroll.test.ts`](tests/client/panel-scroll.test.ts)、[`panel-null-snapshot.test.ts`](tests/client/panel-null-snapshot.test.ts) |
 | 可交互能力图谱 | 节点 / 边 / 缺口 / 小地图 | [`GuardGraph.tsx`](src/client/graph/GuardGraph.tsx)、[`graph-interaction.ts`](src/client/graph/graph-interaction.ts) | [`graph-model.test.ts`](tests/client/graph-model.test.ts)、[`graph-focus.test.ts`](tests/client/graph-focus.test.ts)、[`graph-keyboard.test.ts`](tests/client/graph-keyboard.test.ts) |
 | 项目隔离 | 隔离卡 + `?partition=<key>` | [`isolation.ts`](src/host/core/isolation.ts) | [`isolation-journey.test.ts`](tests/host/isolation-journey.test.ts)、[`isolation-parallel.test.ts`](tests/host/isolation-parallel.test.ts) |
@@ -152,9 +154,11 @@ dsh plugin --profile <profile名> add link:/绝对路径/dsh-recency-guard
 
 ### 管理面板
 
-- **数据面**：`GET /recency-guard/api/snapshot`，5 秒轮询一次；暂停按钮按下后**不再发请求**
+- **数据面**：`GET /recency-guard/api/snapshot`。**自适应轮询**：内容稳定时 5s→10s→15s
+  退避，内容变化/用户操作立即回 5s，绝对边界 [3s, 30s]；暂停按钮按下后**不再发请求**
   （画面停在暂停时刻，而不是继续跳）。
-- **卡片**：稳定性 / 阶段 / 崩溃率 / 崩溃压力 / CUSUM 变点、崩溃决策与因子分解、
+- **卡片**：稳定性 / 阶段 / 崩溃率 / 崩溃压力 / CUSUM 变点、**预防性预警**（启动频率控制带、
+  配置变更 CUSUM；**只预警不行动**，不可判定显示原因）、崩溃决策与因子分解、
   **声明式冲突**（每条带 `文件:行号` 与声明原文）、**未解决冲突**（上次隔离后仍治不了的部分，
   与「现在有冲突」分开显示）、量化指标（不可判定显示原因）、能力清单与缺口、项目隔离、归档、事件流。
 - **可空契约**：宿主在跨分区只读视图会发 `null` / 整段省略的字段，由
@@ -277,6 +281,15 @@ node bin/rescue.mjs status --profile-dir "%USERPROFILE%\.dsh\profiles\desktop"
 - **降级可查**：启动编排的分区索引提交 / 变更记录 / 官方实验观测失败，都会落一条
   journal `note` 并带 `degraded: true` —— 不只写 logger，重启后仍可查。
 
+**研究边界（避免误读）**
+
+- **预防性预警只预警、不行动**：启动频率 EWMA 与配置变更 CUSUM 只进观测面
+  （面板/`status`），**不被任何关闭决策读取**；样本不足 ⇒ `defined:false` + 原因，不填 0。
+  `loadTime` 是「启动频率（次/分钟）」的**代理**，不是真实加载耗时 —— 面板会原样显示代理说明。
+- **共现信号只判定、不加权**：`mayWeightByCooccurrence` 只在满足研究
+  [09 §4.3](docs/research/09-整合研究-四方向与既有研究的合流.md) 的条件时给出「可加权」判定，
+  默认决策权重仍为 0；面板显示判定与理由，不把共现当成已生效权重。
+
 **明确不拦 / 不修的**
 
 - **entry 级 `apply` 抛错**：宿主只 warning 并自隔离该 entry，进程不崩 —— 不属于本插件的拦截面。
@@ -377,11 +390,11 @@ npm install
 npm run build           # esbuild 双产物：dist/index.js（宿主）+ dist/client.js（客户端）
 npx tsc --noEmit        # 类型
 npm run lint            # 类型 + 未使用符号
-npm test                # 分层运行器：Core 29 / Host 10 / Client 20 / Contract 7 = 68
+npm test                # 分层运行器：Core 42 / Host 10 / Client 24 / Contract 8 = 84
 npm run extract-runtime # Host 层测试前置（runtime/ 缺失时先解出）
 ```
 
-- 当前基线：`npm test` **68/68 通过**、`npx tsc --noEmit` 0 错误（2026-11-11 实测）。
+- 当前基线：`npm test` **84/84 通过**、`npx tsc --noEmit` 0 错误（2026-11-11 实测）。
 - 验证顺序固定：**build → typecheck → lint → test**，全部零错误才算完成。
 - 文档体系与写码纪律见 [`docs/agents/`](docs/agents/README.md)；
   发布 / 升级 / 热重载见 [`docs/agents/update-guide.md`](docs/agents/update-guide.md)。
@@ -392,6 +405,7 @@ npm run extract-runtime # Host 层测试前置（runtime/ 缺失时先解出）
 
 | 版本 | 一句话 |
 | --- | --- |
+| **0.17.0**（2026-11-11） | 技术栈清理与研究闭环：预防性预警（RQ3）接入生产且**只预警不行动**、面板自适应刷新、状态文件 schema 版本（未知版本保留现场）、变异 72 突变体 / 0 未归因 + 无直接测试 14→2 + rescue/宿主宽度跨实现对拍；技术债状态见 [`docs/agents/tech-debt.md`](docs/agents/tech-debt.md) |
 | **0.16.0**（2026-11-11） | 确定性冲突证据（4 类 finding + 出处）、贪心最小隔离与依赖联动、可写两阶段 rescue、常态路径锁卫生、PanelSnapshotView 可空契约；新增社区 manifest [`dsh-plugin.json`](dsh-plugin.json)，README 面向用户重构，版本四锚点统一 |
 | 0.15.0 | 架构重构：`host/` + `client/` + `shared/` 分层，client→host 越界与值依赖环写成契约测试 |
 | 0.14.0 | 误伤反馈闭环、贝叶斯风险并行读数、预防性健康指标（EWMA / CUSUM）、自动化变异测试 |

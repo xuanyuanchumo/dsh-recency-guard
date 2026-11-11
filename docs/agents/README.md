@@ -1,7 +1,7 @@
 # dsh-recency-guard 开发规范（docs/agents）
 
 > 本目录是本插件的开发者文档基座：新会话 / 新 Agent 接手时**先读这里**。
-> 版本基线 **0.16.0**（2026-11-11，北京时间）。事实基座纪律：本文引用的路径与命令全部在仓库内真实存在。
+> 版本基线 **0.17.0**（2026-11-11，北京时间）。事实基座纪律：本文引用的路径与命令全部在仓库内真实存在。
 
 ## 1. 项目一句话
 
@@ -20,6 +20,7 @@ dsh-recency-guard 是 DeepSeek Harness 的**插件崩溃恢复守护**：记录�
 | [conventions.md](./conventions.md) | 工程规范：注释、验证链、测试分层、版本同步纪律、宿主服务读取纪律、YAML 写入纪律、沙箱流程 | 写任何代码前 |
 | [verification.md](./verification.md) | 验证手册：静态 / 沙箱 / 路由 / 用户旅程 / 对抗五层，全部可复现判据 | 声称"能用 / 能防崩溃"之前必读 |
 | [update-guide.md](./update-guide.md) | 发布与升级：版本四锚点顺序、npm publish、桌面端更新、热重载边界、更新后最小验证 | 发布 / 更新安装时 |
+| [tech-debt.md](./tech-debt.md) | **技术债状态表**：`.cycles/tech-debt/` 六条的「现象 / 本轮状态 / 证据 / 剩余风险」；关闭·部分关闭·保留的口径 | 每轮收口 / 评审技术债时 |
 | [../research/](../research/) | 研究文档基座（十篇）：中文思维映射、数学模型、数据结构选型、语言范式、验证体系、应用泛化、迭代计划、候选方向评审、四方向合流、参考插件研究 | 做设计决策 / 评审候选方案前 |
 
 ### 2.1 研究文档与实现的关系（v0.13 起）
@@ -44,7 +45,7 @@ npm install
 npm run build           # esbuild 双产物：dist/index.js（宿主）+ dist/client.js（客户端）
 npx tsc --noEmit        # 类型检查
 npm run lint            # tsc --noEmit --noUnusedLocals --noUnusedParameters
-npm test                # 分层统一运行器：Core 29 / Host 10 / Client 20 / Contract 7 = 68
+npm test                # 分层统一运行器：Core 42 / Host 10 / Client 24 / Contract 8 = 84
 npm run extract-runtime # 解出宿主运行时（Host 测试前置）
 ```
 

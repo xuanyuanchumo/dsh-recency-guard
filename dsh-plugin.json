@@ -3,7 +3,7 @@
   "manifestVersion": "0.15",
   "id": "dsh-recency-guard",
   "name": "dsh-recency-guard",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "license": "MIT",
   "facets": {
     "host": {

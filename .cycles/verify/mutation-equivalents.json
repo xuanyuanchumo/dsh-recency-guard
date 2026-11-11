@@ -75,18 +75,18 @@
       "proof": "tests/unit/core.test.ts:journal 尾部的 undefined 洞被跳过（统计与没有它逐字段一致）—— 用一个显式 undefined 事件钉住 `if (!event) continue` 的跳过语义，不可达的越界项走同一条守卫。"
     },
     {
-      "file": "src/host/data/store.ts",
-      "line": 752,
+      "file": "src/host/data/journal-io.ts",
+      "line": 46,
       "mutator": "comparison",
       "label": "比较方向 > → >=（limit >= 0）",
       "original": "limit > 0",
       "mutated": "limit >= 0",
       "reason": "唯一分歧点是 limit === 0：原式 Math.min(Math.floor(0), lines.length) = 0；变异式走 `: 0` 分支也得到 take = 0。`lines.slice(lines.length - 0)` 在两种写法下都是 []。limit 为负数/非有限时两侧同样得到 0。",
-      "proof": "tests/unit/core.test.ts:readJournal(0) 读 0 行（钉住 limit===0 的取值是 0 而不是「全部」）＋ readJournal(1) 读 1 行（钉住同一表达式的上界行为）。"
+      "proof": "tests/unit/core.test.ts:readJournal(0) 读 0 行（Store.readJournal 委托 parseJournalLines，钉住 limit===0 的取值是 0 而不是「全部」）＋ readJournal(1) 读 1 行（钉住同一表达式的上界行为）。"
     },
     {
       "file": "src/host/data/store.ts",
-      "line": 245,
+      "line": 320,
       "mutator": "try-catch",
       "label": "删除 try/catch 兜底（保留 try 体）",
       "original": "try {\n      cleanStaleLocks(this.dir)\n    } catch {\n      /* best effort：init 的唯一硬要求是备份目录存在 */\n    }",
@@ -103,6 +103,26 @@
       "mutated": "sampleSize <= 1",
       "reason": "唯一分歧点是 sampleSize === 1。原式命中守卫直接 return 1；变异式落到底部公式 Math.max(1, Math.min(4, Math.round(Math.log10(1) + 0.5))) = Math.max(1, Math.round(0.5)) = 1。两条路径同为 1，n<1 与 n>1 的行为完全相同。",
       "proof": "tests/unit/core.test.ts:displayDigits(1) = 1（n=1 与守卫分支同值）；同类边界由 tests/unit/observability-math.test.ts 的 displayDigits(0)===1 / displayDigits(3)===1 钉住。"
+    },
+    {
+      "file": "src/host/core/self-describe.ts",
+      "line": 113,
+      "mutator": "comparison",
+      "label": "比较方向 < → <=（depth <= 6）",
+      "original": "depth < 6",
+      "mutated": "depth <= 6",
+      "reason": "唯一分歧是循环多走一层。自身 package.json 在两种产物形态下都在 ≤3 层被找到（dist/ 与 src/<domain>/），第 7 层只有在「包根不在 ≤6 层」的异常布局下才可达；该布局在产物里不存在。多出的一层读取只是多一次失败的开文件，返回值不变。",
+      "proof": "tests/unit/self-describe.test.ts:版本与现场 package.json 一致 + 版本非空 —— 钉住「循环在触到上界之前已找到自身清单」这个承重事实（若上界被触到会返回全 null）。"
+    },
+    {
+      "file": "src/host/profile/patch-yaml.ts",
+      "line": 88,
+      "mutator": "comparison",
+      "label": "比较方向 < → <=（i <= lines）",
+      "original": "i < lines",
+      "mutated": "i <= lines",
+      "reason": "唯一分歧是循环多走一轮：`lines[i]` 为 undefined，正则 `openable.exec(undefined)` 会先把参数转成字符串 \"undefined\" ⇒ 不匹配 ⇒ `continue`，本轮不写任何字符；`out` 与 `i` 的后续状态和「直接结束循环」一致，返回值不变。",
+      "proof": "tests/unit/patch-yaml.test.ts:空文本 `foldQuotedContinuations(\"\")` 与原样返回未闭合引号的两条断言 —— 钉住「越界轮不产生任何输出变更」这个承重事实（若有写入，原样返回会变）。"
     }
   ]
 }

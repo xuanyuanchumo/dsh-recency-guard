@@ -60,9 +60,25 @@ interface Edge {
 }
 
 function edgesOf(file: string): Edge[] {
-  const text = readFileSync(file, 'utf8')
+  return edgesFromText(file, readFileSync(file, 'utf8'))
+}
+
+/**
+ * 从**给定文本**解析相对 import 边（`edgesOf` 的纯函数体，便于合成回归）。
+ *
+ * ## 为什么语句正则里要写 `(?:(?!\bimport\b)[\s\S])*?`（v0.17 实测缺陷）
+ *
+ * 旧写法是 `import\s+([\s\S]*?)\s+from`。`[\s\S]` 跨越换行 ⇒ 它从**第一条**
+ * import 一路吃到第一条**相对** import：`journal-io.ts` 的 clause 里混进了
+ * `{ existsSync } from 'node:fs'`（非 type）⇒ `import type { JournalRecord }`
+ * 被判成**值边** ⇒ 与 `store.ts` 构成假环（`type X` 的 TYPE 判定永远拿不到）。
+ *
+ * 这条缺陷潜伏很久，直到第一次出现「A `import type` B，B 值 import A」才爆。
+ * 修法是语句内禁止再出现 `import` 关键字；同时由下面的合成用例钉死。
+ */
+function edgesFromText(file: string, text: string): Edge[] {
   const out: Edge[] = []
-  const statement = /^[ \t]*import\s+([\s\S]*?)\s+from\s+['"](\.[^'"]+)['"]/gm
+  const statement = /^[ \t]*import\s+((?:(?!\bimport\b)[\s\S])*?)\s+from\s+['"](\.[^'"]+)['"]/gm
   for (const match of text.matchAll(statement)) {
     const clause = (match[1] ?? '').trim()
     const specifier = match[2] ?? ''
@@ -163,6 +179,33 @@ console.log('\n== 反向自检：判据真的能发现环 ==')
   graph.set('/fake/b.ts', [{ to: '/fake/a.ts', typeOnly: true }])
   check('类型回边不算值环', findCycles(true).length === 0)
   check('但不忽略类型边时能看到它', findCycles(false).length >= 1)
+
+  // **跨行贪婪回归（v0.17 实测缺陷）**：多 import 语句 + 末条是 import type。
+  // 旧正则 `[\s\S]*?` 会从第一条 import 吃到本条 ⇒ clause 混入非 type 语句 ⇒
+  // 类型边被判成值边，制造出「store ↔ journal-io」的假环。
+  // 用真实存在的相对目标（./metric.ts）保证解析能落地，只测**语句边界**。
+  const realFile = join(srcRoot, 'host', 'observe', 'observability.ts')
+  const synthetic = [
+    "import { a } from 'node:x'",
+    "import { b } from 'pkg-y'",
+    "import type { T } from './survival.ts'",
+  ].join('\n')
+  const syntheticEdges = edgesFromText(realFile, synthetic)
+  check(
+    '多 import 语句 + 末条 import type：只解析出一条类型边（跨行贪婪回归）',
+    syntheticEdges.length === 1 && syntheticEdges[0]?.typeOnly === true,
+    syntheticEdges,
+  )
+  const twoRelative = [
+    "import { controlBand } from './control-band.ts'",
+    "import type { Metric } from './survival.ts'",
+  ].join('\n')
+  const twoEdges = edgesFromText(realFile, twoRelative)
+  check(
+    '相邻两条相对 import 各自解析、类型标记不串味',
+    twoEdges.length === 2 && twoEdges[0]?.typeOnly === false && twoEdges[1]?.typeOnly === true,
+    twoEdges,
+  )
 
   // 还原真实图，避免影响后续（本测试无后续，但保持状态一致）。
   graph.clear()

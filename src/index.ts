@@ -51,6 +51,8 @@ import { currentRegistrationSurface, verifySurfaceAlignment } from './host/capab
 import { buildPanelSnapshot, buildGraphDataFor, type PanelSnapshot } from './host/surface/snapshot.ts'
 import { buildStatusOutput } from './host/surface/status-view.ts'
 import { projectBayesViews, projectCalibrationView } from './host/surface/status-projections.ts'
+// RQ3 预防性读数投影（T15-01）：只预警不行动，绝不进关闭决策。
+import { projectPreventive } from './host/surface/preventive-view.ts'
 import { recordStartup } from './host/guard/startup-record.ts'
 import { buildPartitionSnapshot } from './host/surface/partition-snapshot.ts'
 import {
@@ -1573,6 +1575,10 @@ class Guard {
       // 声明式冲突（T14-03）：面板与命令窗口看同一份数据面字段。
       conflicts: this.scanConflictsSync(),
       unresolved: this.store.readDecisionSync()?.unresolved ?? [],
+      // RQ3 预防性读数（T15-01）：journal 是唯一事实源；只预警不行动。
+      preventive: projectPreventive(journalTail),
+      // T15-03：schema 版本降级事实（未知版本 ⇒ 安全空态，必须可见）。
+      corruption: this.store.corruptionReport(),
       // revision 的事实基座（v0.12 乐观并发）：全部取自上面已经读过的状态，
       // 只多一次 readDecisionSync —— 决策文件是几十十字节的小 JSON，
       // 而它是「下次启动会不会拦住插件」的真值，不读它就等于用一份
@@ -1763,8 +1769,16 @@ class Guard {
 
   /** 列出归档（带 manifest 摘要 —— 举他对照时的事实基线）。 */
   async archives(): Promise<unknown> {
+    // T15-03：未知 schemaVersion 的清单不解释、不覆盖，只记一条 degraded note
+    // （归档清单读取频率低 —— 工具动作才读一次 —— 不需要去重）。
     return {
-      archives: listArchives(this.store.partitionPath).map((a) => ({
+      archives: listArchives(this.store.partitionPath, (dir, version) => {
+        this.store.appendSync({
+          kind: 'note',
+          detail: `[recency-guard] 归档清单 ${dir} 的 schemaVersion=${String(version)} 不受支持（只认 1）；已跳过解释，文件未被修改。`,
+          degraded: true,
+        })
+      }).map((a) => ({
         ...a,
         summary: readArchiveManifest(a.dir)?.summary,
       })),
@@ -1817,6 +1831,10 @@ class Guard {
       // 数据面全量（不切片）：截断是渲染策略，不是数据策略。
       conflicts: this.scanConflictsSync(),
       unresolved: this.store.readDecisionSync()?.unresolved ?? [],
+      // RQ3 预防性读数（T15-01）：与面板快照同一投影函数（口径不漂移）。
+      preventive: projectPreventive(this.store.readJournalSync(1000)),
+      // T15-03：schema 版本降级事实（与面板同源）。
+      corruption: this.store.corruptionReport(),
     })
   }
 

@@ -42,6 +42,7 @@ export type PanelSnapshotView = Omit<
   | 'calibration'
   | 'bayes'
   | 'cooccurrence'
+  | 'preventive'
   | 'revision'
 > & {
   /** 稳定性评分 ∈ [0,1]；跨分区视图 / 无样本时为 null。 */
@@ -62,6 +63,11 @@ export type PanelSnapshotView = Omit<
   bayes?: PanelSnapshot['bayes'] | null
   /** 共现验证；旧宿主/跨分区视图可能整段省略。 */
   cooccurrence?: PanelSnapshot['cooccurrence'] | null
+  /**
+   * RQ3 预防性读数（T15-01）。旧宿主没有该字段、跨分区只读视图不提供运行时
+   * 采集面 —— 因此按「缺失/可空」处理；有值时形状完全跟随宿主（不复制第二套）。
+   */
+  preventive?: PanelSnapshot['preventive'] | null
   /**
    * 乐观并发凭证；跨分区只读视图恒 null（动作只作用于当前分区，
    * 拿对方凭证核对必然假冲突）。null 让面板走「不带凭证」分支。

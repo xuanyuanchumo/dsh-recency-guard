@@ -308,6 +308,49 @@ function* tryCatchMutants(text) {
  * 这不是测试缺口，是工具缺陷 —— 等价变异体（equivalent mutant）必须
  * 在生成期剔除，否则这个指标会系统性地谎报。
  */
+/**
+ * 这个 `/` 是**正则字面量**的开头，还是除号？
+ *
+ * 为什么必须判：正则里可以合法出现引号（`/^(?:...(["'])/`）；旧实现把那个
+ * 引号当成字符串开头，一路吞到下一个同类引号，把**整段真实代码**划成惰性
+ * 区间 —— `patch-yaml.ts` 的 6 个比较生成点就是这样被静默丢光的（生成点 6 /
+ * 计划 0，报告只显示「无变异点」）。指标没覆盖到的东西，指标不会告诉你。
+ *
+ * 判据用前一非空白字符（表达式位置）＋ 关键字（`return /x/` 这类），
+ * 保守地偏向「是正则」：少生成几个变异体好过把代码当字符串丢掉。
+ */
+function startsRegex(text, index) {
+  let j = index - 1
+  while (j >= 0 && /[ \t\r\n]/.test(text[j])) j -= 1
+  if (j < 0) return true
+  const prev = text[j]
+  if ('(,=:[!&|?{};+-*%~^<>'.includes(prev)) return true
+  const before = text.slice(Math.max(0, j - 7), j + 1)
+  return /(?:^|[^\w$.])(return|typeof|case|in|of|new|delete|void|yield|await)$/.test(before)
+}
+
+/** 跳过一个正则字面量（处理 `\` 转义与 `[...]` 字符类；正则不跨行）。 */
+function skipRegex(text, index) {
+  let j = index + 1
+  let inClass = false
+  while (j < text.length) {
+    const ch = text[j]
+    if (ch === '\\') {
+      j += 2
+      continue
+    }
+    if (ch === '\n') break
+    if (ch === '[') inClass = true
+    else if (ch === ']') inClass = false
+    else if (ch === '/' && !inClass) {
+      j += 1
+      break
+    }
+    j += 1
+  }
+  return Math.min(j, text.length)
+}
+
 function inertRanges(text) {
   const ranges = []
   let i = 0
@@ -323,6 +366,13 @@ function inertRanges(text) {
     if (ch === '/' && text[i + 1] === '*') {
       const end = text.indexOf('*/', i + 2)
       const stop = end < 0 ? text.length : end + 2
+      ranges.push([i, stop])
+      i = stop
+      continue
+    }
+    // 正则字面量整体视为惰性：正则里的 `a < b` 不是项目代码里的比较。
+    if (ch === '/' && startsRegex(text, i)) {
+      const stop = skipRegex(text, i)
       ranges.push([i, stop])
       i = stop
       continue
@@ -376,6 +426,13 @@ function isInert(index, ranges) {
       const end = text.indexOf('*/', i + 2)
       if (end < 0) break
       i = end + 1
+      continue
+    }
+    // 正则里的引号/花括号不是结构（同 inertRanges 的缺陷族）：不跳过它，
+    // 一个含 `"` 或 `{` 的正则会让后续配对整体错位。
+    if (ch === '/' && startsRegex(text, i)) {
+      const stop = skipRegex(text, i)
+      i = stop - 1
       continue
     }
     if (ch === '{') depth += 1

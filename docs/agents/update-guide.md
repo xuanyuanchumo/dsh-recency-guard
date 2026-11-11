@@ -6,7 +6,7 @@
 ## 1. 发布前置检查（每次更新必跑）
 
 ```bash
-npm test          # 四层分层测试（Core 29 / Host 10 / Client 20 / Contract 7 = 68）
+npm test          # 四层分层测试（Core 42 / Host 10 / Client 24 / Contract 8 = 84）
 npm run lint      # tsc --noEmit --noUnusedLocals --noUnusedParameters
 npm run build     # esbuild 双产物 dist/index.js + dist/client.js
 npx tsc --noEmit  # 类型检查（lint 的超集验证）
@@ -64,7 +64,7 @@ ANIC eval-runner 以版本变化作为评估缓存失效信号之一，版本没
 
 ```bash
 npm test && npm run build                 # 发布前置（§1）
-git tag v0.16.0 && git push --tags       # 先 tag：指向已对齐四锚点的提交
+git tag v0.17.0 && git push --tags       # 先 tag：指向已对齐四锚点的提交
 npm publish                              # 再 publish：需 npm 令牌（凭证库 vault: npm → NPM_TOKEN）
 ```
 
@@ -83,7 +83,7 @@ dsh plugin --profile desktop add dsh-recency-guard
 dsh plugin --profile desktop update dsh-recency-guard
 
 # 锁定版本（推荐，避免 latest 落后/超前于文档）：
-dsh plugin --profile desktop add dsh-recency-guard@0.16.0
+dsh plugin --profile desktop add dsh-recency-guard@0.17.0
 ```
 
 ### 路径 B：本地直装（开发验证形态）

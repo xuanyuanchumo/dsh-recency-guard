@@ -1,10 +1,11 @@
-# 架构与设计（dsh-recency-guard v0.16.0）
+# 架构与设计（dsh-recency-guard v0.17.0）
 
 > 版本说明：§0 记 v0.13 的三条设计纪律；§1–§15 是 0.7–0.12.1 的决策链与实测记录，
 > **原文保留**（标题里的历史版本号是事件编号，不是当前版本）。v0.14 / v0.15 的变更以
 > README 的版本记录与 git 历史为准（误伤闭环 / 贝叶斯 / 预防性指标 / 变异测试；
 > 两层目录重构与边界契约）。v0.16.0 的发布面收口见 §16，确定性冲突证据 / 贪心最小隔离 /
-> 可写 rescue / 客户端可空契约见 §17。
+> 可写 rescue / 客户端可空契约见 §17；v0.17.0 的研究闭环状态（RQ1–RQ4：机制 / 生产消费 /
+> 验证 / 诚实边界）见 §18，技术债逐条状态见 [tech-debt.md](./tech-debt.md)。
 
 ## 0. v0.13 的关键变化（先读这段）
 
@@ -779,7 +780,7 @@ v0.16.0 的 host 层（确定性冲突证据 / 贪心隔离 / 可写 rescue）�
 - 若下一轮发现某段描述与实现不符，改文档而不是把实现迁就文档 —— 文档是投影，不是第二真相源。
 
 这条纪律的代价是 README 少了一些"实现细节炫技"；收益是并行开发时文档不会先于代码说谎。
-**最终形态**已在定稿后按代码复核并写入 §17（68/68 全绿时的实现）。
+**最终形态**已在定稿后按代码复核并写入 §17（84/84 全绿时的实现）。
 
 ## 17. v0.16.0 定稿：确定性证据、贪心隔离与可写逃生（以最终代码为事实）
 
@@ -885,7 +886,7 @@ v0.9 的 rescue 只读；但宿主崩到起不来时，「把决策里那个插�
 
 ### 17.7 验证与口径
 
-- `npm test` **68/68**（Core 29 / Host 10 / Client 20 / Contract 7），
+- `npm test` **84/84**（Core 42 / Host 10 / Client 24 / Contract 8），
   `npx tsc --noEmit` 0、`npm run lint` 0、`npm run build` 双产物成功（2026-11-11 实测）。
 - 新能力的文档落点：README 能力表（确定性冲突证据 / 贪心最小隔离）、
   [api.md](./api.md)（`conflicts` / `unresolved` / rescue 写面 / `decision.json`）、
@@ -959,3 +960,45 @@ boot 是异步的，其 `updateState` 可能在崩溃之后才拿到执行权；
 `error` 已清零（否则会误报成预算耗尽）。
 
 纪律：**不可观测的死分支要转成可观测再做断言，不要给它补假测试。**
+
+## 18. 研究闭环状态（v0.17.0）
+
+> 研究闭环的判据不是「机制实现了」，而是「**这个研究方向的产出，在生产路径上被谁消费**」。
+> 没有消费者的机制就是孤岛 —— 本轮 cycle-15 就是为了修 RQ3 的孤岛状态。
+> 每行四列：机制 / 生产消费 / 验证 / 诚实边界。
+
+### 18.1 四问闭环表
+
+| RQ | 机制 | 生产消费（谁读它） | 验证 | 诚实边界 / 闭环状态 |
+| --- | --- | --- | --- | --- |
+| **RQ1 归因更准** | 贝叶斯并行读数（[`risk-bayes.ts`](../../src/host/risk/risk-bayes.ts)）；确定性冲突证据（[`conflict-declarations.ts`](../../src/host/guard/conflict-declarations.ts) / [`conflict-findings.ts`](../../src/host/guard/conflict-findings.ts)）；因子快照（[`decision-evidence.ts`](../../src/host/guard/decision-evidence.ts)） | [`status-projections.ts`](../../src/host/surface/status-projections.ts) → `status` / 面板 `bayes`；[`crash-decision.ts`](../../src/host/guard/crash-decision.ts) 读 findings 决定隔离目标；面板读 `decisionSuspects` / `conflicts` | [`risk-bayes.test.ts`](../../tests/unit/risk-bayes.test.ts)、[`deterministic-evidence.test.ts`](../../tests/unit/deterministic-evidence.test.ts)、[`conflict-findings.test.ts`](../../tests/unit/conflict-findings.test.ts) | 贝叶斯**只并行显示**，不切换默认 `riskScore`；无真实崩溃样本时「Top-1 命中率提升 ≥5%」**未声称达成**；无声明 ⇒ 不产生 finding。**机制闭环 / 效果未证** |
+| **RQ2 误伤更少** | 误伤校准（[`risk-calibration.ts`](../../src/host/risk/risk-calibration.ts)，只从观测到的用户撤销调整阈值）；`unresolved` 上屏；贪心最小隔离（[`quarantine-plan.ts`](../../src/host/guard/quarantine-plan.ts)） | 校准读数进面板/status；`unresolved` 进 `status` / `PanelSnapshot` / `recover` / `decision.json`；隔离计划决定 `recover` 实际关闭集 | [`risk-calibration.test.ts`](../../tests/unit/risk-calibration.test.ts)、[`unresolved-surfacing.test.ts`](../../tests/unit/unresolved-surfacing.test.ts)、[`quarantine-plan.test.ts`](../../tests/unit/quarantine-plan.test.ts) | 阈值**只升不降**且必须有观测到的用户撤销才动，无数据不动；`unresolved` 是「治不了」不是「已治好」；无真实误伤样本 ⇒ 误伤率下降**未声称达成**。**机制闭环 / 效果未证** |
+| **RQ3 信号更早** | 预防性健康指标（[`preventive.ts`](../../src/host/observe/preventive.ts)）：启动频率 EWMA 控制带 + 配置变更 CUSUM | **v0.17 接通生产**：[`preventive-view.ts`](../../src/host/surface/preventive-view.ts) 是第一个生产消费者 → `PanelSnapshot.preventive`（以及本轮 status/面板消费）；此前 `grep "from.*preventive" src/` = 0，属**孤岛** | [`observability-math.test.ts`](../../tests/unit/observability-math.test.ts)（数学）、[`preventive-wiring.test.ts`](../../tests/unit/preventive-wiring.test.ts)（源码扫描：只预警、无关闭依赖） | **只预警、零行动**：`preventive` 绝不被 `recover()` / 决策读取；加载耗时用「启动频率」**代理**（journal 没有真实加载耗时），代理链写在数据面；样本不足 ⇒ `defined:false` + reason，不填 0；「预警提前量 ≥1 轮」**未声称达成**。**机制闭环（有生产消费者）/ 效果未证** |
+| **RQ4 验证更硬** | 自动化变异（`scripts/mutation.mjs`）+ 故障注入 + `rescue.mjs` / `tool-text.ts` **跨实现 width 对拍** + 无直接测试清零与归因账本 | 工程门禁消费（G2 / E4.1）；变异报告与归因账本供交付审计；**不在运行时路径** | [`fault-injection.test.ts`](../../tests/fault-injection/fault-injection.test.ts)、[`width-parity.test.ts`](../../tests/contract/width-parity.test.ts)、[`mutation-report.md`](../../.cycles/verify/mutation-report.md)、[`mutation-equivalents.json`](../../.cycles/verify/mutation-equivalents.json) | 本轮实测：**72 变异体 / 60 断言杀死 / 12 已证等价 / 0 未归因**（有意义口径 100%，门禁 80% PASS）；无直接测试 **14 → 2**（`event-watch.ts` / `tool-registration.ts`）。杀灭率分母只是「工具生成的变异体」；等价体必须**有 proof 才剔除**；工具边界不冒充等价；无直接测试数是覆盖信号不是质量结论 |
+
+### 18.2 「谁消费」总表（闭环判据）
+
+| 产出 | 生产文件 | 生产消费者 |
+| --- | --- | --- |
+| 贝叶斯后验 / 可信区间 | `risk-bayes.ts` | `status-projections.ts` → `status` / 面板 |
+| 确定性冲突 finding | `conflict-declarations.ts` / `conflict-findings.ts` | `crash-decision.ts` / `status-view.ts` / `snapshot.ts` / 面板 |
+| 误伤校准读数 | `risk-calibration.ts` | `observability.ts` → 面板 / `status` |
+| 贪心隔离计划 + `unresolved` | `quarantine-plan.ts` | `crash-decision.ts` / `recover` / `decision.json` / 面板 |
+| 预防性预警 | `preventive.ts` | **`preventive-view.ts` → `PanelSnapshot.preventive` / status / 面板（v0.17 新增）** |
+| 变异/对拍报告 | `scripts/mutation.mjs` + 测试 | 工程门禁与交付审计（非运行时） |
+
+### 18.3 仍未闭环（如实登记）
+
+- **RQ3 的「提前量」效果**：机制接了生产，但「预警提前量 ≥1 轮」需要真实崩溃前样本，
+  当前只有机制与诚实边界，**不声称效果**。
+- **RQ1 Top-1 / RQ2 误伤率**：模型已并行读数并上屏，但没有真实崩溃 / 误伤样本，
+  改进幅度**不在本轮结论内**。
+- **共现加权**：`cooccurrence.ts` 只给「可加权」判定（`mayWeightByCooccurrence`），
+  决策权重仍为 0 —— 研究 09 §4.3 要求先验证再加权，本轮**有意不闭环**这一项，
+  并在 README 诚实边界写明「只判定不加权」。
+- **跨实现对拍只覆盖 width 函数**：`rescue.mjs` 与 `tool-text.ts` 的其他重复逻辑
+  （CJK 对齐、截断格式）仍靠各自纪律，不声称「两份实现全等价」。
+- **无直接测试仍余 2 个模块**：`event-watch.ts` 与 `tool-registration.ts`（事件订阅 / 组合根接线，
+  需要集成夹具而不是纯函数测试）—— 不把「14→2」写成「已清零」。
+- **TD-5 / TD-6**（journal 裁剪窗口、分区索引同步首写窗口）是**部分关闭**：
+  常见丢证据路径已结构性消灭，但窗口本身仍在，见 [tech-debt.md](./tech-debt.md)。

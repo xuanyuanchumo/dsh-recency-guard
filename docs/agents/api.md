@@ -1,8 +1,18 @@
-# 对外面 API（dsh-recency-guard v0.16.0）
+# 对外面 API（dsh-recency-guard v0.17.0）
 
 > 本文件里的路由 / 工具签名 / 配置项从 `src/host/surface/routes.ts`、
 > `src/host/surface/tool-registration.ts`、`src/host/capability/capability.ts`
 > 与 `src/index.ts` 实抄；契约变更必须在这里留一行。
+
+## 0.0h v0.17 契约变更一句话清单
+
+| 变更 | 影响 | 兼容性 |
+| --- | --- | --- |
+| **`PanelSnapshot.preventive` / `status.preventive`** | RQ3 预防性读数（启动频率 EWMA + 配置变更 CUSUM，`source{units,note}`）；**只预警不行动**，不可判定 ⇒ `defined:false`+`reason` | **纯追加**；关闭决策链路零依赖（源码扫描门） |
+| **`PanelSnapshot.corrupt` / `status.corrupt`** | 未知 `schemaVersion` 的安全降级事实 `{state,decision}`；`status` 另带 `files` | **纯追加**；缺省按「无损坏」渲染 |
+| **数据文件加 `schemaVersion`** | `state` / `decision` / 归档 manifest / cooccurrence 统一 `schemaVersion:1`；缺失按 v1 读、未知 ⇒ 安全空态 + `degraded:true` note + **不覆盖文件** | 兼容（v0.16 及更早文件无字段）；未知版本行为变严（有意的安全降级） |
+| **面板自适应轮询** | 稳定 5s→10s→15s、变化回 5s、边界 [3s,30s]；`setTimeout` 递归；指纹剔除 `at` / `snapshotMs` | 客户端行为；动作路由 409 的「地图陈旧」窗口由 5s 变为最长约 15s |
+| **journal 记录新增 `schemaVersion` 相关 `degraded:true` note** | 未知版本降级可查 | 兼容（`degraded` 纯追加；读方忽略未知字段） |
 
 ## 0.0g v0.16 契约变更一句话清单
 
@@ -256,7 +266,8 @@ v0.4 起 `execute` 返回**规范 JSON 对象**（不再是字符串）：
 
 ### 2.1 v0.12 动作路由的乐观并发（409 语义）
 
-面板每 5s 轮询一次快照，用户点击时依据的地图最长可能陈旧 5 秒。动作路由
+面板按**自适应节奏**轮询快照（稳定时 5s→10s→15s，内容变化/用户操作立即回 5s），
+用户点击时依据的地图最长可能陈旧约 15 秒。动作路由
 因此在**执行前**核对 `body.expectedRevision` 与当前真值（`Guard.currentRevision()`）：
 
 | 请求 | 判定 | 响应 | 动作 |
@@ -357,9 +368,26 @@ journal 尾），无额外状态、崩溃重启后同一份事实必得同一枚
 
 - **真追加**：`appendSync`（崩溃路径）/ `append`（异步）都用 `appendFile*`，
   不整读整写；行数裁剪只在异步、加锁的安全时机执行（>1000 行），崩溃路径永不裁剪。
-- `degraded: true` 目前来自启动编排的三处失败兜底：分区索引加锁提交、`recordChanges`、
-  官方实验插件观测。它替代「只写 logger」——日志不进事后可查的数据面。
+- `degraded: true` 目前来自启动编排的三处失败兜底（分区索引加锁提交、`recordChanges`、
+  官方实验插件观测），以及**未知 schemaVersion** 的数据文件降级（TD-1）。
+  它替代「只写 logger」——日志不进事后可查的数据面。
 - 未知字段必须被读方忽略（向后兼容）；消费方不得依赖行序以外的结构。
+
+### 2.5 数据文件 schema 版本（v0.17，TD-1）
+
+`state.json` / `decision.json` / 归档 manifest / cooccurrence 统一用 `schemaVersion: 1`：
+
+| 读到的值 | 行为 |
+| --- | --- |
+| `1` | 正常读 |
+| **缺失** | 按 v1 宽容读（v0.16 及更早文件没有该字段，老 profile 必须能读） |
+| **其它值** | **不覆盖、不解释**：`state` 返回安全空态 + `corrupt:true`；`decision` 返回 `null`；写一条 `degraded:true` journal note（同一 `(文件,版本)` 只写一次） |
+
+- 为什么不能「尽力解释」：`crashSeq` / `autoDisabled` / `disable` 的语义可能已变，
+  按旧语义解释会做出**错误的恢复决定**；保留现场 + 上屏损坏标记，才能让人判断。
+- 对外投影：`PanelSnapshot.corrupt` 与 `status.corrupt` = `{state, decision}`；
+  `status` 额外带 `files`（已知损坏文件路径）。
+- 常量单一来源：[`schema-version.ts`](../../src/host/data/schema-version.ts) 的 `SCHEMA_VERSION`。
 
 ## 3. 面板快照契约（PanelSnapshot 摘要）
 
@@ -383,6 +411,9 @@ lastRecoveryVerdict?         **v0.9.1**：最近恢复判定（观察中 N/M 轮
                              **v0.16**：可选 `deterministic{findings,targets}`（为什么是确定性证据）
 conflicts?                   **v0.16**：当前仍成立的声明式冲突（kind/message/plugins/source/declaration）
 unresolved?                  **v0.16**：上次隔离后仍治不了的 error finding（读 decision.json）
+preventive                   **v0.17**：RQ3 预防性读数（loadTime 启动频率 EWMA + configChanges CUSUM，
+                             source{units,note}）；**只预警不行动**，不可判定 ⇒ defined:false + reason
+corrupt                      **v0.17**：`{state,decision}`，未知 schemaVersion 的安全降级事实
 revision                     **v0.12**：乐观并发凭证（12 hex，从 state+decision+journal 尾派生）
                              —— 动作请求带 `expectedRevision` 回传它；跨分区只读视图恒 null
 diagnostics                  **v0.10**：插件/宿主版本、平台、快照耗时、repositoryUrl/issuesUrl
@@ -405,6 +436,16 @@ metrics/capability/markov 为 null —— 那些是当前进程的状态机事�
 [`snapshot-view.ts`](../../src/client/panel/snapshot-view.ts) 的 `PanelSnapshotView`
 显式放宽这些字段（只放宽、不复制契约），渲染层降级而不是把面板打进错误边界；
 该清单由 [`panel-snapshot-nullability.test.ts`](../../tests/contract/panel-snapshot-nullability.test.ts) 守护。
+
+**v0.17 补充**：
+
+- `preventive` 的 `loadTime` **不是**真实加载耗时 —— journal 没有该事实，投影用「相邻启动时刻差的倒数
+  （启动频率，per-minute）」做代理，`source.note` / `source.units` 必须原样显示，防止被读成性能指标；
+  样本不足 ⇒ `defined:false` + `reason`，`value` 恒为 `null`。
+- `corrupt` 是未知 `schemaVersion` 的安全降级事实；缺省（跨分区只读 / 旧宿主投影）按
+  `{state:false,decision:false}` 渲染，不把「没读到」当成「文件坏了」。
+- **只预警不行动**由源码扫描测试钉住：`crash-decision.ts` / `quarantine-plan.ts` /
+  `recovery-*.ts` 等关闭决策链路零依赖 `preventive`（`tests/unit/preventive-wiring.test.ts`）。
 对外 JSON 形状不变 —— 这是客户端类型层的修正，不是宿主发新字段。
 
 ### 3.0a v0.12 L4 审计线（journal 的机器可读部分）
@@ -425,7 +466,7 @@ metrics/capability/markov 为 null —— 那些是当前进程的状态机事�
 - **先写后执行**：崩溃可能发生在动作中间，那时「谁、以什么理由发起了这件事」
   必须已经在盘上。反过来（先执行后记录）会让最需要审计的那次失败恰好没有审计。
 - **只审计写动作**：L4 全自主 = 人类只在事后审计，要记的是「改了什么」。
-  把 status/history 也记进去，面板每 5s 轮询会把崩溃因果链冲掉（信号被噪声淹没）。
+  把 status/history 也记进去，面板按秒级节奏轮询会高频写日志、把崩溃因果链冲掉（信号被噪声淹没）。
 - **复用 `kind: note` 而不是新开 `audit` kind**：journal 的 kind 是一张跨层词汇表
   （store 的 JournalKind、observations 的 FlowAction、eventFlow 渲染映射、面板着色
   分组都要跟着改）。新开 kind 而漏掉任一处，审计行就在事件流里**静默消失** ——
@@ -446,6 +487,11 @@ metrics/capability/markov 为 null —— 那些是当前进程的状态机事�
   （JSON 数组）；读取失败退化为全展开 —— 不抛异常。
 - **轮询开关**：暂停 = 不再发 fetch，画面停在暂停时刻；
   按钮文字/边框双通道区分（aria-pressed + `.rg-button-paused`）。
+- **自适应轮询（v0.17）**：`setTimeout` 递归而不是 `setInterval`；内容连续
+  1 轮不变 ⇒ 10s、≥2 轮不变 ⇒ 15s 封顶；一旦变化/用户操作 ⇒ 回 5s；
+  绝对边界 `[3s, 30s]`。指纹 = 稳定序列化（键排序）+ FNV-1a，且**剔除**
+  `at` 与 `diagnostics.snapshotMs` 等每次请求都变的字段 —— 否则退避永不触发。
+  暂停/卸载必须同时 `clearTimeout` + 置 `cancelled`，防止在途响应回来后再挂定时器。
 - **图谱交互**（全部可由键盘/鼠标完成，均有 aria 标签）：
   Ctrl/⌘+滚轮缩放（指针锚）· 拖画布平移 · 拖节点重排（offsets 叠加层）·
   单击高亮追溯 · 双击视口居中 · 搜索定位（**v0.11：Enter 循环遍历 + 第 n/m 指示**）·

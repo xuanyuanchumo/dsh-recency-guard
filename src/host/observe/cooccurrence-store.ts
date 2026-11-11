@@ -22,6 +22,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
+import { pathSafeName } from '../core/path-safe.ts'
 
 /** 一条共现样本（形状与 `cooccurrence.ts` 的同名接口一致，避免循环依赖只用结构类型）。 */
 export interface StoredCooccurrenceSample {
@@ -108,7 +109,7 @@ export interface ObservedEntry {
 
 /** 观测快照文件相对于分区目录的路径。 */
 export function observationPath(partitionDir: string, name: string): string {
-  return join(partitionDir, `observation-${sanitizeName(name)}.json`)
+  return join(partitionDir, `observation-${pathSafeName(name)}.json`)
 }
 
 /**
@@ -169,7 +170,3 @@ export async function writeObservation(
   }
 }
 
-/** 文件名安全的名称投影（与 store.ts 的 sanitize 同语义，独立一份避免循环依赖）。 */
-function sanitizeName(name: string): string {
-  return name.replace(/[^A-Za-z0-9._@/-]/g, '_')
-}

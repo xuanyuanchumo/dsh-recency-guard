@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { SCHEMA_VERSION } from './store.ts'
 
 /**
  * 归档重置 —— 「产物归档后重新开始执行，并能以最新的项目事实重跑自举」。
@@ -164,14 +165,16 @@ export function archiveAndReset(
  */
 export function resetArtifacts(stateDir: string, now = new Date()): void {
   mkdirSync(join(stateDir, 'backups'), { recursive: true })
+  // T15-03：重置产物同样带 schemaVersion —— 「重置」不该写出一个
+  // 读取端需要靠「缺字段」来猜版本的文件（缺字段路径只为兼容旧文件保留）。
   writeFileSync(
     join(stateDir, 'decision.json'),
-    JSON.stringify({ capturedAt: now.toISOString(), suspects: [], disable: [], reason: 'none' }, null, 2),
+    JSON.stringify({ schemaVersion: SCHEMA_VERSION, capturedAt: now.toISOString(), suspects: [], disable: [], reason: 'none' }, null, 2),
     'utf8',
   )
   writeFileSync(
     join(stateDir, 'state.json'),
-    JSON.stringify({ bootMarker: null, crashSeq: 0, autoDisabled: [], stabilized: false, restored: [] }, null, 2),
+    JSON.stringify({ schemaVersion: SCHEMA_VERSION, bootMarker: null, crashSeq: 0, autoDisabled: [], stabilized: false, restored: [] }, null, 2),
     'utf8',
   )
 }
@@ -203,7 +206,10 @@ function directoryBytes(dir: string): number {
  * 排序依据：目录名里的时间戳（ISO 变体，字典序即时间序）——
  * 不解析文件内容，快且无歧义。
  */
-export function listArchives(partitionDir: string): Array<{ dir: string; archivedAt: string; reason: string; count: number }> {
+export function listArchives(
+  partitionDir: string,
+  onUnsupportedVersion?: (dir: string, version: unknown) => void,
+): Array<{ dir: string; archivedAt: string; reason: string; count: number }> {
   const archiveRoot = join(partitionDir, 'archive')
   if (!existsSync(archiveRoot)) return []
   const out: Array<{ dir: string; archivedAt: string; reason: string; count: number }> = []
@@ -211,6 +217,12 @@ export function listArchives(partitionDir: string): Array<{ dir: string; archive
     const dir = join(archiveRoot, name)
     try {
       const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')) as ArchiveManifest
+      // T15-03：未知 schemaVersion 的清单不当成「一次合法归档」解释 —— 它的
+      // entries/summary 语义可能已变；保留现场（不删不覆盖），只报告给调用方。
+      if (manifest?.schemaVersion !== undefined && manifest.schemaVersion !== SCHEMA_VERSION) {
+        onUnsupportedVersion?.(dir, manifest.schemaVersion)
+        continue
+      }
       out.push({
         dir,
         archivedAt: manifest.archivedAt,
@@ -234,7 +246,12 @@ export function listArchives(partitionDir: string): Array<{ dir: string; archive
  */
 export function readArchiveManifest(archiveDir: string): ArchiveManifest | null {
   try {
-    return JSON.parse(readFileSync(join(archiveDir, 'manifest.json'), 'utf8')) as ArchiveManifest
+    const parsed = JSON.parse(readFileSync(join(archiveDir, 'manifest.json'), 'utf8')) as ArchiveManifest
+    // T15-03：未知版本不解释、不覆盖 —— 返回 null 让调用方按「没有清单」降级。
+    // 这里没有 Store 可写 journal，留痕由调用方（`listArchives` 的回调 /
+    // Guard.archives）负责；`readArchiveManifest` 只保证「不误读」。
+    if (parsed?.schemaVersion !== undefined && parsed.schemaVersion !== SCHEMA_VERSION) return null
+    return parsed
   } catch {
     return null
   }

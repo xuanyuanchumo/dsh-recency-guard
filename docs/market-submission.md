@@ -1,4 +1,4 @@
-# awesome-dsh-plugin 投稿材料（v0.16.0）
+# awesome-dsh-plugin 投稿材料（v0.17.0）
 
 > 依据 <https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md>
 > （2026-11-11 复核该文件当前内容）。
@@ -17,8 +17,8 @@ url: https://github.com/xuanyuanchumo/dsh-recency-guard
 name: xuanyuanchumo/dsh-recency-guard
 category: security
 description:
-  en: "Crash-recovery guard for DeepSeek Harness: records plugin install and update recency plus declared compatibility metadata, blocks the offending suspects before the next boot after a crash, and restores stable plugins afterwards. Ships a management panel with an interactive capability graph, per-project partition isolation, archive-and-reset, and an offline rescue CLI."
-  zh: "DeepSeek Harness 的插件崩溃恢复守护：记录插件的安装更新时序与声明的兼容元数据，崩溃后在下一次启动前拦下问题嫌疑插件，稳定后自动恢复。带可交互能力图谱的管理面板、按项目分区隔离、归档重置与离线救援 CLI。"
+  en: "Crash-recovery guard for DeepSeek Harness: records install/update recency plus declared compatibility metadata, backs up plugin config, disables the offending suspects before the next boot after a crash (declaration-conflict targets when declared, otherwise the most recently updated), and restores stable plugins afterwards. Two crash-detection channels cover kills and power loss that never run exit handlers; journal writes are append-only and crash state is reconciled against the decision file. Ships a management panel with quantified observability, deterministic conflict findings with file-and-line provenance, greedy minimal quarantine with dependency linkage, and preventive early-warning readings that only warn and never trigger disabling. The panel refreshes adaptively (5s to 15s backoff while stable, immediate return on change), and also provides an interactive capability graph, per-project partition isolation, archive-and-reset, and an offline rescue CLI that can apply or restore a quarantine (dry-run by default, two-phase with hash checks). Optional peers are lazily resolved so an incomplete host environment can never make the plugin fail to load."
+  zh: "DeepSeek Harness 的插件崩溃恢复守护：记录安装更新时序与声明的兼容元数据、备份插件配置，崩溃后在下一次启动前拦下问题嫌疑插件（有兼容声明时按确定性冲突取证，否则按最近更新排序），稳定后自动恢复。两条崩溃检测通道覆盖强杀与断电这类不会运行退出处理器的情形；journal 真追加，崩溃状态按决策文件对账。带量化可观测性管理面板、带文件行号出处的确定性冲突证据、含依赖联动的贪心最小隔离，以及只预警不触发关闭的预防性预警读数。面板自适应刷新（稳定时 5s 退避到 15s，内容变化立即回 5s），并提供可交互能力图谱、按项目分区隔离、归档重置，以及可离线执行/回插隔离的救援 CLI（默认 dry-run，两阶段 + 哈希校验）。可选 peer 惰性解析，宿主环境不完整也不会导致插件加载失败。"
 icon: https://raw.githubusercontent.com/xuanyuanchumo/dsh-recency-guard/main/assets/icon-256.png
 ```
 
@@ -55,13 +55,15 @@ node -e "const fs=require('fs');const t=fs.readFileSync('docs/market-submission.
 | Two crash-detection channels … never run exit handlers | [`sentinel.ts`](../src/host/guard/sentinel.ts) 哨兵 + [`abnormal-boot.ts`](../src/host/guard/abnormal-boot.ts) 残留标记通道 | [`fault-injection.test.ts`](../tests/fault-injection/fault-injection.test.ts)、[`reload-journey.test.ts`](../tests/host/reload-journey.test.ts) |
 | management panel with quantified observability | [`observability.ts`](../src/host/observe/observability.ts)、[`markov.ts`](../src/host/observe/markov.ts)、[`survival.ts`](../src/host/observe/survival.ts)、[`control-band.ts`](../src/host/observe/control-band.ts) | [`observability-math.test.ts`](../tests/unit/observability-math.test.ts)、[`hazard-threshold.test.ts`](../tests/unit/hazard-threshold.test.ts) |
 | decision-factor breakdown / co-occurrence verification / structural graph insights | [`decision-evidence.ts`](../src/host/guard/decision-evidence.ts)、[`cooccurrence.ts`](../src/host/observe/cooccurrence.ts)、[`graph-analysis.ts`](../src/client/graph/graph-analysis.ts) | [`decision-evidence.test.ts`](../tests/unit/decision-evidence.test.ts)、[`cooccurrence.test.ts`](../tests/unit/cooccurrence.test.ts)、[`graph-analysis.test.ts`](../tests/client/graph-analysis.test.ts) |
+| preventive early-warning readings that only warn and never trigger disabling | [`preventive.ts`](../src/host/observe/preventive.ts)（EWMA 控制带 / CUSUM）、[`preventive-view.ts`](../src/host/surface/preventive-view.ts)（生产投影） | [`observability-math.test.ts`](../tests/unit/observability-math.test.ts)、[`preventive-wiring.test.ts`](../tests/unit/preventive-wiring.test.ts)（源码扫描：关闭链路零依赖）、[`preventive-card.test.ts`](../tests/client/preventive-card.test.ts) |
+| panel refreshes adaptively (5s→15s backoff while stable, immediate return on change) | [`poll-adaptive.ts`](../src/client/panel/poll-adaptive.ts)（指纹 + 退避）、[`GuardPanel.tsx`](../src/client/panel/GuardPanel.tsx)（递归 setTimeout + cancelled） | [`poll-adaptive.test.ts`](../tests/client/poll-adaptive.test.ts) |
 | interactive capability graph | [`GuardGraph.tsx`](../src/client/graph/GuardGraph.tsx) + [`graph-data.ts`](../src/host/capability/graph-data.ts) | [`graph-model.test.ts`](../tests/client/graph-model.test.ts)、[`graph-focus.test.ts`](../tests/client/graph-focus.test.ts) |
 | per-project partition isolation | [`isolation.ts`](../src/host/core/isolation.ts) + 分区索引 | [`isolation-journey.test.ts`](../tests/host/isolation-journey.test.ts) |
 | archive-and-reset on the latest facts | [`archive.ts`](../src/host/data/archive.ts)（manifest 先读后搬） | [`core.test.ts`](../tests/unit/core.test.ts) |
 | offline rescue CLI that can also apply or restore a quarantine (dry-run by default, two-phase with hash checks) | [`rescue.mjs`](../bin/rescue.mjs)（零依赖；只读命令 + `apply`/`restore`；`prepared→applied`、before/afterHash、`--resume` 原 index 回插；退出码 0/1/2/3） | [`rescue-cli.test.ts`](../tests/unit/rescue-cli.test.ts) |
 | Optional peers are lazily resolved so an incomplete host environment can never make the plugin fail to load | [`tool-registration.ts`](../src/host/surface/tool-registration.ts) 的 `loadDefineTool` + [`index.ts`](../src/index.ts) 的 `loadSchemastery` | [`install-resilience.test.ts`](../tests/contract/install-resilience.test.ts) |
 
-**数字口径**：`npm test` = **68/68 通过**（Core 29 / Host 10 / Client 20 / Contract 7），
+**数字口径**：`npm test` = **84/84 通过**（Core 42 / Host 10 / Client 24 / Contract 8），
 `npx tsc --noEmit` 0 错误（2026-11-11 实测）。描述里没有出现「46 tools / 六大领域」
 这类需要逐项计数的数字，避免与实现漂移。
 
@@ -69,9 +71,10 @@ node -e "const fs=require('fs');const t=fs.readFileSync('docs/market-submission.
 
 - [x] `package.json` 声明 `dsh.bundle.patch`（`./cordis.patch.yml`）—— **被拒首因**已避开。
 - [x] 仓库根存在 `cordis.patch.yml`，且内含 `insert: [{ id, name }]` 声明。
-- [x] 真实可用代码：**68 项**测试分层全绿（Core 29 / Host 10 / Client 20 / Contract 7）。
+- [x] 真实可用代码：**84 项**测试分层全绿（Core 42 / Host 10 / Client 24 / Contract 8）。
 - [x] 描述里的新能力可逐句核对：确定性冲突四类 finding 带出处；贪心最小隔离含依赖联动与
-      `unresolved` 上屏；rescue 写面默认 dry-run + 两阶段哈希（见 §2）。
+      `unresolved` 上屏；rescue 写面默认 dry-run + 两阶段哈希；预防性预警只上屏、关闭链路零依赖
+      （源码扫描测试）；自适应刷新有纯函数 + 接线测试（见 §2）。
 - [x] `dsh-plugin.json` 权限已复核：**无新增权限**。`fs.read` 覆盖读插件自带的
       `package.json` / `dsh-plugin.json` 声明；`fs.write`（scope `profile`）覆盖
       `.recency-guard/`、`cordis.patch.yml` 与 rescue 对 profile `package.json` 的修改。
@@ -96,37 +99,41 @@ node -e "const fs=require('fs');const t=fs.readFileSync('docs/market-submission.
       版本集合含 `0.16.0`；tarball shasum `1d49e8a7b15d0d5a1708b5a110863a105a6533ec`（见 §4）。
 - [ ] 面板 / 图谱截图 —— **未提供**。`screenshots.json` 目前只有市场图标；
       真机截图里含用户会话列表，未脱敏不放仓，不拿图冒充。
-- [x] **提交 PR**：本条目上一轮已收录；本轮提交的是**更新自己那一条**（去掉了过期的
+- [x] **提交 PR**：本条目上一轮已收录；上一轮提交的是**更新自己那一条**（去掉了过期的
       `v0.11.4` 固定 tarball、刷新描述），未碰任何既有条目、未手工编辑生成的 README：
       <https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/14245>
+- [ ] **0.17.0 发布后再提一次「只改自己条目」的 PR**：补预防性预警（只预警不行动）与
+      自适应刷新；不改既有条目、不手工编辑生成的 README —— **未做**（等 0.17.0 发布）。
 
-> 唯一未勾的是截图，原因是隐私与「不造图」，不是遗漏。
+> 未勾的是截图（隐私 + 不造图）与 0.17.0 的条目更新 PR，不是遗漏。
 
 ## 4. 发布事实（2026-11-11 核对，评审可自行复核）
 
 | 项 | 值 |
 | --- | --- |
 | npm 包 | `dsh-recency-guard` |
-| npm `latest` | **0.16.0**（`https://registry.npmjs.org/dsh-recency-guard/latest`） |
+| npm `latest` | **0.16.0**（0.17.0 尚未发布；`https://registry.npmjs.org/dsh-recency-guard/latest`） |
 | latest tarball shasum | `1d49e8a7b15d0d5a1708b5a110863a105a6533ec`（204.8kB / 12 文件） |
-| 本仓库源码版本 | **0.16.0**（四锚点：`package.json` / README / `docs/agents` / `dsh-plugin.json`） |
-| GitHub | <https://github.com/xuanyuanchumo/dsh-recency-guard>（main + tag `v0.16.0`） |
-| GitHub Release | <https://github.com/xuanyuanchumo/dsh-recency-guard/releases/tag/v0.16.0> |
+| 本仓库源码版本 | **0.17.0**（四锚点：`package.json` / README / `docs/agents` / `dsh-plugin.json`） |
+| GitHub | <https://github.com/xuanyuanchumo/dsh-recency-guard>（main；最新 tag 为 `v0.16.0`） |
+| GitHub Release | <https://github.com/xuanyuanchumo/dsh-recency-guard/releases/tag/v0.16.0>（`v0.17.0` 发布后新增） |
 | 市场条目 | `data/plugins/xuanyuanchumo__dsh-recency-guard.yml`（已收录） |
 | 更新 PR | <https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/14245> |
 | 仓库创建时间 | `2026-11-07T07:44:06Z`（满足 1 天门槛） |
 | topics | `crash-recovery`、`deepseek-harness`、`dsh-plugin`、`plugin-guard` |
 | 许可 | MIT |
 
-> npm 与仓库四锚点**已一致**（0.16.0）。条目不再保留 `tarball:` —— 已发布 npm，
-> 预构建安装免 `allowBuilds` 授权；registry 映射自动采集，不手写 `npm:` 键。
+> 仓库四锚点已统一为 **0.17.0**；npm `latest` 仍为 **0.16.0**，发布 0.17.0 后再同步本表。
+> 条目不再保留 `tarball:` —— 已发布 npm，预构建安装免 `allowBuilds` 授权；
+> registry 映射自动采集，不手写 `npm:` 键。0.17.0 发布后需再提一次**只改自己条目**的 PR，
+> 把描述更新为「预防性预警（只预警不行动）+ 自适应刷新」。
 
 ## 4.1 本轮对既有条目的改动（只改自己那一条）
 
 | 字段 | 旧值（上一轮收录时） | 新值 | 理由 |
 |---|---|---|---|
 | `tarball` | `…/releases/download/v0.11.4/dsh-recency-guard-0.11.4.tgz` | **删除** | 指向已过期产物；已发 npm，权威来源改为 registry |
-| `description.en/zh` | 描述 0.11.x 的能力面 | 补确定性冲突证据 / 贪心隔离 / append-only journal + 对账 / 可写 rescue | 描述必须与代码一致（评审逐句核对） |
+| `description.en/zh` | 描述 0.16.x 的能力面 | 补预防性预警（只预警不行动）与自适应刷新；保留确定性冲突证据 / 贪心隔离 / append-only journal + 对账 / 可写 rescue | 描述必须与代码一致（评审逐句核对） |
 | `url` / `name` / `category` / `icon` | 不变 | 不变 | — |
 
 ## 5. 安装方式（README 对用户承诺的三条）
@@ -144,5 +151,5 @@ dsh plugin --profile <profile名> add file:/绝对路径/dsh-recency-guard
 
 三种都以 `dsh plugin add` 走兼容闸门为前提。历史实测记录：`@0.12.1` 曾在**全新 profile**
 上安装通过（桌面端 `link:` 直连源码不经过闸门，本机看不出这类问题）。
-本轮（0.16.0）源码侧已跑通 `npm test` **68/68**；**未重新做 npm 全新 profile 安装实测**，
+本轮（0.17.0）源码侧已跑通 `npm test` **84/84**；**未重新做 npm 全新 profile 安装实测**，
 因此不声称"0.16.0 的 npm 安装已验证"。

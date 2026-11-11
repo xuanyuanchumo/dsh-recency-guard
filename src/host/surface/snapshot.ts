@@ -14,6 +14,7 @@ import type { JournalRecord } from '../data/store.ts'
 import type { Metric } from '../observe/observability.ts'
 // 声明式冲突的形状只在 conflict-metadata 定义一次（store/status/panel 共用）。
 import type { ConflictFinding } from '../guard/conflict-metadata.ts'
+import { emptyPreventive, type PreventiveView } from './preventive-view.ts'
 
 /**
  * 事件流快照的条数上限。
@@ -51,6 +52,22 @@ export interface PanelSnapshot {
   conflicts?: readonly ConflictFinding[]
   /** 上次恢复的残余 error finding（`decision.json` 的 `unresolved`）。 */
   unresolved?: readonly ConflictFinding[]
+  /**
+   * RQ3 预防性读数（T15-01）。
+   *
+   * 为什么进快照：预警是**观测面**事实，面板必须与状态/排名同屏出现；
+   * 单独开一条接口会让「状态是 A 时刻、预警是 B 时刻」（快照的既有纪律）。
+   * 只预警不行动：本字段不被任何关闭决策读取（源码扫描断言见
+   * `tests/unit/preventive-wiring.test.ts`）。
+   */
+  preventive: PreventiveView
+  /**
+   * schema 版本降级事实（T15-03）。
+   *
+   * 未知版本时守护退到安全空态（看起来像干净启动）；必须让面板也能看到
+   * 「文件版本不受支持」，否则数据损坏会被误读成系统正常。
+   */
+  corrupt: { state: boolean; decision: boolean }
   /** profile 名。 */
   profile: string
   /** 当前工作区（分区键）。 */
@@ -361,6 +378,15 @@ export interface SnapshotInput {
    * 但事实早已变」这种漂移就无法在结构上排除。
    */
   revisionFacts: RevisionFacts
+  /**
+   * RQ3 预防性读数（T15-01，可选）。
+   *
+   * 省略 = 调用方没有 journal 事实；投影会退化成「不可判定」而不是 0
+   * （`emptyPreventive()` 的两条读数都是 defined:false + reason）。
+   */
+  preventive?: PreventiveView
+  /** schema 版本降级事实（T15-03；省略 ⇒ 按「无损坏」渲染）。 */
+  corruption?: { state: boolean; decision: boolean }
 }
 
 /**
@@ -456,6 +482,11 @@ export function buildPanelSnapshot(input: SnapshotInput, now = Date.now()): Pane
     // 这一点必须诚实：空数组只表示「没有可展示的 finding」，不区分原因。
     conflicts: [...(input.conflicts ?? [])],
     unresolved: [...(input.unresolved ?? [])],
+    // RQ3 预防性读数（T15-01）：只预警不行动，见 preventive-view.ts 头注。
+    // 调用方没传 ⇒ 退回空读数（defined:false + reason），不伪装成「无预警」。
+    preventive: input.preventive ?? emptyPreventive(),
+    // T15-03：未知 schemaVersion 的降级必须与状态同屏（缺省 = 未读到损坏）。
+    corrupt: input.corruption ?? { state: false, decision: false },
     // revision 是**派生**的：同一份事实重算必得同一枚值（哈希而非计数器），
     // 所以它不需要持久化位点，也不会在崩溃后说谎。字段装配唯一在
     // Guard.revisionFactsFrom（见 SnapshotInput 注释）—— 本函数只投影不拼字段。
