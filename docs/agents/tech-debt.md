@@ -23,6 +23,7 @@
 | **TD-4** | [`anic-init-cycle-number-rewind`](../../.cycles/tech-debt/anic-init-cycle-number-rewind.md) | 归档清空 `cycles/` 后 `init-cycle` 从 1 重排，与归档目录撞名 | **保留**（外部技能包，不在本插件修） | 归属 `dsh-anic`（ai-native-iteration-cycle）技能包；本插件侧规避=显式 `--cycle <n>`（cycle-15 即显式建号） | 只能规避，不能根治；根治需改技能包 `getNextCycleNum` 取「现存/归档/状态机」三信号最大值 |
 | **TD-5** | [`journal-trim-window`](../../.cycles/tech-debt/journal-trim-window.md) | journal 裁剪的「锁内读最新 → 原子写回」窗口；崩溃路径同步 append 可能落在窗口里被覆盖 | **部分关闭** | 常见路径已结构性消灭：`store.ts:356` `append` / `:387` `appendSync` 改真追加；[`journal-io.ts`](../../src/host/data/journal-io.ts)`:67-87` `trimJournalFile()` 只在 >1000 行、异步、持锁时触发，且 `readText` 可注入（失败分支可测、默认行为不变）；测试 `tests/unit/journal-append-race.test.ts`、`tests/unit/journal-trim-injection.test.ts` | **裁剪窗口本身仍在**（读→原子写回之间不持崩溃路径的同步写）。频率 = 每 ~1000 条事件一次；影响面 = 最旧极少条；恢复判定不依赖 journal，所以不会回到崩溃循环。根治方向：按大小分文件（裁剪=删旧文件）或崩溃路径同步锁 |
 | **TD-6** | [`partition-index-sync-window`](../../.cycles/tech-debt/partition-index-sync-window.md) | `apply()` 的同步首写发生在 boot 加锁提交之前；强杀可丢「工作区曾被登记」的一条引用 | **部分关闭** | boot 期 `writePartitionIndexLocked()` 已在 `withFileLock` 内重读归并幂等提交（[`boot-orchestration.ts`](../../src/host/guard/boot-orchestration.ts)`:78` 默认注入、[`isolation.ts`](../../src/host/core/isolation.ts)`:249`）；并发实测 `tests/unit/decision-concurrency.test.ts`、`tests/host/isolation-parallel.test.ts` | **同步首写窗口仍在**：apply 之后、boot 提交之前被强杀，仍可能丢一条引用（只影响分区可读性，不影响守护/恢复）。两条写路径并存（幂等但多一次 IO）。根治需「每分区一个引用文件 + 读取合成」的结构迁移 |
+| **TD-7** | [`path-safe-name-fingerprint`](../../.cycles/tech-debt/path-safe-name-fingerprint.md) | 修「白名单含 `/` ⇒ 路径逃逸」时，把 `/` 折成 `_` 会让 `@scope/pkg` 与 `@scope_pkg` 投到同一文件（观测/备份静默覆盖）；弥补方式是对**改写过的名称**追加 8 位 sha256 指纹 | **保留**（有意接受） | [`path-safe.ts`](../../src/host/core/path-safe.ts)`:42-46` `pathSafeName`（改写过才加指纹，未改写保持原名 ⇒ 存量兼容）；`:50-56` `legacyUnsafeName` 仅用于读旧文件；测试 `tests/unit/path-sanitize.test.ts`（改写名 vs lookalike、越界、4 对冲突） | 两个**都被改写**且 8 位指纹相撞时仍会覆盖（≈2.3e-10，几十条目量级可忽略）；影响仅旁路数据（观测快照/配置备份），不参与关闭决策。根治=16 位指纹 + 读取双路径，属破坏性文件名迁移，留待下一轮 |
 
 ## 2. 逐条说明（为什么是这个状态）
 
@@ -75,6 +76,19 @@
   不影响守护与恢复判定）。两条路径对同一文件写两次（幂等但多一次 IO）。
 - **根治方向**：每分区一个引用文件 + 读取时合成；需改三个读者并保留旧 `partitions.json` 兼容。
 
+### TD-7 · pathSafeName 指纹碰撞 —— 保留（有意接受）
+
+- **背景**：修「白名单含 `/` ⇒ 路径逃逸」时，`/` 折成 `_` 引入新碰撞
+  （`@scope/pkg` 与真实存在的 `@scope_pkg` 投到同一文件），因此对**被改写的名称**
+  追加原始名的 8 位 sha256 指纹；未改写的名称保持原样（存量文件名不变）。
+- **为什么接受**：触发前提窄（两个名称都含非法字符 + 指纹相撞，≈2.3e-10）；
+  影响面是旁路数据（观测快照/配置备份），不参与关闭决策。
+- **为什么不现在升级**：16 位指纹会让**已写入的文件名再次变化**，存量可读性再断一次；
+  应作为下一次破坏性变更（或「双读单写」迁移）单独做。
+- **可见性替代**：若将来出现两份数据互相串，先查 `pathSafeName(a) === pathSafeName(b)`；
+  更符合本项目纪律的下一步是「写入时目标已存在且 bundle 不同 ⇒ journal 冲突告警」，
+  把静默覆盖变成可见冲突。
+
 ## 3. 复核命令
 
 ```bash
@@ -82,6 +96,7 @@ npm test                                                     # 全量（数字�
 npx tsx tests/client/poll-adaptive.test.ts                   # TD-2
 npx tsx tests/unit/journal-append-race.test.ts               # TD-5
 npx tsx tests/unit/decision-concurrency.test.ts              # TD-6
+npx tsx tests/unit/path-sanitize.test.ts                     # TD-7
 grep -n "SCHEMA_VERSION\|noteCorruption" src/host/data/store.ts   # TD-1
 grep -n "commitPartitionIndex\|writePartitionIndexLocked" src/host/guard/boot-orchestration.ts  # TD-6
 ```

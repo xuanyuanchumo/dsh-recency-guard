@@ -54,16 +54,16 @@ dsh plugin --profile <profile名> add dsh-recency-guard
 dsh plugin --profile <profile名> add dsh-recency-guard@0.17.0
 ```
 
-> 版本对应：本 README 描述本仓库 **0.17.0** 源码。npm 上实际可安装的版本以
-> `npm view dsh-recency-guard version` 为准；若 `latest` 落后于本文版本，请按下面的源码方式安装，
-> 或等待对应版本发布。发布顺序见 [`docs/agents/conventions.md`](docs/agents/conventions.md) §6。
+> 版本对应：本 README 描述 **0.17.0**；npm `latest` 已发布为 **0.17.0**
+> （2026-11-11，shasum `b667bd20b6ea82d294dbc28e4eab1290b07dd963`），可直接安装。
+> 版本纪律见 [`docs/agents/conventions.md`](docs/agents/conventions.md) §6。
 
 ### 插件市场
 
 投稿材料已按 [awesome-dsh-plugin contributing.md](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md)
 备好（[`docs/market-submission.md`](docs/market-submission.md)）：一个条目文件、`category: security`。
-上架后可在 dsh 的 **Plugins → Discover** 或 dsh-market 中搜索 `recency-guard` 安装。
-**当前状态：材料已备、PR 未提交** —— 本文不声称已在市场中可搜到。
+**当前状态：条目已收录（PR #14245）；0.17.0 描述更新已推到同一 PR 分支（HEAD `94ade1e`），
+等待复核/合并。** 收录后可在 dsh 的 **Plugins → Discover** 或 dsh-market 中搜索 `recency-guard` 安装。
 
 ### 手动 / 本地源码（开发）
 
@@ -405,7 +405,7 @@ npm run extract-runtime # Host 层测试前置（runtime/ 缺失时先解出）
 
 | 版本 | 一句话 |
 | --- | --- |
-| **0.17.0**（2026-11-11） | 技术栈清理与研究闭环：预防性预警（RQ3）接入生产且**只预警不行动**、面板自适应刷新、状态文件 schema 版本（未知版本保留现场）、变异 72 突变体 / 0 未归因 + 无直接测试 14→2 + rescue/宿主宽度跨实现对拍；技术债状态见 [`docs/agents/tech-debt.md`](docs/agents/tech-debt.md) |
+| **0.17.0**（2026-11-11） | 技术栈清理与研究闭环：预防性预警（RQ3）接入生产且**只预警不行动**、面板自适应刷新、状态文件 schema 版本（未知版本保留现场）、路径逃逸修复（`pathSafeName` 单一实现 + 指纹）、变异 72 突变体 / 0 未归因 + 无直接测试 14→2 + rescue/宿主宽度跨实现对拍；技术债状态见 [`docs/agents/tech-debt.md`](docs/agents/tech-debt.md) |
 | **0.16.0**（2026-11-11） | 确定性冲突证据（4 类 finding + 出处）、贪心最小隔离与依赖联动、可写两阶段 rescue、常态路径锁卫生、PanelSnapshotView 可空契约；新增社区 manifest [`dsh-plugin.json`](dsh-plugin.json)，README 面向用户重构，版本四锚点统一 |
 | 0.15.0 | 架构重构：`host/` + `client/` + `shared/` 分层，client→host 越界与值依赖环写成契约测试 |
 | 0.14.0 | 误伤反馈闭环、贝叶斯风险并行读数、预防性健康指标（EWMA / CUSUM）、自动化变异测试 |

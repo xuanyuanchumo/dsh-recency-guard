@@ -21,7 +21,7 @@
 src/
 ├── index.ts                     # host bundle 入口：四件套 name/inject/Config/apply
 ├── host/                        # 只在宿主进程运行（可用 node:fs / 进程 / 路由 / IO）
-│   ├── core/                    #   基础原语：生命周期状态机、revision、分区键、自描述、同步原子写
+│   ├── core/                    #   基础原语：生命周期状态机、revision、分区键、自描述、同步原子写、路径安全投影
 │   ├── data/                    #   持久化与归档：Store、archive、锁卫生（lock-hygiene）、
 │   │                            #     journal 文本层（journal-io）、schema 版本判据（schema-version）
 │   ├── guard/                   #   崩溃守护主线：决策、恢复、信号、异常终止、守护行安装
