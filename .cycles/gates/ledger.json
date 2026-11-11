@@ -764,7 +764,25 @@
       "timestamp": "2026-11-11T07:41:48.944Z",
       "previousHash": "c54f4a2c04d19c00d443ee97af351f4b4f5489af1eabdd0093c401e31eae38d4",
       "hash": "06febe174113e4b86a505082e4438f2178236cd4c888b8f1f99f892b629abc9a"
+    },
+    {
+      "gate": "G1",
+      "gateName": "任务收敛门",
+      "result": "PASS",
+      "detail": "All 44 tasks completed §cycle-14 [Q7:PASS]",
+      "timestamp": "2026-11-11T08:00:04.323Z",
+      "previousHash": "06febe174113e4b86a505082e4438f2178236cd4c888b8f1f99f892b629abc9a",
+      "hash": "f700e6cf36343571ca0d03d7df2d7a9c1eecbddb80b35c9eca26d017b4c71eab"
+    },
+    {
+      "gate": "G2",
+      "gateName": "测试收敛门",
+      "result": "PASS",
+      "detail": "Zero failures, zero errors (测试报告.md) §cycle-14 [Q2:PASS]",
+      "timestamp": "2026-11-11T08:00:04.342Z",
+      "previousHash": "f700e6cf36343571ca0d03d7df2d7a9c1eecbddb80b35c9eca26d017b4c71eab",
+      "hash": "83cf8495d7005e0ee3b68dfd91bac81294d091815741a25004b41ce6103c177d"
     }
   ],
-  "chainHead": "06febe174113e4b86a505082e4438f2178236cd4c888b8f1f99f892b629abc9a"
+  "chainHead": "83cf8495d7005e0ee3b68dfd91bac81294d091815741a25004b41ce6103c177d"
 }

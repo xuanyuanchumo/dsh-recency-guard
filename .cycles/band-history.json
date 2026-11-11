@@ -1,12 +1,5 @@
 [
   {
-    "timestamp": "2026-11-08T23:10:00.665Z",
-    "totalScore": 1829,
-    "avgScore": 35.86274509803921,
-    "fileCount": 51,
-    "overBudgetCount": 0
-  },
-  {
     "timestamp": "2026-11-08T23:21:48.036Z",
     "totalScore": 1829,
     "avgScore": 35.86274509803921,
@@ -344,6 +337,13 @@
   },
   {
     "timestamp": "2026-11-11T07:35:26.870Z",
+    "totalScore": 2564,
+    "avgScore": 33.298701298701296,
+    "fileCount": 77,
+    "overBudgetCount": 0
+  },
+  {
+    "timestamp": "2026-11-11T07:59:52.690Z",
     "totalScore": 2564,
     "avgScore": 33.298701298701296,
     "fileCount": 77,

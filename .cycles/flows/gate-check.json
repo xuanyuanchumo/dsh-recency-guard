@@ -97,8 +97,20 @@
       "from": "RUNNING",
       "to": "FAILED",
       "at": "2026-11-11T07:41:48.971Z"
+    },
+    {
+      "trigger": "run",
+      "from": "FAILED",
+      "to": "RUNNING",
+      "at": "2026-11-11T08:00:05.427Z"
+    },
+    {
+      "trigger": "any-fail",
+      "from": "RUNNING",
+      "to": "FAILED",
+      "at": "2026-11-11T08:00:05.427Z"
     }
   ],
-  "updatedAt": "2026-11-11T07:41:48.971Z",
+  "updatedAt": "2026-11-11T08:00:05.427Z",
   "ledgerHead": null
 }

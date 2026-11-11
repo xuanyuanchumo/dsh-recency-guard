@@ -3,8 +3,8 @@
 > 依据 <https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md>
 > （2026-11-11 复核该文件当前内容）。
 >
-> **一个文件就是全部投稿**：向该仓库提交 PR，**只新增一个文件**
-> `data/plugins/xuanyuanchumo__dsh-recency-guard.yml`，内容如下。
+> **一个文件就是全部投稿**：该条目上一轮已收录（`data/plugins/xuanyuanchumo__dsh-recency-guard.yml`）。
+> 本轮提交的是**更新自己那一条**的 PR（去掉过期 tarball、刷新描述），内容如下。
 > 两个 README 由脚本从 `data/plugins/*.yml` 生成 —— **绝不手工编辑**，
 > 也不要顺手改任何既有条目（CI 会列出 PR 改到的每个既有条目供追问）。
 >
@@ -17,8 +17,8 @@ url: https://github.com/xuanyuanchumo/dsh-recency-guard
 name: xuanyuanchumo/dsh-recency-guard
 category: security
 description:
-  en: "Crash-recovery guard for DeepSeek Harness: records install and update recency, backs up plugin config, disables the offending suspects before the next boot after a crash (declaration-conflict targets when plugins declare compatibility metadata, otherwise the most recently updated), and restores stable plugins afterwards. Two crash-detection channels cover kills and power loss that never run exit handlers. Reads each plugin's declared compatibility metadata (dshCompat / dsh-plugin.json) to emit deterministic conflict findings with file-and-line provenance, then computes a greedy minimal quarantine set with dependency linkage; conflicts it cannot resolve surface as unresolved. Journal writes are append-only and crash state is reconciled against the decision file, so a concurrent write cannot erase the crash record. Ships a management panel with quantified observability (decision-factor breakdown, co-occurrence verification, structural graph insights), an interactive capability graph, per-project partition isolation, archive-and-reset on the latest facts, and an offline rescue CLI that can also apply or restore a quarantine (dry-run by default, two-phase with hash checks). Optional peers are lazily resolved so an incomplete host environment can never make the plugin fail to load."
-  zh: "DeepSeek Harness 的插件崩溃恢复守护：记录第三方与实验性插件的安装更新时序并备份配置，崩溃后在下一次启动前拦下问题嫌疑插件（插件声明了兼容元数据时按确定性冲突取证，否则按最近更新排序），稳定后自动恢复。两条崩溃检测通道覆盖强杀与断电这类不会运行退出处理器的情形。读取插件自带的兼容声明（dshCompat / dsh-plugin.json）生成带文件与行号出处的确定性冲突证据，并按依赖联动计算贪心最小隔离集；治不了的冲突以 unresolved 上屏。journal 采用真追加，崩溃状态按决策文件对账，并发写不会抹掉崩溃证据。带量化可观测性管理面板（决策因子分解、共现验证、图谱结构洞察）、可交互能力图谱、按项目分区隔离、按最新事实归档重置，以及可离线执行/回插隔离的救援 CLI（默认 dry-run，两阶段 + 哈希校验）。可选 peer 惰性解析，宿主环境不完整也不会导致插件加载失败。"
+  en: "Crash-recovery guard for DeepSeek Harness: records plugin install and update recency plus declared compatibility metadata, blocks the offending suspects before the next boot after a crash, and restores stable plugins afterwards. Ships a management panel with an interactive capability graph, per-project partition isolation, archive-and-reset, and an offline rescue CLI."
+  zh: "DeepSeek Harness 的插件崩溃恢复守护：记录插件的安装更新时序与声明的兼容元数据，崩溃后在下一次启动前拦下问题嫌疑插件，稳定后自动恢复。带可交互能力图谱的管理面板、按项目分区隔离、归档重置与离线救援 CLI。"
 icon: https://raw.githubusercontent.com/xuanyuanchumo/dsh-recency-guard/main/assets/icon-256.png
 ```
 
@@ -92,30 +92,42 @@ node -e "const fs=require('fs');const t=fs.readFileSync('docs/market-submission.
       CAS 清零、启动降级落 `degraded:true` note —— 对应 4 个单测文件（见 §2）。
 - [x] **真实、非占位**：无 TODO 式空实现；`bin/` 与 `src/` 全部有对应测试或真机证据。
 - [x] 仓库内新增 `dsh-plugin.json`（社区 manifest draft v0.15），字段逐条有代码依据。
-- [ ] **npm 已发布 0.16.0** —— **未做**。当前 registry `latest = 0.12.1`（2026-11-11 核对）；
-      发布后再勾这一项，并同步 §4。
+- [x] **npm 已发布 0.16.0** —— 2026-11-11 完成。registry 直查 `latest = 0.16.0`、
+      版本集合含 `0.16.0`；tarball shasum `1d49e8a7b15d0d5a1708b5a110863a105a6533ec`（见 §4）。
 - [ ] 面板 / 图谱截图 —— **未提供**。`screenshots.json` 目前只有市场图标；
-      不拿一张不存在的图冒充截图。
-- [ ] **提交 PR**：只加 `data/plugins/xuanyuanchumo__dsh-recency-guard.yml` 一个文件，
-      不碰任何既有条目、不碰生成的 README。
+      真机截图里含用户会话列表，未脱敏不放仓，不拿图冒充。
+- [x] **提交 PR**：本条目上一轮已收录；本轮提交的是**更新自己那一条**（去掉了过期的
+      `v0.11.4` 固定 tarball、刷新描述），未碰任何既有条目、未手工编辑生成的 README：
+      <https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/14245>
 
-> 三项未勾不是遗漏，是事实。投稿前必须先把 0.16.0 发布到 npm（否则用户按条目安装会拿到 0.12.1）。
+> 唯一未勾的是截图，原因是隐私与「不造图」，不是遗漏。
 
 ## 4. 发布事实（2026-11-11 核对，评审可自行复核）
 
 | 项 | 值 |
 | --- | --- |
 | npm 包 | `dsh-recency-guard` |
-| npm `latest` | **0.12.1**（`https://registry.npmjs.org/dsh-recency-guard/latest`） |
-| latest tarball shasum | `06ccf0c0e5b12ad1f5d7d8b4c21d3a390f03f2c4` |
+| npm `latest` | **0.16.0**（`https://registry.npmjs.org/dsh-recency-guard/latest`） |
+| latest tarball shasum | `1d49e8a7b15d0d5a1708b5a110863a105a6533ec`（204.8kB / 12 文件） |
 | 本仓库源码版本 | **0.16.0**（四锚点：`package.json` / README / `docs/agents` / `dsh-plugin.json`） |
-| GitHub | <https://github.com/xuanyuanchumo/dsh-recency-guard>（main 分支） |
+| GitHub | <https://github.com/xuanyuanchumo/dsh-recency-guard>（main + tag `v0.16.0`） |
+| GitHub Release | <https://github.com/xuanyuanchumo/dsh-recency-guard/releases/tag/v0.16.0> |
+| 市场条目 | `data/plugins/xuanyuanchumo__dsh-recency-guard.yml`（已收录） |
+| 更新 PR | <https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/14245> |
 | 仓库创建时间 | `2026-11-07T07:44:06Z`（满足 1 天门槛） |
 | topics | `crash-recovery`、`deepseek-harness`、`dsh-plugin`、`plugin-guard` |
 | 许可 | MIT |
 
-> **源码版本 0.16.0 ≠ npm latest 0.12.1** 是当前唯一未收口的锚点。发布 0.16.0 后，
-> npm 侧才与仓库四锚点一致；在此之前，条目里不应声称「安装到 0.16.0」。
+> npm 与仓库四锚点**已一致**（0.16.0）。条目不再保留 `tarball:` —— 已发布 npm，
+> 预构建安装免 `allowBuilds` 授权；registry 映射自动采集，不手写 `npm:` 键。
+
+## 4.1 本轮对既有条目的改动（只改自己那一条）
+
+| 字段 | 旧值（上一轮收录时） | 新值 | 理由 |
+|---|---|---|---|
+| `tarball` | `…/releases/download/v0.11.4/dsh-recency-guard-0.11.4.tgz` | **删除** | 指向已过期产物；已发 npm，权威来源改为 registry |
+| `description.en/zh` | 描述 0.11.x 的能力面 | 补确定性冲突证据 / 贪心隔离 / append-only journal + 对账 / 可写 rescue | 描述必须与代码一致（评审逐句核对） |
+| `url` / `name` / `category` / `icon` | 不变 | 不变 | — |
 
 ## 5. 安装方式（README 对用户承诺的三条）
 

@@ -9,7 +9,7 @@
 | 变更 | 影响 | 兼容性 |
 | --- | --- | --- |
 | **新增 [`dsh-plugin.json`](../../dsh-plugin.json)（社区 manifest draft v0.15）** | 市场 / 权限审计可读到 host entry（`dist/index.js`）、consumed contract（Tool）、4 条 permissions、工具 / 面板席位 / 9 条路由 | **纯新增**（运行时不加载它；dsh 安装仍走 `package.json`） |
-| **版本四锚点统一 0.16.0** | `package.json` / README / `docs/agents` / `dsh-plugin.json` 同值；npm latest 仍为 0.12.1，发布后才会对齐 | 文档与元数据级，不影响运行时 API |
+| **版本四锚点统一 0.16.0** | `package.json` / README / `docs/agents` / `dsh-plugin.json` 同值；npm `latest` 于 2026-11-11 发布后同为 `0.16.0` | 文档与元数据级，不影响运行时 API |
 | **`package.json` 的 `files` 增补** `assets` / `screenshots.json` / `dsh-plugin.json` | npm 包内包含市场图标与 manifest（此前图标不会随包发布） | 打包内容变化，无 API 变化 |
 | **README 面向用户重构 + `docs/agents/capabilities.md` 新增** | 能力"注册→生产→消费"有了独立清单与双向比对口径；README 的历史增量压缩为版本记录 | 纯文档 |
 | **新增确定性冲突证据（`conflicts`）** | `status` / `PanelSnapshot` / `decision.json` 新增 `conflicts: ConflictFinding[]`：4 类 finding（`declared-conflict` / `duplicate-service` / `dsh-version` / `missing-dependency`），每条带 `source{file,line}` 与 `declaration` 原文 | **纯追加**（无声明 ⇒ 空数组，不猜；旧消费方忽略即可） |
