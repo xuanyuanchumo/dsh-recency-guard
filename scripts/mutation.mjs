@@ -27,7 +27,7 @@
  *   node scripts/mutation.mjs --max-mutants 20          # 限制规模（冒烟）
  *   node scripts/mutation.mjs --min-kill-rate 0.8       # 低于阈值非零退出（门禁）
  */
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join, relative, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
@@ -148,7 +148,39 @@ const args = parseArgs(process.argv.slice(2))
  */
 const pending = new Map()
 
+/**
+ * 变异进行中的标记文件（`.tmp/` 已 gitignore）。
+ *
+ * 为什么必须有它：`eval-runner` 的并行预热会跑 `npm test`，而本工具在跑每个
+ * 变异体时**临时改写 `src/**` 再恢复**。两者并发时，测试进程会读到变异体、
+ * 得到「产品有 bug」的假红 —— cycle-14 实测：eval 的 E3/E8 因此误判 FAIL，
+ * 变异结束后重跑即 68/68（同一 Merkle 根）。
+ *
+ * 标记由 `tests/run.ts` 消费：看到它就**拒绝出结论**（假绿/假红都算污染）。
+ * 清理挂在 `restoreAll()` 上，因此正常结束、异常、SIGINT/SIGTERM/SIGHUP
+ * 与 `exit` 四条路径都会带走它。
+ */
+const mutationMarkerPath = join(projectRoot, '.tmp', 'mutation.inflight')
+
+function markMutationInFlight() {
+  try {
+    mkdirSync(join(projectRoot, '.tmp'), { recursive: true })
+    writeFileSync(mutationMarkerPath, String(Date.now()), 'utf8')
+  } catch {
+    // 标记失败只削弱「并发保护」，不该中断变异测试本身。
+  }
+}
+
+function clearMutationInFlight() {
+  try {
+    rmSync(mutationMarkerPath, { force: true })
+  } catch {
+    // 清理失败同样不该盖住真实结论。
+  }
+}
+
 function restoreAll() {
+  clearMutationInFlight()
   for (const [path, original] of pending) {
     try {
       writeFileSync(path, original, 'utf8')
@@ -623,6 +655,7 @@ function runTests(files) {
 }
 
 async function main() {
+  markMutationInFlight()
   const sources = collectSources().filter((path) => {
     if (!args.filter) return true
     return relative(projectRoot, path).replace(/\\/g, '/').includes(args.filter)
@@ -672,6 +705,13 @@ async function main() {
           tests,
           mutator: mutator.id,
           label: mutant.label,
+          // **绝对偏移必须随计划带下去**：执行阶段若用 `indexOf(original)` 定位，
+          // 同形文本在文件里出现更早（尤其是**注释里**的示例）时会把变异打在
+          // 惰性区间上 —— 实测 `observability.ts:204`（`limit <= 0`）被错误地
+          // 变异到第 202 行注释里的同名文本，变异体行为不变 ⇒ 假存活，
+          // 而报告仍把行号指向 204（看起来像是测试缺口）。行号与偏移同源，
+          // 报告才点得回真正被改的那一行。
+          offset: mutant.index,
           line: lineOf(text, mutant.index),
           original: mutant.original,
           mutated: mutant.mutated,
@@ -735,15 +775,57 @@ async function main() {
     return 0
   }
 
+  // 0) **基线自检**（cycle-14 新增，来历是一次真实的假绿）：
+  // 变异前，本轮会被用到的每个测试文件都必须先自己跑绿。
+  //
+  // 为什么这是硬门槛：若套件里有一条**常红**断言，任何变异体（哪怕是等价的）
+  // 都会被判 KILL —— 上一轮实测把 43/44 全部抬成 KILL，而其中 7 条是账本里
+  // 已证等价、根本杀不死的变异体。杀灭率区分不了「断言抓住了变异」与
+  // 「套件本来就红」：**红的基线会让指标系统性地谎报**。
+  // 拒绝对不可解释的数字做门禁，比报一个漂亮数字诚实。
+  const relevantTests = [...new Set(limited.flatMap((item) => item.tests))].sort()
+  console.log(`\n基线自检：${relevantTests.length} 个直接测试文件必须全绿 ...`)
+  // 重型沙箱测试（fault-injection 会真起 dsh 子进程并强杀；isolation-parallel
+  // 是 4 进程并发）在负载下会**偶发**失败 —— 实测同一文件单独跑 ALL PASS、
+  // 连续两次预检却红。因此整表最多重跑 3 次；真红的文件每次都会红 ⇒ FATAL。
+  // 不隐藏事实：尝试次数写进控制台与报告。
+  const MAX_BASELINE_ATTEMPTS = 3
+  let baseline = runTests(relevantTests)
+  let baselineAttempts = 1
+  while (!baseline.passed && baselineAttempts < MAX_BASELINE_ATTEMPTS) {
+    baselineAttempts += 1
+    console.log(
+      `基线自检第 ${baselineAttempts} 次重跑（上轮失败：${relative(projectRoot, baseline.failedFile).replace(/\\/g, '/')}；偶发抖动判据 = 整表重跑能全绿）...`,
+    )
+    baseline = runTests(relevantTests)
+  }
+  if (!baseline.passed) {
+    console.error(
+      `[mutation] FATAL: 基线不绿 —— ${relative(projectRoot, baseline.failedFile).replace(/\\/g, '/')}（连续 ${baselineAttempts} 次整表重跑仍红）`,
+    )
+    console.error('[mutation] 先修绿基线再跑门禁。否则「变异后失败」只证明套件本来就红，杀灭率会系统性谎报。')
+    return 1
+  }
+  if (baselineAttempts > 1) {
+    console.log(`基线自检 PASS（第 ${baselineAttempts} 次整表重跑全绿；前几次失败判为并发/资源抖动，已记录）`)
+  } else {
+    console.log('基线自检 PASS（下面的 KILL 才能归因给变异，而不是归因给本来就红的套件）')
+  }
+
   // 2) 逐个执行
   console.log(`\n执行 ${limited.length} 个变异体（预算上限 ${args.maxMutants}）...\n`)
   const results = []
   for (const [index, item] of limited.entries()) {
     const originalText = readFileSync(item.source, 'utf8')
-    // 用「首次出现位置」精确定位替换，避免全局 replace 误伤同形文本。
-    const at = originalText.indexOf(item.original)
-    if (at < 0) {
-      results.push({ ...item, outcome: 'skipped', detail: '原文本已变化' })
+    // 用**生成时的绝对偏移**定位替换（不是第一次 indexOf）。
+    // 为什么：`indexOf` 会命中更早的同形文本（注释里的示例就是最常见的
+    // 陷阱），于是变异落在惰性区间 ⇒ 行为不变 ⇒ 假存活。计划里带上了
+    // offset，并且替换前校验该处文本逐字相同；对不上就如实标 skipped，
+    // 绝不「找个别的位置凑合」——那会把归因悄悄指向另一行。
+    const at = Number.isInteger(item.offset) ? item.offset : originalText.indexOf(item.original)
+    const atMatches = at >= 0 && originalText.slice(at, at + item.original.length) === item.original
+    if (!atMatches) {
+      results.push({ ...item, outcome: 'skipped', detail: '计划偏移处的原文本已变化' })
       continue
     }
     const mutatedText = originalText.slice(0, at) + item.mutated + originalText.slice(at + item.original.length)
@@ -901,6 +983,9 @@ async function main() {
     `| 账本被拒条目（缺 reason/proof） | ${ledger.rejected.length} |`,
     `| 账本未生效条目 | ${ledgerUnused.length} |`,
     `| 无直接测试的源码文件 | ${untested.length} |`,
+    `| 基线自检（变异前） | PASS（${relevantTests.length} 个直接测试文件，整表重跑 ${baselineAttempts} 次${
+      baselineAttempts > 1 ? '；前几次失败判为并发/资源抖动' : ''
+    }） |`,
     '',
     '> 判定口径：只有「变异体可解析、且被断言抓住」才计入杀灭率；语法杀死不计入。',
     '> **原始口径**不剔除任何存活体；**有意义口径**只剔除账本中已证等价、且本轮源码核对通过的存活体。',

@@ -1,4 +1,10 @@
-# 架构与设计（dsh-recency-guard v0.14.0）
+# 架构与设计（dsh-recency-guard v0.16.0）
+
+> 版本说明：§0 记 v0.13 的三条设计纪律；§1–§15 是 0.7–0.12.1 的决策链与实测记录，
+> **原文保留**（标题里的历史版本号是事件编号，不是当前版本）。v0.14 / v0.15 的变更以
+> README 的版本记录与 git 历史为准（误伤闭环 / 贝叶斯 / 预防性指标 / 变异测试；
+> 两层目录重构与边界契约）。v0.16.0 的发布面收口见 §16，确定性冲突证据 / 贪心最小隔离 /
+> 可写 rescue / 客户端可空契约见 §17。
 
 ## 0. v0.13 的关键变化（先读这段）
 
@@ -706,3 +712,250 @@ guard 自身）—— 没有候选可关是诚实结果，不是失败。判定�
 
 所以本轮把「源码门 + 变异自证」作为无 DOM 缺陷的替代证明手段，把
 「真机强杀两轮」作为崩溃检测的验收动作，两者都写进了 CLAUDE.md 的教训清单。
+
+## 16. v0.16.0：发布面收口（为什么 manifest 与文档也算设计）
+
+### 16.1 起点缺陷：四个版本锚点各说各话
+
+v0.16.0 开工时的现场：
+
+| 锚点 | 值 |
+| --- | --- |
+| `package.json` | 0.14.0 |
+| 最近一次提交信息 | v0.15.0 |
+| 最新 git tag | v0.11.4 |
+| npm `latest` | 0.12.1 |
+| README 顶部 | v0.14.0 |
+
+这不是"忘了改一个数字"，而是**锚点没有写进检验**：每个值单独看都合理，没有任何命令
+会把它们放在一起比对。修法分两半：
+
+1. 四锚点统一到 `0.16.0`（`package.json` / README / `docs/agents` 当前版本引用 / `dsh-plugin.json`）；
+2. 把顺序写进 [conventions.md](./conventions.md) §6：**先改锚点 → build/test → tag → publish**。
+   先 publish 后改锚点，会造出 npm 上存在、仓库里查不到的版本号；先 tag 后改锚点，
+   tag 指向的提交里还是旧版本 —— 两种都让"用户装到的"与"你宣称的"永久对不上账。
+
+### 16.2 `dsh-plugin.json` 的取舍：只写有代码依据的字段
+
+社区 manifest（draft v0.15，schema 来自 dsh-std）不是 `package.json` 的复制品：
+它声明的是**可审计的能力与权限**。本轮只写能逐条 grep 到依据的字段：
+
+| 字段 | 依据 |
+| --- | --- |
+| `facets.host.entry: dist/index.js` | `package.json` 的 `main` + `scripts/build.mjs` 的产物名 |
+| `requires.contracts: tools.dsh/v1alpha1 Tool (optional)` | `ctx.tools.register` + `@deepseek-ai/dsh-tools` peer 为 optional；`loadDefineTool()` 解析不到时降级 |
+| `permissions[fs.read / fs.write]` | `store.ts` 读 profile 包与 node_modules、写 `.recency-guard/`；`patch.ts` 追加守护行 |
+| `permissions[process.probe]` | `sentinel.ts` 的 `process.kill(pid, 0)`（EPERM 算活着） |
+| `permissions[http.panel]` | `routes.ts` 的 `webServer.register`，前缀 `/recency-guard/api` |
+| `contributes.x-tool-namespaces` | `TOOL_SURFACE.name = 'recency_guard'` |
+| `contributes.x-components` | `client/index.ts` 的 `PANEL_ID = 'recency-guard'` 与 `main` / `sidebar.panellist` 两个 inject |
+| `contributes.x-routes` | `ROUTE_PATHS` / `ROUTE_SURFACE` 的 9 条路径与暴露名 |
+| `compat.hosts` | `package.json` 的 `dsh.compatibility.dshReleases` 三个发布线 |
+
+**刻意不写**：`platforms` / `targets`（`package.json` 没有声明平台矩阵，写了就是编）、
+`artifact`（尚未发布到市场产物）、`commands`（没有宿主命令面）、`panels`（schema 明确 maxItems: 0，
+本插件的面板走 client 席位而不是 host panel）。
+
+### 16.3 文档分层：README 回答"要不要装"，agents 回答"怎么改"
+
+v0.16.0 把 README 从"发版小作文"改成用户文档：一句话 / 为什么 / 安装 / 三分钟上手 /
+能力表（每条链到源码或测试）/ 面板与图谱 / CLI / 诚实边界 / 兼容 / 许可。
+历史增量压成**一行版本记录**；长设计论证搬回本文件。
+
+新增 [capabilities.md](./capabilities.md) 的理由：能力清单散落在 22 条 `CAPABILITY_SPECS`、
+1 个工具名（8 action）、9 条路由与 2 个面板席位里。"有哪些能力、谁生产、谁消费"此前只能靠
+人读代码回答 —— 而本项目已经证明过：**没有写进检验的结构会漂移**（客户端 11 处越界、
+清单方向写反、锚点四值不一，都是同一类缺陷）。capabilities.md 把四组注册真值与 22 条能力
+逐条对上，并把双向比对口径写成可执行命令。
+
+### 16.4 并行改动的文档边界（本轮纪律）
+
+v0.16.0 的 host 层（确定性冲突证据 / 贪心隔离 / 可写 rescue）与 client 层（图谱交互）
+曾并行改动。当时文档遵守一条**保守表述**纪律：
+
+- 描述**职责与不变量**（"崩溃时同步写决策"、"动作路由过期不执行"），不写具体内部函数名；
+- 对外契约只写**注册表**里的名字（`TOOL_SURFACE` / `ROUTE_PATHS` / `PANEL_ID`），
+  因为这些名字由契约测试双向核对，改它们必然先改测试；
+- 若下一轮发现某段描述与实现不符，改文档而不是把实现迁就文档 —— 文档是投影，不是第二真相源。
+
+这条纪律的代价是 README 少了一些"实现细节炫技"；收益是并行开发时文档不会先于代码说谎。
+**最终形态**已在定稿后按代码复核并写入 §17（68/68 全绿时的实现）。
+
+## 17. v0.16.0 定稿：确定性证据、贪心隔离与可写逃生（以最终代码为事实）
+
+### 17.1 确定性冲突证据：finding 不是「猜测」，必须能回指原文
+
+`guard/conflict-declarations.ts` 读插件自带的声明（`package.json` 的 `dshCompat`，
+以及次级来源 `dsh-plugin.json`），`conflict-findings.ts` 只产生**四类** finding：
+
+| kind | 判据 | 严重度 |
+| --- | --- | --- |
+| `declared-conflict` | A 声明与在场的 B 的某个版本范围冲突，且 B 的版本命中 | error |
+| `duplicate-service` | 同一 service 名被 ≥2 个插件声明（只能有一个 provider 生效） | error |
+| `dsh-version` | 声明里的 DSH 范围不满足当前宿主版本 | error |
+| `missing-dependency` | `requires` 指向的包不在场 / 被禁用 | error（没装）/ warning（被禁用） |
+
+三条诚实边界写进实现，而不是文档：
+
+1. **没有声明 ⇒ 不产生 finding**。缺字段、形状非法、版本范围不可判定、对手不在场，
+   一律沉默 —— 「没声明」与「声明了但成立」在输出上可分。
+2. **每条 finding 带 `source{file,line}` + `declaration` 原文**，评审/用户能回指到声明本身。
+3. **finding 不是隔离计划**。参考实现 compat-guardian 把 finding 直接算成 quarantine；
+   本插件分开：finding 是事实，计划器（§17.2）才决定「关谁、关几个、能否治好」。
+   合并会让「发现了冲突」被误读成「已经解决」。
+
+### 17.2 贪心最小隔离：每一步都建立在上一轮的真实残局上
+
+`guard/quarantine-plan.ts` 的循环是：取候选 → 标记停用（含依赖闭包） → 用新的在场集合
+重算 error finding → 再取；终止于 error 清零、无候选、或配额上限。三个非显然决定：
+
+- **为什么贪心而不是一次算完**：finding 是耦合的 —— 关掉 A 后 B 的 `declared-conflict`
+  可能消失，而 C 的 `missing-dependency` 可能从 warning 变 error。一次挑一批再验证，
+  会得到「关了 3 个还剩 2 条 error」的半成品。
+- **依赖联动是硬需求，不是优化**：关 X 却留下 `requires X` 的 Y，等于制造一次新的加载失败
+  （Y 在 `import 'X'` 处抛错），用户会以为「关插件反而更糟」。`dependentsClosure` 用反向邻接表
+  求依赖者闭包；环状依赖由 `visited` 集合终止。
+- **配额按整组判定**：关一半（leaf 关了、依赖它的 mid 留着）比不关更坏。整组放不进
+  `maxAutoDisable` 就**一个都不动**，残余进 `unresolved`。
+
+排序三条（`orderCandidates`）：已停用优先（再关一次零代价）→ `dshCompat.priority` 升序
+（先关作者标记为低优先级的）→ 列表靠后（旧插件已稳定跑过，新装的是下一步排障主线索）。
+**所有候选都未声明 ⇒ 直接返回输入顺序**，无声明 profile 的隔离顺序与旧实现（纯 recency）
+逐位一致 —— 这是兼容性兜底，有双向排序夹具。
+
+`unresolved` 是**数据面字段**，不是日志：它必须进 `status` / 面板快照 / `decision.json` /
+`recover` 输出。静默吞掉会让用户以为隔离成功（「受保护组件/官方插件不许关」导致的残余，
+恰恰是守护不该假装解决的那部分）。
+
+### 17.3 崩溃路径只做一轮，启动后的 recover 做完整循环
+
+崩溃路径没有 `await` 的余裕（进程正在死），`deterministicTargets` 只做**一轮**：把 error
+finding 直接点名、且在嫌疑名单里、且不受保护的插件挑出来当目标。真正的
+「取候选 → 标记 → 合并 → 重算」留给启动后的 `recover()`（异步、可多轮）。
+
+两条不变式：
+
+- **未命中声明 ⇒ 目标 = `pickSuspects` 的 recency 前缀**（旧行为逐位不变）；
+- **命中了但计划为空**（全受保护）⇒ 不行动，不拿 recency 嫌疑人顶替确定性目标
+  「装作解决」；残余进 `unresolved`。
+
+`crash-decision.ts` 是这段四路输入（排名 / 崩溃历史 / findings / 依赖图）的纯组装函数，
+`verdictPatch()` 让观察轮与行动轮共用同一份判定快照形状（否则面板在「观察中/已行动」
+两种状态会显示不同字段 —— 用户会以为系统行为变了）。
+
+### 17.4 可写 rescue：逃生通道的第一纪律是「默认不写」
+
+v0.9 的 rescue 只读；但宿主崩到起不来时，「把决策里那个插件从 profile bundle 列表摘掉」
+正是让它重新起来的手段。`bin/rescue.mjs` 因此新增写面，但把风险约束写进形态：
+
+- **默认 dry-run**：`apply` / `restore` 不带 `--yes` 只打印计划，绝不写盘；
+- **两阶段记录**：先写 `prepared`（含 `beforeHash` / `afterHash` / 每个 bundle 的原 index）→
+  原子改 profile `package.json` → 标 `applied`；
+- **中断恢复按哈希判定**：`restore --resume` 读到 `prepared` 后，当前哈希 == `afterHash`
+  ⇒ 第二步其实已完成、按已生效回插；== `beforeHash` ⇒ 没发生、记录作废；两者都不是
+  ⇒ 现场已变，**退出码 3 拒绝**，绝不硬改；
+- **回插按原 index 升序**：一次只改一个位置，index 才不会互相挤位。
+
+这不是第二个守护：rescue 不计算决策，只执行/回滚 `decision.json` 已有的事实，
+并且只在面板/工具/路由全不可达时使用。
+
+### 17.5 决策与启动编排提取 + 常态路径锁
+
+`crash-decision.ts` / `boot-orchestration.ts` 是从 `index.ts` 的**纯搬家**（组合根复杂度治理）：
+判据顺序（哨兵在 > 异常终止 > 恢复名单 > 干净启动）是语义，不是风格 —— 顺序一换，
+「关了嫌疑 → 又死一次（无哨兵）」会被读成崩溃已过而把隔离亲手拆掉。
+
+锁与原子写（`store.ts` 的 `writeDecisionLocked` / `updateDecisionLocked`、
+`core/isolation.ts` 的 `writePartitionIndexLocked`、`data/lock-hygiene.ts`）：
+
+- 崩溃路径仍**全同步**（异步写输给崩溃）；
+- 常态路径（启动编排/恢复，已有 `await`）用跨进程文件锁做幂等提交，消除
+  「4 个并发子进程 → 分区索引只剩 2 个」的丢条目窗口；
+- 锁卫生清理**空/非 PID/死 PID 且年龄 > 5s** 的遗留锁：0 字节 `*.lock` 会让
+  atomic-write 一直等待、超时后 `boot` 重抛 → 宿主 fatal load failure（真机连续 5 次）。
+  `pid=0` 在 POSIX 上 `process.kill(0,0)` 成功，必须当「不完整记录」而不是「活进程持有」。
+
+### 17.6 客户端可空契约：类型层放宽，渲染层诚实降级
+
+跨分区只读视图会发 `null` / 整段省略（`metrics` / `capability` / `markov` / `revision` …），
+而宿主类型声明非空；`Metric.defined === true` 也不保证子字段非空。修法**不是**在宿主侧
+补一个假 0（不可判定 ≠ 零），而是在客户端 `snapshot-view.ts` 的 `PanelSnapshotView` 里
+显式列出「已证明可空」的字段，渲染层降级；契约测试 `panel-snapshot-nullability` 守护清单。
+同一条纪律：**类型不是运行时事实**。
+
+### 17.7 验证与口径
+
+- `npm test` **68/68**（Core 29 / Host 10 / Client 20 / Contract 7），
+  `npx tsc --noEmit` 0、`npm run lint` 0、`npm run build` 双产物成功（2026-11-11 实测）。
+- 新能力的文档落点：README 能力表（确定性冲突证据 / 贪心最小隔离）、
+  [api.md](./api.md)（`conflicts` / `unresolved` / rescue 写面 / `decision.json`）、
+  [capabilities.md](./capabilities.md)（22 条能力 id 未变，新模块是既有能力的实现拆分）。
+
+### 17.8 竞态与对账（T14-08 真机修复）
+
+两个真机复现的写竞态，共同形状：**崩溃路径是同步写（锁不住它），启动路径是异步写
+（可能落后落地）**。只加锁修不了 —— 锁只能串行化遵守锁的写者。
+
+#### 17.8.1 journal 改真追加（append-only）
+
+旧实现是「整读 → 追加一行 → 原子写回」。启动期 `recordChanges` 的异步 append 先读到
+一份**不含崩溃事件**的旧快照，随后进程崩溃、退出处理器同步写入 `crash-detected`，
+而那个挂起的异步写最后落地，把整份 journal 覆盖回旧快照 —— 崩溃因果链在最需要的时刻
+消失（实测约 1/9 概率，`missing-dep-required` 用例复现）。
+
+修法不是给旧实现加锁，而是**换数据结构**：journal 本来就是 append-only 日志，
+`appendSync` / `append` 改用 `appendFileSync` / `appendFile`（O(1)，无整文件替换），
+任何写者都不可能用旧快照覆盖别人的新行。行数上限改由 `trimJournalIfNeeded()`
+在**安全时机**（异步、加锁、幂等）执行；**崩溃路径永不 trim**。
+
+残余边界（诚实登记）：trim 的「读最新 → 原子写回」仍可能吞掉恰好发生在写回窗口里的
+一次 crash append；但它只在**超过 1000 行**时触发（每 1000 条事件一次），
+而旧实现是**每次 append** 都处于该窗口。测试：
+`journal-append-race.test.ts`。
+
+#### 17.8.2 以决策文件为真相补账（state-reconcile）
+
+症状：决策文件 `disable` 里有坏插件、journal 有 `crash-detected.suspects`，
+但 `state.json` 的 `crashSeq=0` 且 `autoDisabled=[]`。根因是崩溃处理器「写完 decision
+再写 state」之间，启动期那个挂起的「干净启动清零」`updateState` 落地，把刚写的状态
+覆盖回旧快照。
+
+修法：**决策文件是权威**（它决定下次启动拦谁），state 只是投影。下次启动若
+**哨兵在场**（= 上一轮确实崩溃过）且 `reason === 'crash-recovery'` 且 `disable` 非空，
+而 state 少了这些插件 / `crashSeq < 1` ⇒ 按决策文件补账，并写一条 journal note。
+
+三条边界（不猜）：没有哨兵 ⇒ 不补（可能干净退出，决策是恢复流程发布的）；
+`reason !== 'crash-recovery'` ⇒ 不补（恢复流程的 disable 不是崩溃证据）；
+`disable` 为空 ⇒ 不补（观察轮本来就不关人）。补账幂等：一致时返回 null。
+测试：`state-reconcile.test.ts`。
+
+#### 17.8.3 CAS 清零
+
+干净启动的「崩溃计数归零」只在**它没被本轮崩溃改过时**执行：
+`updateState((s) => (s.crashSeq === state.crashSeq ? { ...s, crashSeq: 0 } : s))`。
+boot 是异步的，其 `updateState` 可能在崩溃之后才拿到执行权；无条件写 0 会抹掉退出
+处理器刚写下的 `crashSeq=1` —— 表现就是「关了插件但 crashSeq=0」，下一轮失去升级依据。
+测试：`boot-crashseq-race.test.ts`。
+
+#### 17.8.4 降级必须留可复核证据
+
+`boot-orchestration.ts` 的三个 catch（分区索引加锁提交、`recordChanges`、官方实验观测）
+原本只 `logger.warn` —— 重启后不可查。现在各自追加一条 journal `note`，并带机器可读字段
+`degraded: true`：日志是给人当下看的，journal 是给事后排障与面板消费的。
+
+同时新增**可选注入点** `commitPartitionIndex?`（默认就是 `writePartitionIndexLocked`，
+缺省行为逐位不变）：它是启动路径上唯一的 IO 失败兜底分支，不注入就只能靠真把磁盘写坏
+才能覆盖 —— 那测的是环境不是契约。测试：`boot-degradation.test.ts`。
+
+#### 17.8.5 不可观测死分支：转成可观测再做断言
+
+`quarantine-plan.ts` 的终止性上界原本是「每轮至少停用 1 个」推出来的隐式事实：
+有限候选被逐个停用后必然落到 `no-candidate`，**循环体自己永远走不到预算耗尽** ——
+这是一行没人能触发的死代码，变异体改坏它没有任何测试变红。
+
+修法：导出 `roundBudget(pluginCount) = pluginCount + 1`，并允许
+`PlanOptions.roundBudget` 注入更小预算，让「预算耗尽（`terminatedBy: 'cap'`）」
+成为**可断言分支**。+1 的理由：最后一个候选被停用后，循环需要再走一轮才能观察到
+`error` 已清零（否则会误报成预算耗尽）。
+
+纪律：**不可观测的死分支要转成可观测再做断言，不要给它补假测试。**

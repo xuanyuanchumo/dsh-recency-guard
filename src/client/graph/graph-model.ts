@@ -18,8 +18,7 @@
  * 本文件只认数字与字符串：不 import React，不碰 DOM，因此能在无浏览器环境
  * 逐条断言（见 tests/client/graph-model.test.ts）。
  */
-import type { GraphEdge, GraphNode, GraphNodeKind } from '../../shared/graph-contract.ts'
-import { LAYOUT } from '../../shared/graph-contract.ts'
+import type { GraphEdge, GraphNode } from '../../shared/graph-contract.ts'
 import {
   clipToRect,
   curveControl,
@@ -31,92 +30,48 @@ import {
   type Point,
   type Rect,
 } from './viewport.ts'
-
-/**
- * 节点尺寸直接取宿主布局常量。
- *
- * 为什么不再各自写死 200×56：命中测试（客户端）与布局（宿主）一旦用了
- * 不同的尺寸，点击热区就会与卡片错位 —— 而且错位量随主题字号变化，
- * 属于「偶发点不中」这类最难复现的缺陷。单一来源 = 不可能错位。
- */
-export const NODE_WIDTH = LAYOUT.nodeWidth
-export const NODE_HEIGHT = LAYOUT.nodeHeight
+// 尺寸常量与布局投影的唯一实现在 graph-layout.ts。model 只做几何/过滤派生；
+// 通过下面的 re-export 让既有调用方继续从 graph-model 取词（纯转发、零行为）。
+import { NODE_HEIGHT, NODE_WIDTH } from './graph-layout.ts'
 
 /** 视口高度：宽形态给足纵向空间，窄形态（侧栏/分屏）收紧避免吃掉列表。 */
 export const VIEWPORT_HEIGHT_WIDE = 460
 export const VIEWPORT_HEIGHT_NARROW = 340
 
-/** 节点拖动阈值（屏幕像素）：超过才算拖拽，否则视为点击。 */
+/** 节点拖动阈值（屏幕像素）：达到即算拖拽，否则视为点击。 */
 export const DRAG_THRESHOLD = 3
 
-/**
- * 类型图例顺序 —— 固定顺序而非「按出现顺序」：图例是一块位置记忆，
- * 每次轮询重排会让用户的肌肉记忆失效。
- */
-export const KIND_ORDER: readonly GraphNodeKind[] = ['capability', 'stage', 'metric', 'bundle', 'gap']
-
-/** 节点类型的文案键（走 i18n，英文界面也要可读）。 */
-export function kindKey(kind: GraphNodeKind): string {
-  return `graph.kind.${kind}`
-}
-
-/** 语义色 → 主题变量（硬编码颜色只允许出现在 SVG 图形本身）。 */
-export const TONE_COLOR: Record<GraphNode['tone'], string> = {
-  neutral: 'var(--dsw-alias-label-secondary)',
-  info: 'var(--dsw-alias-brand-primary)',
-  success: 'var(--dsw-alias-state-success-primary)',
-  warn: 'var(--dsw-alias-state-warn-primary)',
-  error: 'var(--dsw-alias-state-error-primary)',
-}
-
-/**
- * 着色口径 —— 用户可以在「按语义色 / 按类型 / 按阶段」之间切换。
- *
- * 为什么把「按类型」单独给一套色：节点的 shape 已经编码了类型，
- * 而 tone 编码的是风险语义。同一个颜色通道被两种口径争用时，用户会
- * 误读（把「缺口=红」当成「这个能力有风险」）。口径显式化后，图例的
- * 颜色只承诺一件事。
- */
-export type ColorMode = 'tone' | 'kind' | 'stage'
-
-/** 类型口径的配色（与 tone 口径不同：这里只回答「它是什么」）。 */
-export const KIND_COLOR: Record<GraphNodeKind, string> = {
-  capability: 'var(--dsw-alias-brand-primary)',
-  stage: 'var(--dsw-alias-state-business-primary)',
-  metric: 'var(--dsw-alias-state-warn-primary)',
-  bundle: 'var(--dsw-alias-label-secondary)',
-  gap: 'var(--dsw-alias-state-error-primary)',
-}
-
-/**
- * 阶段口径的配色 —— 生命周期六阶段。
- *
- * 为什么不用渐变色阶：阶段是**离散类别**，渐变会暗示「阶段 3 与阶段 4
- * 更接近」这种不存在的关系（它们是状态机上的不同状态，不是连续量）。
- */
-export const STAGE_COLOR: Record<string, string> = {
-  idle: 'var(--dsw-alias-label-secondary)',
-  monitoring: 'var(--dsw-alias-brand-primary)',
-  crashed: 'var(--dsw-alias-state-error-primary)',
-  deciding: 'var(--dsw-alias-state-warn-primary)',
-  stabilizing: 'var(--dsw-alias-state-business-primary)',
-  recovered: 'var(--dsw-alias-state-success-primary)',
-}
-
-/** 边的颜色：neutral 用描边色（它必须比节点弱），其余走语义色。 */
-export function edgeColor(edge: Pick<GraphEdge, 'tone'>): string {
-  return edge.tone === 'neutral' ? 'var(--dsw-alias-border-l3)' : TONE_COLOR[edge.tone]
-}
-
-/** 布局口径 —— 分层（宿主投影）与环形（客户端闭式投影）。 */
-export type LayoutMode = 'layered' | 'radial'
-
-/** 一个节点的着色键。 */
-export function colorOf(node: GraphNode, mode: ColorMode, stageOf: (column: number) => string | undefined): string {
-  if (mode === 'kind') return KIND_COLOR[node.kind]
-  if (mode === 'stage') return STAGE_COLOR[stageOf(node.column) ?? ''] ?? TONE_COLOR.neutral
-  return TONE_COLOR[node.tone]
-}
+// 展示词汇（颜色 / 标签 / 图例计数）在 graph-palette.ts；布局投影在
+// graph-layout.ts。两个模块都只依赖 shared 与视口类型 —— 单向依赖，无值环。
+export {
+  EDGE_KIND_ORDER,
+  KIND_COLOR,
+  KIND_ORDER,
+  STAGE_COLOR,
+  TONE_COLOR,
+  TONE_ORDER,
+  colorOf,
+  edgeColor,
+  edgeKindCounts,
+  edgeKindKey,
+  kindCounts,
+  kindKey,
+  legendColorOf,
+  legendShapeOf,
+  toneCounts,
+  toneKey,
+  type ColorMode,
+} from './graph-palette.ts'
+export {
+  NODE_HEIGHT,
+  NODE_WIDTH,
+  compactLayoutPositions,
+  layoutPositionsOf,
+  layoutSpacingFactor,
+  radialPositions,
+  withLayout,
+  type LayoutMode,
+} from './graph-layout.ts'
 
 /** 节点索引 —— 每个节点数组只建一次（在边的回调里重建是 O(E·V) 实测债）。 */
 export function buildNodeIndex(nodes: readonly GraphNode[]): Map<string, GraphNode> {
@@ -145,11 +100,30 @@ export function hitNodesOf(nodes: readonly GraphNode[]): Array<{ id: string; x: 
  * 「我在这张图的哪个连通块里」（闭包）。2 跳是常用的中间档（链路排错）。
  * 档位到跳数的映射在 `linkRangeHops`，UI 只显示档位文案。
  */
-export type LinkRange = 'hops1' | 'hops2' | 'closure'
+export type LinkRange = 'hops1' | 'hops2' | 'hops3' | 'closure'
+
+/**
+ * 聚焦深度的合法区间。
+ *
+ * 为什么把 k 跳夹紧做成纯函数：调用方既有档位枚举（UI）也有外部可能传
+ * 数值（脚本/调试）。1 跳以下等于「只看自己」，3 跳以上在一张 60 节点的
+ * 图上接近闭包 —— 两个边界都会让「聚焦」失去区分力，因此必须显式夹紧
+ * 而不是依赖调用方自觉。
+ */
+export const HOPS_MIN = 1
+export const HOPS_MAX = 3
+
+/** 夹紧 k 跳深度：NaN 回落到最小档；±Infinity 按方向夹到端点（不是「一律 1」）。 */
+export function clampHops(value: number): number {
+  const n = typeof value === 'number' ? value : Number(value)
+  if (Number.isNaN(n)) return HOPS_MIN
+  return Math.min(HOPS_MAX, Math.max(HOPS_MIN, Math.floor(n)))
+}
 
 /** 档位 → 跳数（闭包 = null，交给 `filterGraph` 走传递闭包）。 */
 export function linkRangeHops(range: LinkRange): number | null {
-  return range === 'closure' ? null : range === 'hops2' ? 2 : 1
+  if (range === 'closure') return null
+  return clampHops(range === 'hops3' ? 3 : range === 'hops2' ? 2 : 1)
 }
 
 export interface GraphFilter {
@@ -168,6 +142,22 @@ export interface GraphFilter {
    * 任何没有传该字段的调用方（旧测试与旧组件因此零改动仍然成立）。
    */
   maxHops?: number | null
+  /**
+   * 图例按**边语义**隐藏（produces / consumes / transitions / ranks）。
+   *
+   * 为什么边的过滤必须与节点过滤在同一函数里：先滤边再滤节点会留下
+   * 「连到不可见节点的边」；反过来只滤节点而不滤边，用户关掉「排序引用」
+   * 后仍会看到 ranks 箭头 —— 图例开关就成了半个开关。
+   * 省略 = 不按边类型过滤（旧调用方零改动）。
+   */
+  hiddenEdgeKinds?: ReadonlySet<string>
+  /**
+   * 图例按**语义色**隐藏节点（neutral / info / success / warn / error）。
+   *
+   * 与节点类型过滤正交：类型回答「它是什么」，tone 回答「它有多危险」。
+   * 同一份数据可以按任一维度收窄；两者同时生效取交集。
+   */
+  hiddenTones?: ReadonlySet<GraphNode['tone']>
 }
 
 export function filterGraph(
@@ -186,10 +176,21 @@ export function filterGraph(
         ? traceFrom(filter.onlyConnectedWith, edges, 'both')
         : kHopNeighborhood(filter.onlyConnectedWith, edges, hops)
   const keptNodes = nodes.filter(
-    (node) => !filter.hidden.has(node.kind) && (linked === null || linked.has(node.id)),
+    (node) =>
+      !filter.hidden.has(node.kind) &&
+      !(filter.hiddenTones?.has(node.tone) ?? false) &&
+      (linked === null || linked.has(node.id)),
   )
   const keptIndex = buildNodeIndex(keptNodes)
-  const keptEdges = edges.filter((edge) => keptIndex.has(edge.from) && keptIndex.has(edge.to))
+  // 边过滤与节点过滤**同一次成型**：端点仍在可见集里，且边的语义类型没有
+  // 被图例关掉。任一条件缺失都会产生「指向空气的箭头」或「关了还显示」。
+  const hiddenEdges = filter.hiddenEdgeKinds
+  const keptEdges = edges.filter(
+    (edge) =>
+      keptIndex.has(edge.from) &&
+      keptIndex.has(edge.to) &&
+      !(hiddenEdges?.has(edge.kind) ?? false),
+  )
   return { nodes: keptNodes, edges: keptEdges }
 }
 
@@ -257,6 +258,30 @@ export function graphBounds(nodes: readonly GraphNode[]): Rect {
 export function edgeCurvatures(edges: readonly GraphEdge[]): number[] {
   const indexes = parallelIndexes(edges)
   return edges.map((_, index) => parallelCurvature(indexes[index] ?? 0))
+}
+
+/**
+ * 长边的轻微二次弯曲 —— 折线/曲线让「跨几列的长边」不再与同行的短边
+ * 完全重叠，读者能顺着弯度把它与节点文字区分开。
+ *
+ * 为什么用弧长**线性**增长并设上限：长边的弯曲量若与长度成正比，
+ * 跨 10 列的那条会弯出视野；上限 56px 保证它仍落在两端点的垂直带内。
+ * 奇偶边反向弯曲（index 决定符号）—— 同向会让相邻长边粘成一条粗带。
+ */
+export const LONG_EDGE_LENGTH_MIN = 320
+export const LONG_EDGE_CURVATURE_MAX = 56
+
+export function longEdgeCurvature(
+  from: Pick<GraphNode, 'x' | 'y'>,
+  to: Pick<GraphNode, 'x' | 'y'>,
+  index: number,
+): number {
+  const dx = to.x + NODE_WIDTH / 2 - (from.x + NODE_WIDTH / 2)
+  const dy = to.y + NODE_HEIGHT / 2 - (from.y + NODE_HEIGHT / 2)
+  const length = Math.hypot(dx, dy)
+  if (!Number.isFinite(length) || length <= LONG_EDGE_LENGTH_MIN) return 0
+  const bend = Math.min(LONG_EDGE_CURVATURE_MAX, (length - LONG_EDGE_LENGTH_MIN) * 0.08)
+  return index % 2 === 0 ? bend : -bend
 }
 
 /** 一条边的几何 —— 路径、标签锚点一次算清（控制点只求一次）。 */
@@ -448,153 +473,7 @@ export function neighborsOf(
   }
 }
 
-/** 各类型的节点数（图例上带计数：用户不必先点开才知道那类有多少个）。 */
-export function kindCounts(nodes: readonly GraphNode[]): Record<string, number> {
-  const counts: Record<string, number> = {}
-  for (const node of nodes) counts[node.kind] = (counts[node.kind] ?? 0) + 1
-  return counts
-}
-
-/**
- * 图例的着色随「着色口径」走（v0.11 P0 修复）。
- *
- * 为什么图例必须跟口径切换：此前图例圆点永远用 `dotToneOf`（语义色调色板），
- * 而节点在「按类型 / 按阶段」口径下用的是 KIND_COLOR / STAGE_COLOR ——
- * 同一个图例块在两种口径下说两种谎（图例显示灰、节点显示业务色）。
- * 图例是「颜色通道的字典」，字典必须和正文用同一套词典。
- *
- * 阶段口径的图例不在这里：图例按**节点类型**过滤（类型是开关维度），
- * 阶段是**着色维度**，两个维度正交 —— 阶段色含义由「按阶段」分段控件旁的
- * title 提示承载，不混进类型图例。
- */
-export function legendColorOf(kind: GraphNodeKind, mode: ColorMode): string {
-  if (mode === 'kind') return KIND_COLOR[kind]
-  // tone / stage 口径下类型图例退回语义色（tone 口径节点就是语义色；
-  // stage 口径下同一类型可能是任意阶段色，用类型的中性代表色避免误读）。
-  return TONE_COLOR[LEGEND_TONE[kind]]
-}
-
-/** 类型 → 代表语义色（图例在 tone 口径下的颜色；与 graph-data 的能力域色调一致）。 */
-const LEGEND_TONE: Record<GraphNodeKind, GraphNode['tone']> = {
-  capability: 'info',
-  stage: 'neutral',
-  metric: 'warn',
-  bundle: 'neutral',
-  gap: 'error',
-}
-
-/**
- * 类型 → 代表形状（v0.11 P0：形状图例缺失修复）。
- *
- * 形状是颜色之外的第二编码通道，但它只对「知道映射的人」可读 ——
- * 图例必须同时展示形状与颜色。能力域的形状映射真相在
- * `graph-data.ts` 的 CAPABILITY_SHAPES；这里用**实际出现的节点**导出
- * 代表形状（多数票），而不是复制一份映射 —— 复制就是第二真相源。
- */
-export function legendShapeOf(kind: GraphNodeKind, nodes: readonly GraphNode[]): GraphNode['shape'] {
-  const tally = new Map<GraphNode['shape'], number>()
-  for (const node of nodes) {
-    if (node.kind !== kind) continue
-    tally.set(node.shape, (tally.get(node.shape) ?? 0) + 1)
-  }
-  let best: GraphNode['shape'] | null = null
-  let bestCount = 0
-  for (const [shape, count] of tally) {
-    if (count > bestCount) {
-      best = shape
-      bestCount = count
-    }
-  }
-  return best ?? 'circle'
-}
-
-/* ---------- 布局投影 ---------- */
-
-/** 环形布局的常数：卡片之间留出的最小间隔。 */
-const RADIAL_GAP = 28
-const RADIAL_RING_GAP = NODE_HEIGHT + 40
-
-/**
- * 环形布局 —— 分层列 = 同心环，列内按 label 字典序均匀铺在环上。
- *
- * 为什么是闭式而不是力导向：力导向在几十节点规模上抖动，且同一份数据
- * 两次渲染位置不同 —— 白盒无法逐字节比对，用户每次刷新都会「图变了」。
- * 环形与分层一样是**确定性投影**：同输入 → 同输出（已由测试钉死）。
- *
- * 半径下界由**弦长**推出：环上相邻两点的弦长必须容下一张卡片，
- * 否则卡片沿环互相叠压（`(w+gap) / (2·sin(π/n))`）。
- */
-export function radialPositions(nodes: readonly GraphNode[]): Record<string, Point> {
-  const groups = new Map<number, GraphNode[]>()
-  for (const node of nodes) {
-    const list = groups.get(node.column) ?? []
-    list.push(node)
-    groups.set(node.column, list)
-  }
-  const columns = [...groups.keys()].sort((a, b) => a - b)
-  const out: Record<string, Point> = {}
-  let previousRadius = -1
-  let maxRadius = 0
-  for (const column of columns) {
-    const ring = [...(groups.get(column) ?? [])].sort(
-      (a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id),
-    )
-    const count = ring.length
-    const needed = count < 2 ? 0 : (NODE_WIDTH + RADIAL_GAP) / (2 * Math.sin(Math.PI / count))
-    const radius = previousRadius < 0 ? needed : Math.max(needed, previousRadius + RADIAL_RING_GAP)
-    // 奇偶列的角度相位错开半个步长：相邻两环的节点不会沿同一半径「排成一条线」，
-    // 环间的边因此不会与穿过圆心的射线重合（否则视觉上像一根粗轴）。
-    const step = (2 * Math.PI) / Math.max(count, 1)
-    const phase = -Math.PI / 2 + (column % 2 === 0 ? 0 : step / 2)
-    ring.forEach((node, index) => {
-      const angle = phase + step * index
-      out[node.id] = {
-        x: radius * Math.cos(angle) - NODE_WIDTH / 2,
-        y: radius * Math.sin(angle) - NODE_HEIGHT / 2,
-      }
-    })
-    previousRadius = radius
-    maxRadius = Math.max(maxRadius, radius)
-  }
-  // 平移到正坐标区：与分层布局的坐标系一致（fit/clamp 的推导都假设 padding 在前），
-  // 否则第一次 fit 会把负坐标的一半内容算到视口外。
-  const shiftX = maxRadius + NODE_WIDTH / 2 + LAYOUT.padding
-  const shiftY = maxRadius + NODE_HEIGHT / 2 + LAYOUT.padding
-  for (const id of Object.keys(out)) {
-    out[id] = { x: (out[id]?.x ?? 0) + shiftX, y: (out[id]?.y ?? 0) + shiftY }
-  }
-  return out
-}
-
-/** 布局投影：分层直接用宿主给的 x/y（确定性来自 graph-data 的排序），环形现算。 */
-export function layoutPositionsOf(nodes: readonly GraphNode[], mode: LayoutMode): Record<string, Point> {
-  if (mode === 'radial') return radialPositions(nodes)
-  const out: Record<string, Point> = {}
-  for (const node of nodes) out[node.id] = { x: node.x, y: node.y }
-  return out
-}
-
-/**
- * 把布局投影与用户拖拽偏移叠加成实际坐标。
- *
- * 叠加层而不是「改布局」：布局是数据的确定性投影，用户调整是**视图事实**，
- * 轮询刷新数据时不得重置（CLAUDE.md 铁律）。偏移只在用户拖动后存在。
- */
-export function withLayout(
-  nodes: readonly GraphNode[],
-  positions: Record<string, Point>,
-  offsets: Record<string, Point>,
-): GraphNode[] {
-  return nodes.map((node) => {
-    const base = positions[node.id] ?? { x: node.x, y: node.y }
-    const offset = offsets[node.id]
-    return {
-      ...node,
-      x: offset ? base.x + offset.x : base.x,
-      y: offset ? base.y + offset.y : base.y,
-    }
-  })
-}
+/* ---------- 键盘导航候选（图例计数与颜色在 graph-palette.ts） ---------- */
 
 /**
  * 邻格候选 —— 键盘方向键的落点。

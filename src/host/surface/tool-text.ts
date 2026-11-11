@@ -26,6 +26,38 @@ export const MAX_LINE_WIDTH = 118
 export const DEFAULT_LIST_LIMIT = 8
 
 /**
+ * 零宽码点：它们**不占列**，但也不能从文本里删掉。
+ *
+ * 为什么要单独列出来（cycle-14 / R10 命令窗口回归实测）：
+ * 此前只有「宽字符 = 2 列、其余 = 1 列」两档，于是
+ * - 组合字符（`e` + U+0301）被算成 2 列，实际只占 1 列 ⇒ 中英混排里
+ *   含重音/变音的名字会把整张表的右侧列推歪；
+ * - 零宽空格 / ZWJ / BOM 被算成 1 列 ⇒ 段尾多出不可见的一格。
+ * 这两类都**不能靠 `.length` 蒙对**（组合字符在 UTF-16 里就是一个码元），
+ * 所以必须显式给 0。肤色修饰符放在这里（先于 emoji 宽域判定），否则
+ * `👍🏽` 会被算成 4 列。
+ */
+function isZeroWidth(codePoint: number): boolean {
+  return (
+    (codePoint >= 0x0300 && codePoint <= 0x036f) || // 组合用附加符号
+    (codePoint >= 0x1ab0 && codePoint <= 0x1aff) || // 组合用附加符号扩展
+    (codePoint >= 0x1dc0 && codePoint <= 0x1dff) || // 组合用附加符号补充
+    (codePoint >= 0x20d0 && codePoint <= 0x20ff) || // 组合用符号（含 keycap）
+    (codePoint >= 0xfe20 && codePoint <= 0xfe2f) || // 组合用半记号
+    (codePoint >= 0xfe00 && codePoint <= 0xfe0f) || // 变体选择符
+    (codePoint >= 0x1f3fb && codePoint <= 0x1f3ff) || // 肤色修饰符
+    codePoint === 0x200b || // 零宽空格
+    codePoint === 0x200c || // 零宽不连接符
+    codePoint === 0x200d || // 零宽连接符（ZWJ）
+    codePoint === 0x200e ||
+    codePoint === 0x200f || // 双向标记
+    codePoint === 0x2060 || // word joiner
+    codePoint === 0xfeff || // BOM / 零宽不换行空格
+    codePoint === 0x00ad // 软连字符
+  )
+}
+
+/**
  * 一个码点占多少个显示列。
  *
  * 为什么按码点而不是按 `.length`：代理对（emoji）在 `.length` 里算 2，
@@ -33,6 +65,7 @@ export const DEFAULT_LIST_LIMIT = 8
  * 错一半。列宽必须按**码点区间**判定，不能借用字符串长度。
  */
 export function codePointWidth(codePoint: number): number {
+  if (isZeroWidth(codePoint)) return 0
   const wide =
     (codePoint >= 0x1100 && codePoint <= 0x115f) || // 韩文字母
     (codePoint >= 0x2e80 && codePoint <= 0x303e) || // CJK 部首 / 标点
@@ -50,10 +83,27 @@ export function codePointWidth(codePoint: number): number {
   return wide ? 2 : 1
 }
 
-/** 一段文本的显示列宽。 */
+/**
+ * 一段文本的显示列宽（**字形感知**）。
+ *
+ * ZWJ 序列（`👨‍👩‍👧`）与肤色修饰符是**一个**字形：连接符之后的码点不再
+ * 累加宽度，否则一个家庭 emoji 会被算成 6 列，padWidth 会把整张表推歪。
+ */
 export function displayWidth(text: string): number {
   let width = 0
-  for (const ch of text) width += codePointWidth(ch.codePointAt(0) ?? 0)
+  let joined = false
+  for (const ch of text) {
+    const codePoint = ch.codePointAt(0) ?? 0
+    if (codePoint === 0x200d) {
+      joined = true
+      continue
+    }
+    if (joined) {
+      joined = false
+      continue
+    }
+    width += codePointWidth(codePoint)
+  }
   return width
 }
 
@@ -178,8 +228,13 @@ export function clipWidth(text: string, max = MAX_LINE_WIDTH): string {
   const budget = Math.max(0, max - 1)
   let width = 0
   let out = ''
+  // 与 displayWidth 同口径：ZWJ 之后的码点属于同一个字形，不单独计宽
+  // （否则预算会在一个家庭 emoji 中间就耗尽，序列被硬断成两半）。
+  let joined = false
   for (const ch of text) {
-    const w = codePointWidth(ch.codePointAt(0) ?? 0)
+    const codePoint = ch.codePointAt(0) ?? 0
+    const w = joined || codePoint === 0x200d ? 0 : codePointWidth(codePoint)
+    joined = codePoint === 0x200d
     if (width + w > budget) break
     out += ch
     width += w
@@ -225,8 +280,12 @@ export function wrapWidth(text: string, max = MAX_LINE_WIDTH): string[] {
   let current = ''
   let width = 0
   let breakAt = -1
+  // 与 displayWidth 同口径：ZWJ 序列只算第一次的宽度，避免预算把它拆开。
+  let joined = false
   for (const ch of text) {
-    const w = codePointWidth(ch.codePointAt(0) ?? 0)
+    const codePoint = ch.codePointAt(0) ?? 0
+    const w = joined || codePoint === 0x200d ? 0 : codePointWidth(codePoint)
+    joined = codePoint === 0x200d
     if (width + w > max && current.length > 0) {
       const useBreak = breakAt > 0 && displayWidth(current.slice(0, breakAt)) >= max * 0.6
       const cut = useBreak ? breakAt : current.length

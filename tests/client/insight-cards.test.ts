@@ -105,7 +105,10 @@ check('每环都有人读说明', flow.every((stage) => stage.detail.length > 0)
 console.log('\n== diagnosticsRows：版本事实与反馈入口的诚实边界 ==')
 const baseRows = diagnosticsRows(minimalSnapshot({}))
 check('无链接 ⇒ 无仓库行', baseRows.every((row) => row.href === null), baseRows.map((row) => row.key))
-check('分区键显示前 8 位', baseRows.find((row) => row.key === 'partition')?.value === 'abcdef12…')
+// 分区键是归因事实：安装时用它定位「哪份数据属于哪个工作区」。
+// 数据层不做显示截断（CSS 负责视觉收窄），否则面板给不出完整键，
+// 用户无法复制它去比对 —— 8 位前缀在长键上会撞车。
+check('分区键完整显示（不静默截断）', baseRows.find((row) => row.key === 'partition')?.value === 'abcdef1234567890')
 check('数据面恒可达', baseRows.find((row) => row.key === 'dataPlane')?.value !== undefined)
 
 const withLinks = diagnosticsRows(

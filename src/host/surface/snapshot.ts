@@ -12,6 +12,8 @@ import { calibratedConfirmRounds, calibrationExplanation, falsePositiveRate, fal
 import { bayesMetric, type BayesScoreValue } from '../risk/risk-bayes.ts'
 import type { JournalRecord } from '../data/store.ts'
 import type { Metric } from '../observe/observability.ts'
+// 声明式冲突的形状只在 conflict-metadata 定义一次（store/status/panel 共用）。
+import type { ConflictFinding } from '../guard/conflict-metadata.ts'
 
 /**
  * 事件流快照的条数上限。
@@ -40,6 +42,15 @@ export const EVENT_FLOW_LIMIT = 64
 export interface PanelSnapshot {
   /** 快照时刻。 */
   at: string
+  /**
+   * 声明式冲突 finding（T14-03，面板数据面）。
+   *
+   * 空数组 = 当前没有可展示的冲突（不是「没扫」）；扫描失败也只降级为空，
+   * 由 status 的 `conflicts` 同源字段一起承担这个诚实边界。
+   */
+  conflicts?: readonly ConflictFinding[]
+  /** 上次恢复的残余 error finding（`decision.json` 的 `unresolved`）。 */
+  unresolved?: readonly ConflictFinding[]
   /** profile 名。 */
   profile: string
   /** 当前工作区（分区键）。 */
@@ -295,6 +306,21 @@ export interface SnapshotInput {
   recentEvents: Array<{ t: string; kind: string; bundle?: string; detail?: string }>
   /** 实际注册出来的对外名称（契约校验用）。 */
   registeredExposedAs: readonly string[]
+  /**
+   * 声明式冲突 finding（T14-03）。
+   *
+   * 为什么进快照而不是只进 status：面板是「事后看一眼」的地方，冲突是
+   * **可复核的声明**（文件 + 行号 + 原文），必须与决策同屏出现 —— 否则
+   * 用户只能看到「关了 2 个插件」，看不到「为什么这 2 个是确定性的」。
+   */
+  conflicts?: readonly ConflictFinding[]
+  /**
+   * 上次恢复的残余 error finding（`decision.json` 的 `unresolved`）。
+   *
+   * 与 `conflicts` 分开：前者是「现在仍成立的冲突」，后者是「上次隔离后
+   * 仍治不了的那部分」。合并会让「有冲突」与「试过但治不了」无法区分。
+   */
+  unresolved?: readonly ConflictFinding[]
   /** 最近恢复判定（v0.9.1：观察中 N/M 轮或「为什么关了它」）。 */
   lastRecoveryVerdict?: {
     at: string
@@ -425,6 +451,11 @@ export function buildPanelSnapshot(input: SnapshotInput, now = Date.now()): Pane
     })),
     restored: [...input.restored],
     autoDisabled: input.autoDisabled.map((d) => ({ ...d })),
+    // 声明式冲突数据面（T14-03）：全量给面板，截断由渲染层做。
+    // `?? []` 是「调用方没传」的降级，与「扫描结果为空」在快照里同形 ——
+    // 这一点必须诚实：空数组只表示「没有可展示的 finding」，不区分原因。
+    conflicts: [...(input.conflicts ?? [])],
+    unresolved: [...(input.unresolved ?? [])],
     // revision 是**派生**的：同一份事实重算必得同一枚值（哈希而非计数器），
     // 所以它不需要持久化位点，也不会在崩溃后说谎。字段装配唯一在
     // Guard.revisionFactsFrom（见 SnapshotInput 注释）—— 本函数只投影不拼字段。

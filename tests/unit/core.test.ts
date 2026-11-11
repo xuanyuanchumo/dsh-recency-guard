@@ -1,11 +1,16 @@
 import { mkdtemp, rm } from 'node:fs/promises'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Store, emptyState, type GuardState, type JournalEvent } from '../../src/host/data/store.ts'
-import { restoreDisabledExceptPrime, type RecoveryDeps } from '../../src/host/guard/recovery-actions.ts'
-import { pidAlive } from '../../src/host/guard/sentinel.ts'
-import { appendPatchText } from '../../src/host/guard/guarded-rows.ts'
+import { Store, emptyState, type GuardState, type JournalEvent, type JournalRecord } from '../../src/host/data/store.ts'
+// cycle-14：cleanStaleLocks 从 store.ts 抽到 lock-hygiene.ts（纯提取）。直接引
+// **抽出后的模块**，否则变异工具的归属判据（直接 import）会把这个新文件
+// 判成「无直接测试」⇒ 它的变异体根本不进评估集合（v0.13 的漏判教训）。
+import { cleanStaleLocks } from '../../src/host/data/lock-hygiene.ts'
+import { displayDigits, sampleConfidence } from '../../src/host/core/metric.ts'
+import { restoreDisabledExceptPrime, reenableOne, type RecoveryDeps } from '../../src/host/guard/recovery-actions.ts'
+import { pidAlive, clearSentinel, sentinelPath } from '../../src/host/guard/sentinel.ts'
+import { appendPatchText, findGuardableRows } from '../../src/host/guard/guarded-rows.ts'
 import {
   suspectBundles,
   rankByRecency,
@@ -35,10 +40,22 @@ import {
   projectLabel,
   registerPartition,
   findPartition,
+  writePartitionIndex,
   emptyPartitionIndex,
 } from '../../src/host/core/isolation.ts'
 import { archiveAndReset, listArchives, readArchiveManifest } from '../../src/host/data/archive.ts'
 import { buildGraphData, connectedComponents, computeBounds, buildAdjacency } from '../../src/host/capability/graph-data.ts'
+// cycle-14（E4.1 归因）：下面这些导入不是「顺带多引几个函数」——
+// 它们让 core.test.ts 成为这些模块的**直接测试**，因此其变异体会真正进
+// 被评估的集合（变异工具的归属判据是「直接 import」）。此前
+// atomic-sync / patch / decision / risk-bayes 的 try-catch 变异体因为
+// 「无直接测试」根本没人跑它们的故障路径，存活体只能靠猜归因。
+import { writeFileAtomicSync } from '../../src/host/core/atomic-sync.ts'
+import { writeDecision } from '../../src/host/guard/decision.ts'
+import { ensurePatchBackup } from '../../src/host/profile/patch.ts'
+import { logBeta } from '../../src/host/risk/risk-bayes.ts'
+import { falsePositiveSamples } from '../../src/host/risk/risk-calibration.ts'
+import { codePointWidth, clipWidth, displayWidth, padWidth, sanitizeText, wrapWidth } from '../../src/host/surface/tool-text.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -50,6 +67,372 @@ function check(name: string, cond: boolean, detail?: unknown) {
 }
 
 async function main() {
+  // ═══ cycle-14 / E4.1：故障注入断言（杀死 try-catch 类存活变异体）═══
+  //
+  // 为什么原子写这组必须放在 main() 的**最前面**：临时文件名里带本进程内
+  // 的调用序号（`${path}.${pid}.${sequence}.tmp`）。要构造「清理步骤自己
+  // 失败」的故障，就得把临时文件的**确切路径**预置成一个非空目录；序号
+  // 只有从 1 开始才可预测，因此本进程此前不得发生任何原子写调用。
+  //
+  // 这些断言杀的是「删除 try/catch 兜底」这一类变异体：删掉兜底后，
+  // 失败路径会变成不可恢复的异常（或错误原因被替换），断言随即变红。
+  console.log('\n== 原子写：失败路径清理 / 主错误不被清理错误覆盖 ==')
+  {
+    const root = await mkdtemp(join(tmpdir(), 'rg-atomic-'))
+    try {
+      // (1) rename 的落点是**已存在的目录** ⇒ rename 必然失败。
+      //     失败路径必须删掉临时文件：`.tmp` 残留在 profile 里会被当成用户资产。
+      const blocked = join(root, 'blocked-target')
+      mkdirSync(blocked)
+      let renameError: unknown
+      try {
+        writeFileAtomicSync(blocked, '{"v":1}')
+      } catch (error) {
+        renameError = error
+      }
+      check('原子写 rename 失败会抛出（不静默吞掉）', renameError instanceof Error, renameError)
+      check(
+        '.tmp 临时文件在失败路径被清理（不留残留）',
+        readdirSync(root).every((name) => !name.endsWith('.tmp')),
+        readdirSync(root),
+      )
+
+      // (2) 清理步骤自己失败时，调用方必须拿到**原始写错误**：
+      //     把「写盘失败」换成「清理失败」会让真正的故障原因丢失
+      //     （模块头注释：抛出原始原因更有诊断价值）。
+      //     本进程此前只调用过一次原子写 ⇒ 这次临时名确定为 `...2.tmp`。
+      const blocked2 = join(root, 'blocked-target-2')
+      mkdirSync(blocked2)
+      const temp2 = `${blocked2}.${process.pid}.2.tmp`
+      mkdirSync(temp2)
+      writeFileSync(join(temp2, 'inside'), 'x', 'utf8')
+      let cleanupError: unknown
+      try {
+        writeFileAtomicSync(blocked2, 'x')
+      } catch (error) {
+        cleanupError = error
+      }
+      check(
+        '清理失败时抛出的是原始写错误（EISDIR），不是清理错误（ERR_FS_EISDIR）',
+        (cleanupError as { code?: string } | undefined)?.code === 'EISDIR',
+        (cleanupError as { code?: string } | undefined)?.code,
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }
+
+  // 分区索引写失败只降级：索引丢失只损失「面板能列出哪些工作区」，
+  // 绝不能让启动路径挂掉（观测设施不拖垮守护流程）。把 `.recency-guard`
+  // 先占成一个文件 ⇒ 原子写的目标目录不可用。
+  console.log('\n== 分区索引：写失败只降级 ==')
+  {
+    const root = await mkdtemp(join(tmpdir(), 'rg-partidx-'))
+    try {
+      const profileDir = join(root, 'profile')
+      mkdirSync(profileDir)
+      writeFileSync(join(profileDir, '.recency-guard'), 'not-a-directory', 'utf8')
+      let threw: unknown
+      try {
+        writePartitionIndex(profileDir, emptyPartitionIndex())
+      } catch (error) {
+        threw = error
+      }
+      check('分区索引写失败不抛出（只降级）', threw === undefined, threw)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }
+
+  // 归档一个**没有产物**的分区：state.json / journal.jsonl 缺失是正常形态
+  // （空守护 / 从没写过日志），归档必须成功。删除对应 try 兜底后这里会抛
+  // ENOENT —— 归档是重置入口，抛错等于「以最新事实重新开始」直接不可用。
+  console.log('\n== 归档：缺失产物不得让归档失败 ==')
+  {
+    const root = await mkdtemp(join(tmpdir(), 'rg-archive-bare-'))
+    try {
+      const bare = join(root, 'bare-partition')
+      mkdirSync(bare)
+      const archived = archiveAndReset(bare, 'D:/Bare', '缺产物归档')
+      check('没有 state.json 也能归档（crashSeq 记 0）', archived.manifest.summary.crashSeq === 0, archived.manifest.summary)
+      check('没有 journal.jsonl 也能归档（事件数记 0）', archived.manifest.summary.journalEvents === 0, archived.manifest.summary)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }
+
+  // 锁清理对不存在的目录返回空报告，而不是抛 ENOENT：
+  // Store.init 依赖它做 best-effort 清理（目录可能被手工删掉）。
+  console.log('\n== 锁清理：目录不存在返回空报告 ==')
+  {
+    const root = await mkdtemp(join(tmpdir(), 'rg-locks-'))
+    try {
+      let report: ReturnType<typeof cleanStaleLocks> | undefined
+      try {
+        report = cleanStaleLocks(join(root, 'missing-dir'))
+      } catch {
+        report = undefined
+      }
+      check(
+        '目录不存在时返回空报告（不抛）',
+        report !== undefined && report.removed.length === 0 && report.kept.length === 0,
+        report,
+      )
+
+      // 内容为 "0" 的锁：`pid <= 0` 判成「不完整记录」必须**清掉**。
+      // 为什么这条单独写：`process.kill(0, 0)` 实测返回成功（Windows/POSIX
+      // 都把 pid 0 解释成「当前进程组」）—— 若把 `<= 0` 改成 `< 0`，
+      // pid=0 会被判成「活进程持有」而保留，atomic-write 随后等满超时
+      // ⇒ 宿主 fatal load failure。这不是等价变异，**行为不同**：
+      // 0 字节/非 PID 锁的清理是本模块存在的理由（v0.11.1 紧急修复）。
+      const lockName = 'state.json.lock'
+      const lockPath = join(root, lockName)
+      writeFileSync(lockPath, '0', 'utf8')
+      const old = new Date(Date.now() - 60_000)
+      utimesSync(lockPath, old, old)
+      const zeroReport = cleanStaleLocks(root)
+      check(
+        '内容为 "0" 的锁必须被清理（pid 0 不是有效持锁者）',
+        zeroReport.removed.includes(lockName) && !zeroReport.kept.includes(lockName),
+        zeroReport,
+      )
+
+      // 死进程 pid 的锁同样必须清理：`processAlive` 的 try/catch 把 ESRCH
+      // 翻译成 false。删除该兜底后 process.kill 的异常会冒到外层逐条 catch，
+      // 锁被误判成「保留」⇒ atomic-write 仍要等满超时。
+      writeFileSync(lockPath, '2147483647', 'utf8')
+      utimesSync(lockPath, old, old)
+      const deadPidReport = cleanStaleLocks(root)
+      check(
+        '死进程 pid 的锁必须被清理（探活失败 ≠ 持锁）',
+        deadPidReport.removed.includes(lockName) && !deadPidReport.kept.includes(lockName),
+        deadPidReport,
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }
+
+  // 决策写失败只降级，并在**外层 try 被删除**时仍不冒泡：
+  // 这条断言钉住的正是「内层 writeSafe 自带兜底」这个等价性承重事实。
+  console.log('\n== 决策/哨兵/备份：best-effort 失败不得冒泡 ==')
+  {
+    const root = await mkdtemp(join(tmpdir(), 'rg-besteffort-'))
+    try {
+      const fileAsPartition = join(root, 'partition-is-a-file.json')
+      writeFileSync(fileAsPartition, 'x', 'utf8')
+      let decisionThrew: unknown
+      try {
+        writeDecision(fileAsPartition, { capturedAt: 't', suspects: [], disable: [], reason: 'none' })
+      } catch (error) {
+        decisionThrew = error
+      }
+      check('决策写失败不冒泡（内层 writeSafe 已兜底）', decisionThrew === undefined, decisionThrew)
+
+      // 哨兵清理是 rename → 目标 `.consumed` 已是一个非空目录 ⇒ rename 失败。
+      const partition = join(root, 'partition')
+      mkdirSync(partition)
+      const sentinel = sentinelPath(partition)
+      writeFileSync(sentinel, JSON.stringify({ exitCode: 1, at: 't', pid: 1234 }), 'utf8')
+      const consumed = `${sentinel}.consumed`
+      mkdirSync(consumed)
+      writeFileSync(join(consumed, 'occupied'), 'x', 'utf8')
+      let sentinelThrew: unknown
+      try {
+        clearSentinel(partition)
+      } catch (error) {
+        sentinelThrew = error
+      }
+      check('哨兵清理失败不冒泡（best effort）', sentinelThrew === undefined, sentinelThrew)
+
+      // 备份写失败不得阻断守护行安装：把备份目录先占成一个文件。
+      const patchDir = join(root, 'patch-dir')
+      mkdirSync(patchDir)
+      const patchFile = join(patchDir, 'cordis.patch.yml')
+      writeFileSync(patchFile, '# user asset\n', 'utf8')
+      writeFileSync(join(patchDir, '.recency-guard'), 'not-a-directory', 'utf8')
+      let backupThrew: unknown
+      try {
+        ensurePatchBackup(patchFile, '# user asset\n')
+      } catch (error) {
+        backupThrew = error
+      }
+      check('备份写失败不冒泡（best effort，不阻断守护行安装）', backupThrew === undefined, backupThrew)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }
+
+  // 损坏的包清单必须被跳过：解析失败把异常冒到 findGuardableRows 的调用方
+  // 是**导出 API 的真实行为差异**（安装可以被外层兜住，直接调用不行）。
+  console.log('\n== 守护行寻址：损坏的包清单被跳过 ==')
+  {
+    const root = await mkdtemp(join(tmpdir(), 'rg-guardable-'))
+    try {
+      const profile = join(root, 'profile')
+      const bundleDir = join(profile, 'node_modules', 'dsh-broken')
+      mkdirSync(bundleDir, { recursive: true })
+      writeFileSync(join(profile, 'package.json'), JSON.stringify({ dependencies: { 'dsh-broken': '1.0.0' } }), 'utf8')
+      writeFileSync(join(bundleDir, 'package.json'), '{ this is not json', 'utf8')
+      let rows: ReturnType<typeof findGuardableRows> | undefined
+      let guardableThrew: unknown
+      try {
+        rows = findGuardableRows(profile)
+      } catch (error) {
+        guardableThrew = error
+      }
+      check(
+        '损坏的包清单被跳过（返回空行集，不抛）',
+        guardableThrew === undefined && Array.isArray(rows) && rows.length === 0,
+        { threw: guardableThrew, rows },
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }
+
+  // 非域参数必须返回 NaN（让上层守卫发现），绝不静默给一个有限/无穷值。
+  console.log('\n== 贝塔函数：非域参数是 NaN 而不是 Infinity ==')
+  {
+    check('logBeta(0,1) 是 NaN（lgamma 的非域守卫）', Number.isNaN(logBeta(0, 1)), logBeta(0, 1))
+    check('logBeta(1,1) = 0（均匀分布，解析解）', Math.abs(logBeta(1, 1)) < 1e-12, logBeta(1, 1))
+  }
+
+  // 恢复单插件：管理器拒绝/抛错必须 warn 后继续，而不是冒泡中断恢复流程。
+  // 两条 try 各自独立（组合包与插件行），缺一条就有一条故障打到调用方。
+  console.log('\n== 恢复单插件：管理器抛错不阻断其余恢复 ==')
+  {
+    const warnings: string[] = []
+    const deps: RecoveryDeps = {
+      store: {
+        readState: async () => emptyState(),
+        updateState: async (fn: (s: GuardState) => GuardState | Promise<GuardState>) => fn(emptyState()),
+        append: async () => {},
+        readBackup: async () => null,
+      },
+      pluginManager: {
+        setBundleEnabled: async () => {
+          throw new Error('bundle-enable-boom')
+        },
+        setPluginEnabled: async () => {
+          throw new Error('plugin-enable-boom')
+        },
+      },
+      suspectRows: async () => [{ entryId: 'row-1', moduleName: 'dsh-x' }],
+      publishDecision: async () => {},
+      transition: () => {},
+      warn: (message: string) => warnings.push(message),
+      toJson: (value: unknown) => value,
+    }
+    let reenableThrew: unknown
+    try {
+      await reenableOne(deps, 'dsh-x')
+    } catch (error) {
+      reenableThrew = error
+    }
+    check('启用组合包抛错被兜底（warn 而不冒泡）', reenableThrew === undefined, reenableThrew)
+    check('组合包抛错写出 warn 日志', warnings.some((w) => w.includes('启用组合包')), warnings)
+    check('启用插件行抛错被兜底并写出 warn 日志', warnings.some((w) => w.includes('启用插件')), warnings)
+  }
+
+  // 等价性**证明**（proof）—— 这两条不是缺口，是把账本里的等价理由钉成事实。
+  // 没有它们，等价登记就只是「读起来像是没影响」（mutation-attribution §1.1
+  // 已经因为这种直觉判断推翻过 3 条）。
+  console.log('\n== 等价性承重事实（proof）==')
+  {
+    const root = await mkdtemp(join(tmpdir(), 'rg-equiv-'))
+    try {
+      const store = new Store(root, 'proof')
+      await store.init()
+      await store.append([{ kind: 'install', bundle: 'a' }, { kind: 'install', bundle: 'b' }])
+      check('readJournal(0) 读 0 行（limit===0 时两分支都给 0，不是「全部」）', (await store.readJournal(0)).length === 0)
+      check('readJournal(1) 读 1 行（同一函数上界行为）', (await store.readJournal(1)).length === 1)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+
+    const base: JournalRecord[] = [
+      { kind: 'auto-disable', bundle: 'dsh-a', t: 't1' },
+      { kind: 'enable', bundle: 'dsh-a', t: 't2' },
+    ]
+    const withHole = falsePositiveSamples([...base, undefined as unknown as JournalRecord])
+    const without = falsePositiveSamples(base)
+    check(
+      'journal 尾部的 undefined 洞被跳过（统计与没有它逐字段一致）',
+      JSON.stringify(withHole) === JSON.stringify(without),
+      { withHole, without },
+    )
+  }
+
+  // ═══ 指标边界 + journal 同步写的 best-effort ═══
+  //
+  // displayDigits(1) 是**等价账本的承重事实**：`sampleSize < 1` 与 `<= 1`
+  // 只在 n=1 分岔，而 n=1 时守卫返回 1、公式 max(1, round(0.5)) 也是 1。
+  // 这条断言不区分两个版本 —— 正因如此它才能证明「改法换不掉行为」。
+  console.log('\n== 指标边界 + journal 同步写 best-effort ==')
+  {
+    check('sampleConfidence(0) = 0（n≤0 不可支撑置信度）', sampleConfidence(0) === 0, sampleConfidence(0))
+    check('sampleConfidence(1) = 0（单样本 = 零置信）', sampleConfidence(1) === 0, sampleConfidence(1))
+    check('displayDigits(1) = 1（n=1 与守卫分支同值）', displayDigits(1) === 1, displayDigits(1))
+    const root = await mkdtemp(join(tmpdir(), 'rg-appendsync-'))
+    try {
+      const store = new Store(root, 'journal-fault')
+      await store.init()
+      // journal.jsonl 先占成一个**目录** ⇒ appendSync 的 readFileSync 失败。
+      // 崩溃证据链的写失败绝不能拖垮宿主启动（模块头契约）。
+      mkdirSync(join(store.partitionPath, 'journal.jsonl'))
+      let appendThrew: unknown
+      try {
+        store.appendSync({ kind: 'note', detail: 'fault' })
+      } catch (error) {
+        appendThrew = error
+      }
+      check('journal 同步写失败不冒泡（best effort，不拖垮启动）', appendThrew === undefined, appendThrew)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }
+
+  // ═══ 命令窗口显示（R10）：宽度按**视觉列**，中英混排才对齐 ═══
+  //
+  // 断言锚点全部取自 `tool-text.ts` 的真实区间边界（0x0300 / 0x036f 是
+  // 组合符号区间的两端），不猜近义词 —— 这是 v0.14 的教训：曾经用
+  // `/省略/` 去匹配 `其余 N 项未展开`，测试全绿而变异体存活。
+  console.log('\n== 命令窗口宽度：CJK / emoji / 组合字符 / 零宽 ==')
+  {
+    check('CJK 全宽按 2 列（「中文」= 4 列）', displayWidth('中文') === 4, displayWidth('中文'))
+    check('组合符号区间下界 0x0300 占 0 列', codePointWidth(0x0300) === 0, codePointWidth(0x0300))
+    check('组合符号区间上界 0x036f 占 0 列', codePointWidth(0x036f) === 0, codePointWidth(0x036f))
+    check('组合字符不增加列宽（e + U+0301 = 1 列）', displayWidth('e\u0301') === 1, displayWidth('e\u0301'))
+    check('零宽空格不占列（a + U+200B + b = 2 列）', displayWidth('a\u200bb') === 2, displayWidth('a\u200bb'))
+    check('emoji 代理对按 2 列（🎉）', displayWidth('🎉') === 2, displayWidth('🎉'))
+    check('ZWJ 连接的 emoji 是一个字形（👨‍👩‍👧 = 2 列）', displayWidth('👨‍👩‍👧') === 2, displayWidth('👨‍👩‍👧'))
+    check('肤色修饰符不增加列宽（👍🏽 = 2 列）', displayWidth('👍🏽') === 2, displayWidth('👍🏽'))
+    check('padWidth 按显示列右填充（「更新」补到 8 列）', displayWidth(padWidth('更新', 8)) === 8, padWidth('更新', 8))
+    const wrappedCjk = wrapWidth('中'.repeat(10), 5)
+    check(
+      'CJK 折行不超预算且不丢字符',
+      wrappedCjk.every((line) => displayWidth(line) <= 5) && wrappedCjk.join('') === '中'.repeat(10),
+      wrappedCjk,
+    )
+    const wrappedEmoji = wrapWidth('🎉'.repeat(10), 5)
+    check(
+      'emoji 折行不超预算、不拆代理对（拼回原文）',
+      wrappedEmoji.every((line) => displayWidth(line) <= 5) && wrappedEmoji.join('') === '🎉'.repeat(10),
+      wrappedEmoji,
+    )
+    // 正常文本经中和必须**逐字节不变**（否则「修显示」会把正常输出改脏）。
+    check(
+      '正常包名/版本号经 sanitizeText 逐字节不变',
+      sanitizeText('@scope/pkg 0.0.0-dev').text === '@scope/pkg 0.0.0-dev',
+      sanitizeText('@scope/pkg 0.0.0-dev'),
+    )
+    // 恰好用满预算时必须继续吃字符：`budget = max - 1`（末位留给 `…`），
+    // 所以 max=4 时内容预算正好是 3 列 —— `abc` 之后第 4 个字符必须被截掉。
+    // 提前一格截断会让 118 列的预算只用 117 列。
+    check('clipWidth 恰好用满内容预算（max=4 ⇒ 3 列内容 + 省略号）', clipWidth('abcde', 4) === 'abc…', clipWidth('abcde', 4))
+  }
+
   // ═══ 原有核心断言 ═══
   console.log('\n== suspect classification ==')
   const bundles = [

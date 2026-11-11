@@ -6,11 +6,11 @@ import {
   centerOf,
   centerOn,
   clampPan,
-  fitToView,
   isWorldPointVisible,
   matchNodes,
   panBy,
   pinchViewport,
+  resetToActualSize,
   screenToWorld,
   searchSummary,
   traceFrom,
@@ -20,7 +20,6 @@ import {
   type Viewport,
 } from './viewport.ts'
 import {
-  DRAG_THRESHOLD,
   EDGE_WIDTH_MAX,
   NODE_HEIGHT,
   NODE_WIDTH,
@@ -28,12 +27,15 @@ import {
   VIEWPORT_HEIGHT_WIDE,
   buildNodeIndex,
   colorOf,
+  compactLayoutPositions,
   directionalCandidate,
   degreeTally,
   edgeColor,
   edgeCurvatures,
   edgeDetailOf,
   edgeGeometry,
+  edgeKindCounts,
+  edgeKindKey,
   edgeWidthOf,
   filterGraph,
   graphBounds,
@@ -41,16 +43,41 @@ import {
   kHopNeighborhood,
   kindCounts,
   layoutPositionsOf,
+  layoutSpacingFactor,
   linkRangeHops,
+  longEdgeCurvature,
   neighborsOf,
   degreeOf,
   shapePath,
+  toneCounts,
   withLayout,
   zoomLabel,
   type ColorMode,
   type LayoutMode,
   type LinkRange,
 } from './graph-model.ts'
+// 交互规则（拖拽/悬停邻域/图例开关/键盘/fit 纪律）全在纯函数层，组件只派发事件。
+import {
+  FIT_SCALE_MAX,
+  cycleIndex,
+  dragDeltaToWorld,
+  ellipsize,
+  emptyOffsetMemory,
+  escapeAction,
+  graphKeyAction,
+  hasAnyOffset,
+  highlightForHover,
+  isDimmedByHighlight,
+  isDragDistance,
+  offsetsFor,
+  expandedViewportHeight,
+  readableFitViewport,
+  shouldAutoExpand,
+  shouldFit,
+  shouldShowEdgeLabel,
+  toggleSetMember,
+  withDragOffset,
+} from './graph-interaction.ts'
 // 小地图几何在 minimap-model.ts（v0.12 拆分：graph-model 的复杂度热点越预算）。
 import {
   minimapNodeRects,
@@ -59,7 +86,7 @@ import {
   minimapToWorld,
   type MinimapCanvas,
 } from './minimap-model.ts'
-import { EdgeDetails, GraphDetails, GraphMinimap, GraphToolbar, GraphTooltip, edgeKindKey } from './GraphParts.tsx'
+import { EdgeDetails, GraphDetails, GraphMinimap, GraphToolbar, GraphTooltip } from './GraphParts.tsx'
 import type { GraphData, GraphNode } from '../../shared/graph-contract.ts'
 
 /**
@@ -137,6 +164,9 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
   const [hoverEdgeId, setHoverEdgeId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set())
+  /** 图例的另外两个维度（v0.16）：边语义类型与节点语义色。与类型图例正交。 */
+  const [hiddenEdgeKinds, setHiddenEdgeKinds] = useState<ReadonlySet<string>>(new Set())
+  const [hiddenTones, setHiddenTones] = useState<ReadonlySet<GraphNode['tone']>>(new Set())
   const [size, setSize] = useState<Size>({ width: 0, height })
   const [query, setQuery] = useState('')
   // 搜索遍历游标（v0.11）：回车在匹配列表里循环前进；查询变化时归零。
@@ -158,14 +188,26 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
   const [linkRange, setLinkRange] = useState<LinkRange>('hops1')
   /** 小地图开关（概览导航）。缺省开：缩到 0.25 时没有参照物就是「迷失」本身。 */
   const [minimapVisible, setMinimapVisible] = useState(true)
+  /** 「放大视图」：容器高度撑到视口 70%（Esc 只退这一层）。
+   *  首帧按节点数自动展开：20+ 节点的图在 460px 高度里 fit 后文字不可读。 */
+  const [expanded, setExpanded] = useState(() => shouldAutoExpand(graph.nodes.length))
+  /** 上一次 fit 的性质：max=可读上界；all=保持 fit-all（内容太大）；null=区间内。 */
+  const [fitNotice, setFitNotice] = useState<'max' | 'all' | null>(null)
+  /** 收起放大视图时**保留用户缩放**（不重 fit）——状态栏要说明这件事。 */
+  const [viewNotice, setViewNotice] = useState<'collapse' | null>(null)
+  /** 浏览器视口高度（展开高度的 px 来源；不用 vh，真机实测 vh 不可靠）。 */
+  const [windowHeight, setWindowHeight] = useState(() =>
+    typeof window === 'undefined' ? 0 : window.innerHeight,
+  )
   // 布局切换的显式计数：只有用户点「布局」才允许重新 fit（铁律：轮询不得重置缩放）。
   const [layoutEpoch, setLayoutEpoch] = useState(0)
   // 触摸/笔指针的快照（v0.11.4）：两个指针同时按下即进入捏合缩放。
   const pointersRef = useRef(new Map<number, Point>())
   const pinchPrevRef = useRef<{ a: Point; b: Point } | null>(null)
-  // 节点拖拽的布局偏移（世界坐标）：键 = 节点 id。只在用户拖动后出现，
+  // 节点拖拽的布局偏移（世界坐标，**按布局分档记忆**）：只在用户拖动后出现，
   // 数据轮询不会重置它 —— 布局是用户的调整，不是轮询的产物。
-  const [offsets, setOffsets] = useState<Record<string, Point>>({})
+  // 按布局分档的模型见 graph-interaction.ts（切布局再切回，各布局各自保留位置）。
+  const [offsetMemory, setOffsetMemory] = useState(emptyOffsetMemory)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<{ active: boolean; moved: boolean; x: number; y: number }>({
     active: false,
@@ -182,21 +224,36 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
   const lastLocateNonceRef = useRef(0)
 
   const counts = useMemo(() => kindCounts(graph.nodes), [graph.nodes])
+  // 图例计数取**原始图**：过滤后的视图会缩水，用它当分母会让「关了 1 类」
+  // 变成「其他类也变少了」的假读数。
+  const edgeCounts = useMemo(() => edgeKindCounts(graph.edges), [graph.edges])
+  const toneCountsBy = useMemo(() => toneCounts(graph.nodes), [graph.nodes])
 
-  // 布局投影（分层 = 宿主给的确定性坐标；环形 = 客户端闭式坐标）。
-  const positions = useMemo(() => layoutPositionsOf(graph.nodes, layoutMode), [graph.nodes, layoutMode])
+  // 布局投影（分层 = 宿主坐标经一阶重心重排；环形 = 客户端闭式坐标）。
+  // 重心排序需要边集，但它是**确定性纯函数**：同数据两次渲染位置一致。
+  // 窄容器再按系数压缩**间距**（卡片尺寸不变）：730px 区里三列固定 780px
+  // 会让 fit 后的文字低于可读线；压缩的是空白，不是节点。
+  const positions = useMemo(() => {
+    const raw = layoutPositionsOf(graph.nodes, layoutMode, graph.edges)
+    if (layoutMode === 'radial') return raw
+    return compactLayoutPositions(raw, layoutSpacingFactor(size.width))
+  }, [graph.nodes, graph.edges, layoutMode, size.width])
+  // 只取当前布局档位的偏移：另一档位的手势不该污染这一档的投影。
+  const offsets = useMemo(() => offsetsFor(offsetMemory, layoutMode), [offsetMemory, layoutMode])
   const positionedNodes = useMemo(() => withLayout(graph.nodes, positions, offsets), [graph.nodes, positions, offsets])
 
-  // 过滤（隐藏类型 + 只看关联）与边集**一次成型**：节点集与边集必须同源，
-  // 否则图上会出现指向被隐藏节点的箭头。
+  // 过滤（类型隐藏 + 语义色隐藏 + 只看关联 + 边语义隐藏）与边集**一次成型**：
+  // 节点集与边集必须同源，否则图上会出现指向被隐藏节点的箭头。
   const view = useMemo(
     () =>
       filterGraph(positionedNodes, graph.edges, {
         hidden,
+        hiddenTones,
+        hiddenEdgeKinds,
         onlyConnectedWith: onlyConnected ? focusId : null,
         maxHops: linkRangeHops(linkRange),
       }),
-    [positionedNodes, graph.edges, hidden, onlyConnected, focusId, linkRange],
+    [positionedNodes, graph.edges, hidden, hiddenTones, hiddenEdgeKinds, onlyConnected, focusId, linkRange],
   )
   const visibleNodes = view.nodes
   const visibleEdges = view.edges
@@ -214,54 +271,109 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
 
   const apply = useCallback(
     (next: Viewport): void => {
+      // 任何手势都会离开「刚 fit 过」的状态：状态栏的「已按可读下界适配」
+      // 只描述**最近一次 fit**，用户一缩放/平移它就不再成立。
+      setFitNotice(null)
+      setViewNotice(null)
       setViewport(clampPan(next, size, bounds))
     },
     [size, bounds],
   )
 
+  // 展开高度用**像素**（不用 vh）：真机实测 vh 在宿主 slot 里不可靠，
+// 按钮会变成「文案变了、高度没变」。纯函数见 graph-interaction。
+  const effectiveHeight = expandedViewportHeight(height, windowHeight, expanded)
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const onResize = (): void => setWindowHeight(window.innerHeight)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
   // 测量容器尺寸（真实像素首次渲染后才可用）。
+  // 用 rect.height 而不是 height prop：放大视图的高度是算出来的像素，
+  // 真实高度只有量出来才算得准（fit/clamp/小地图都依赖它）。
   useEffect(() => {
     const measure = (): void => {
       const rect = wrapRef.current?.getBoundingClientRect()
       if (!rect || rect.width === 0) return
-      setSize({ width: rect.width, height })
+      setSize({ width: rect.width, height: rect.height > 0 ? rect.height : effectiveHeight })
     }
     measure()
     const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(() => measure()) : null
     if (observer && wrapRef.current) observer.observe(wrapRef.current)
     return () => observer?.disconnect()
-  }, [height])
+  }, [effectiveHeight, expanded])
+
+  /**
+   * 放大/还原视图。
+   *
+   * 展开是**显式动作**，允许重 fit（新的 size 下整图重新适配一次）；
+   * 还原时**保留当前缩放/平移**（用户可能正在看某条链路，不该被重置），
+   * 由状态栏说明「高度已还原，缩放保留」。
+   */
+  const expandFitRef = useRef(false)
+  const toggleExpand = useCallback((): void => {
+    const next = !expanded
+    if (next) {
+      expandFitRef.current = true
+      setViewNotice(null)
+    } else {
+      setViewNotice('collapse')
+    }
+    setExpanded(next)
+  }, [expanded])
+  useEffect(() => {
+    if (!expandFitRef.current || size.width === 0) return
+    expandFitRef.current = false
+    const fit = readableFitViewport(bounds, size)
+    setFitNotice(fit.clamped === 'max' ? 'max' : fit.belowReadable ? 'all' : null)
+    setViewport(clampPan(fit.viewport, size, bounds))
+  }, [size, bounds])
 
   // 首次 fit：只做一次（fittedRef 守卫），数据轮询不重置用户的缩放。
+  // 「什么原因允许 fit」由 shouldFit 白名单判定（见 graph-interaction.ts）：
+  // data-poll / resize 永远返回 false —— 这条铁律现在有断言，不只靠注释。
   useEffect(() => {
-    if (fittedRef.current) return
     if (size.width === 0) return
+    if (!shouldFit('initial', fittedRef.current)) return
     fittedRef.current = true
-    setViewport(clampPan(fitToView(bounds, size), size, bounds))
+    const fit = readableFitViewport(bounds, size)
+    setFitNotice(fit.clamped === 'max' ? 'max' : fit.belowReadable ? 'all' : null)
+    setViewport(clampPan(fit.viewport, size, bounds))
     // bounds 仅在首次 fit 时读取（size 就绪那一刻）；此后由用户交互驱动。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size])
 
   /**
-   * 尺寸变化只重新钳制平移、**不动缩放**。
+   * 容器尺寸变化只重新钳制平移、**不动缩放**。
    *
-   * 为什么与「切布局重 fit」区别对待：容器变宽变窄是环境事实（拖窗口、折叠侧栏），
-   * 用户的缩放意图仍然有效；重新 fit 会把它抹掉 —— 那正是铁律要防的事。
+   * 为什么依赖里不再有 `bounds`：过滤图例或数据轮询都会改变 bounds，
+   * 而 `clampPan` 在「内容比视口小」时会居中 —— 那会让用户看到视图
+   * 突然跳一下（等于一次变相 fit）。尺寸变化只被环境驱动，是唯一
+   * 可以安全重钳制的时机；内容边界变化时交给显式的 fit 按钮。
    */
+  const boundsRef = useRef(bounds)
+  boundsRef.current = bounds
   useEffect(() => {
-    if (!fittedRef.current) return
-    setViewport((current) => clampPan(current, size, bounds))
-  }, [size, bounds])
+    if (!fittedRef.current || size.width === 0) return
+    setViewport((current) => clampPan(current, size, boundsRef.current))
+  }, [size])
 
   // 显式切换布局：整张图换了投影，旧视口大概率对着空白，这时重 fit 才是对的。
   useEffect(() => {
     if (layoutEpoch === 0 || !fittedRef.current) return
-    setViewport(clampPan(fitToView(bounds, size), size, bounds))
+    if (!shouldFit('layout-switch', fittedRef.current)) return
+    const fit = readableFitViewport(bounds, size)
+    setFitNotice(fit.clamped === 'max' ? 'max' : fit.belowReadable ? 'all' : null)
+    setViewport(clampPan(fit.viewport, size, bounds))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutEpoch])
 
   const doFit = useCallback((): void => {
-    setViewport(clampPan(fitToView(bounds, size), size, bounds))
+    const fit = readableFitViewport(bounds, size)
+    setFitNotice(fit.clamped === 'max' ? 'max' : fit.belowReadable ? 'all' : null)
+    setViewport(clampPan(fit.viewport, size, bounds))
   }, [bounds, size])
 
   const doZoom = useCallback(
@@ -336,21 +448,20 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
         pinchPrevRef.current = next
         return
       }
-      // 优先级 1：正在拖节点 —— 位移换算成世界坐标增量写入偏移。
+      // 优先级 1：正在拖节点 —— 屏幕位移按视图反变换写成世界增量。
       const nodeDrag = nodeDragRef.current
       if (nodeDrag !== null) {
         const dx = event.clientX - nodeDrag.x
         const dy = event.clientY - nodeDrag.y
-        if (!nodeDrag.moved && Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD) return
+        if (!nodeDrag.moved && !isDragDistance(dx, dy)) return
         nodeDrag.moved = true
         nodeDrag.x = event.clientX
         nodeDrag.y = event.clientY
-        // 屏幕 1px = 世界 1/scale；scale 用当前视口（拖动中不变）。
-        const scale = viewport.scale
-        setOffsets((current) => {
-          const prior = current[nodeDrag.id] ?? { x: 0, y: 0 }
-          return { ...current, [nodeDrag.id]: { x: prior.x + dx / scale, y: prior.y + dy / scale } }
-        })
+        // 屏幕 1px = 世界 1/scale；缩放大于 1 时直接用像素当世界偏移会让
+        // 卡片「追不上指针」（灵敏度不足），小于 1 时则甩飞。反变换见
+        // graph-interaction.dragDeltaToWorld。
+        const delta = dragDeltaToWorld(dx, dy, viewport.scale)
+        setOffsetMemory((current) => withDragOffset(current, layoutMode, nodeDrag.id, delta))
         return
       }
       // 优先级 2：拖画布平移。
@@ -359,7 +470,7 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
       const dx = event.clientX - drag.x
       const dy = event.clientY - drag.y
       // 位移不足阈值时不算拖拽 —— 否则节点上的点击会被拖拽吃掉。
-      if (!drag.moved && Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD) return
+      if (!drag.moved && !isDragDistance(dx, dy)) return
       drag.moved = true
       drag.x = event.clientX
       drag.y = event.clientY
@@ -367,7 +478,7 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
       // 用闭包里的旧值会「拖得越快越跟不上手」。
       setViewport((current) => clampPan(panBy(current, dx, dy), size, bounds))
     },
-    [viewport.scale, size, bounds],
+    [viewport.scale, size, bounds, layoutMode],
   )
 
   const onPointerUp = useCallback((event?: { pointerId?: number }): void => {
@@ -380,9 +491,30 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
   }, [])
 
   const onNodePointerDown = useCallback(
-    (event: { clientX: number; clientY: number; stopPropagation: () => void }, nodeId: string): void => {
+    (
+      event: {
+        clientX: number
+        clientY: number
+        button?: number
+        pointerId?: number
+        currentTarget?: { setPointerCapture?: (pointerId: number) => void }
+        stopPropagation: () => void
+      },
+      nodeId: string,
+    ): void => {
+      // 只有主键拖拽：右键（上下文菜单）与中键（滚轮按钮）按下不该改写布局。
+      if (event.button !== undefined && event.button !== 0) return
       // 拖节点而不是拖画布：拦截事件，画布的 pan 不得启动。
       event.stopPropagation()
+      // 指针捕获让拖拽在**指针移出画布**后仍继续：没有它，用户把节点拖到
+      // 工具栏/侧栏上时拖动就断了（节点停在半路，需要重新按住）。
+      // capture 在合成事件/失效 pointerId 下按规范抛 NotFoundError，且它是
+      // 可选优化 —— 必须 try 包住，绝不能否决「开始拖拽」这个主功能。
+      try {
+        if (event.pointerId !== undefined) event.currentTarget?.setPointerCapture?.(event.pointerId)
+      } catch {
+        /* 捕获失败只是拖出边界后不再跟随，不影响拖拽本身 */
+      }
       suppressClickRef.current = false
       nodeDragRef.current = { id: nodeId, moved: false, x: event.clientX, y: event.clientY }
     },
@@ -471,6 +603,21 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
   }, [focusId, visibleEdges, linkRange])
 
   /**
+   * 悬停邻域高亮（v0.16）。
+   *
+   * 为什么必须在模型层一次成型：节点集与边集若各算各的，就会出现
+   * 「亮节点连着暗边」这种自相矛盾的画面（用户读不出「相关性」到底是
+   * 哪一侧在说话）。`highlightForHover` 先收关联边、再由边推邻居，集合天然闭合。
+   *
+   * 与聚焦高亮的关系：悬停是**瞬态**，聚焦是**持久**。两者同时存在时
+   * 悬停优先（用户此刻的注意力在指针下），离开后自动回到聚焦态 —— 不需要清空选中。
+   */
+  const hoverHighlight = useMemo(
+    () => highlightForHover({ nodeId: hoverId, edgeId: hoverEdgeId }, visibleNodes, visibleEdges),
+    [hoverId, hoverEdgeId, visibleNodes, visibleEdges],
+  )
+
+  /**
    * 边宽的事实源：一次遍历全边的度数表。
    *
    * 为什么不能按边调 `degreeOf`：那是 O(V·E)（本仓库已在孤立判定上踩过一次）。
@@ -492,7 +639,7 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
    * 画布尺寸按**视口高度**选档：窄形态（侧栏/分屏，340px）挂一块 152×96
    * 会吃掉近三分之一画面，参照物反而遮住了要看的东西。
    */
-  const minimapCanvas = height <= VIEWPORT_HEIGHT_NARROW ? MINIMAP_CANVAS_NARROW : MINIMAP_CANVAS
+  const minimapCanvas = expanded || height > VIEWPORT_HEIGHT_NARROW ? MINIMAP_CANVAS : MINIMAP_CANVAS_NARROW
   const minimapProj = useMemo(() => minimapProjection(bounds, minimapCanvas), [bounds])
   const minimapRects = useMemo(
     () => minimapNodeRects(visibleNodes, minimapProj, (node) => colorOf(node, colorMode, (column) => stageOfColumn.get(column))),
@@ -612,38 +759,56 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
    */
   const onKeyDown = useCallback(
     (event: { key: string; preventDefault?: () => void }): void => {
-      if (event.key === 'Escape') {
+      // 键位表在 graph-interaction.graphKeyAction（可单测）：组件不再把
+      // 「哪个键做什么」散落在 if 链里，改键位有唯一的落点。
+      const action = graphKeyAction(event.key)
+      if (action === 'escape') {
         event.preventDefault?.()
-        onFocusChange(null)
-        setQuery('')
-        setHoverId(null)
-        // v0.11.3：边选中也是观察态 —— Esc 一次退出全部（只清一半会让人以为键没生效）。
-        setSelectedEdgeId(null)
-        setHoverEdgeId(null)
+        // 分层退出：展开视图是最外层（先收它），第二次 Esc 才清观察态。
+        const hasObservation =
+          focusId !== null ||
+          query !== '' ||
+          hoverId !== null ||
+          selectedEdgeId !== null ||
+          hoverEdgeId !== null
+        const step = escapeAction(expanded, hasObservation)
+        if (step === 'collapse-expand') {
+          setExpanded(false)
+          setViewNotice('collapse')
+          return
+        }
+        if (step === 'clear-observation') {
+          onFocusChange(null)
+          setQuery('')
+          setHoverId(null)
+          // v0.11.3：边选中也是观察态 —— 一次清全部观察态（只清一半会让人以为键没生效）。
+          setSelectedEdgeId(null)
+          setHoverEdgeId(null)
+        }
         return
       }
-      if (event.key === '+' || event.key === '=') {
+      if (action === 'zoom-in') {
         event.preventDefault?.()
         doZoom(1.15)
         return
       }
-      if (event.key === '-' || event.key === '_') {
+      if (action === 'zoom-out') {
         event.preventDefault?.()
         doZoom(1 / 1.15)
         return
       }
-      if (event.key === '0') {
+      if (action === 'fit') {
         event.preventDefault?.()
         doFit()
         return
       }
       // 方向键：在画布上按**二维邻近**换焦点（此前键盘只有 Tab 一条路）。
-      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      if (action.startsWith('focus-')) {
         event.preventDefault?.()
-        moveFocusByArrow(event.key.slice(6).toLowerCase() as 'left' | 'right' | 'up' | 'down')
+        moveFocusByArrow(action.slice(6) as 'left' | 'right' | 'up' | 'down')
       }
     },
-    [doZoom, doFit, onFocusChange, moveFocusByArrow],
+    [doZoom, doFit, onFocusChange, moveFocusByArrow, expanded, focusId, query, hoverId, selectedEdgeId, hoverEdgeId],
   )
 
   /**
@@ -653,16 +818,22 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
    * （全量命中）。此前匹配 20 个时，第 9~20 个根本跳不到，而指示器还显示
    * 「第 1/8 个」—— 那不是「少显示几条」，是「有些结果不存在」的假陈述。
    */
-  const locateMatchNext = useCallback((): void => {
-    const all = search.all
-    if (all.length === 0) return
-    const next = (search.cycleIndex + 1) % all.length
-    setMatchIndex(next)
-    const node = all[next]
-    if (!node) return
-    apply(centerOn(viewport, size, centreOfNode(node)))
-    onFocusChange(node.id)
-  }, [search, apply, viewport, size, centreOfNode, onFocusChange])
+  const locateMatchStep = useCallback(
+    (delta: number): void => {
+      const all = search.all
+      if (all.length === 0) return
+      // 取模交给 cycleIndex：↑ 的 -1 不能产生负下标（会跳到 undefined）。
+      const next = cycleIndex(search.cycleIndex, delta, all.length)
+      setMatchIndex(next)
+      const node = all[next]
+      if (!node) return
+      apply(centerOn(viewport, size, centreOfNode(node)))
+      onFocusChange(node.id)
+    },
+    [search, apply, viewport, size, centreOfNode, onFocusChange],
+  )
+  const locateMatchNext = useCallback((): void => locateMatchStep(1), [locateMatchStep])
+  const locateMatchPrev = useCallback((): void => locateMatchStep(-1), [locateMatchStep])
   // 画布上的命中描边用**全量**命中：下拉列表是「先显示几条」，而图上的
   // 虚线框回答的是「我的搜索结果都在哪」—— 只描前 8 个会让第 9 个结果
   // 在图上隐身（列表里也跳不到，用户会以为搜索没生效）。
@@ -731,9 +902,25 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
           setSelectedEdgeId(null)
           // 拖拽偏移一并清零（v0.11）：「重置」若不还原用户拖乱的布局，
           // 节点拖飞后只能刷新页面 —— 那不是重置，是摆设。
-          setOffsets({})
+          setOffsetMemory(emptyOffsetMemory())
+          // 图例过滤也属于用户观察态：重置必须回到「全图 + 100%」，
+          // 否则用户会看到缩放到 1 但只剩两类节点的「重置后仍不对」。
+          setHidden(new Set())
+          setHiddenEdgeKinds(new Set())
+          setHiddenTones(new Set())
+          // 与 fit 的区别（v0.16）：reset 承诺 **1:1 原始尺寸 + 内容居中**，
+          // 不是「塞满视口」（60 节点大图 fit 到 0.3，文字不可读）。
+          setViewport(clampPan(resetToActualSize(bounds, size), size, bounds))
+          setFitNotice(null)
         }}
-        canReset={focusId !== null || query !== '' || Object.keys(offsets).length > 0}
+        canReset={
+          focusId !== null ||
+          query !== '' ||
+          hasAnyOffset(offsetMemory) ||
+          hidden.size > 0 ||
+          hiddenEdgeKinds.size > 0 ||
+          hiddenTones.size > 0
+        }
         query={query}
         onQuery={setQuery}
         matches={matches}
@@ -744,31 +931,37 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
         onToggleResults={() => setShowAllResults((current) => !current)}
         onLocate={locateNode}
         onMatchNext={locateMatchNext}
+        onMatchPrev={locateMatchPrev}
         counts={counts}
         hidden={hidden}
-        allNodes={visibleNodes}
-        onToggleKind={(kind) =>
-          setHidden((current) => {
-            const next = new Set(current)
-            if (next.has(kind)) next.delete(kind)
-            else next.add(kind)
-            return next
-          })
-        }
+        allNodes={graph.nodes}
+        onToggleKind={(kind) => setHidden((current) => toggleSetMember(current, kind))}
+        edgeCounts={edgeCounts}
+        hiddenEdgeKinds={hiddenEdgeKinds}
+        onToggleEdgeKind={(kind) => setHiddenEdgeKinds((current) => toggleSetMember(current, kind))}
+        toneCounts={toneCountsBy}
+        hiddenTones={hiddenTones}
+        onToggleTone={(tone) => setHiddenTones((current) => toggleSetMember(current, tone))}
         onlyConnected={onlyConnected}
         onToggleConnected={() => setOnlyConnected((current) => !current)}
         connectedAvailable={focusId !== null}
         linkRange={linkRange}
         onLinkRange={setLinkRange}
+        hopDepth={linkRangeHops(linkRange) ?? 0}
         minimapVisible={minimapVisible}
         onToggleMinimap={() => setMinimapVisible((current) => !current)}
+        expanded={expanded}
+        onToggleExpand={toggleExpand}
       />
 
       <div className="rg-graph-body">
         <div
           ref={wrapRef}
           className="rg-graph-viewport"
-          style={{ height: `${height}px` }}
+          data-expanded={expanded ? 'true' : undefined}
+          /* 放大视图：容器撑到视口 70%（CSS vh 由真实侧栏/窗口高度换算，
+             比写死像素更适应）——图谱是探索界面，不该长期挤在 460px 里。 */
+          style={{ height: `${effectiveHeight}px` }}
           /* 滚轮**不**在这里挂：React 的 onWheel 是 passive 的，preventDefault
              无效会让缩放连带滚动整个页面。原生非 passive 监听器见上方
              wheelHandlerRef 的 effect。 */
@@ -815,10 +1008,24 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
                 const from = nodeById.get(edge.from)
                 const to = nodeById.get(edge.to)
                 if (!from || !to) return null
-                const active = focusId !== null && highlighted.has(edge.from) && highlighted.has(edge.to)
+                const focusActive = focusId !== null && highlighted.has(edge.from) && highlighted.has(edge.to)
                 const hoveredEdge = hoverEdgeId === edge.id
                 const selectedEdge = selectedEdgeId === edge.id
-                const geometry = edgeGeometry(from, to, curvatures[index] ?? 0)
+                // 悬停高亮优先于聚焦高亮：指针下的邻域是此刻的注意力焦点。
+                // 「被悬停高亮排除」的边统一降透明度，是被高亮集合直接判定的（同源）。
+                const inHover = hoverHighlight !== null && hoverHighlight.edges.has(edge.id)
+                const hoverDimmed = hoverHighlight !== null && !inHover
+                const active = inHover || hoveredEdge || focusActive
+                // 降噪：低缩放只给**直接悬停/选中**的边标签；聚焦/邻域高亮的边标签
+// 在 52% 缩放下会与节点文字互相压（真机截图实测）。圈层高亮仍提亮，
+// 只是不标字 —— 颜色已经表达「相关」，标签留到放大后读。
+                const pinned = hoveredEdge || selectedEdge
+                const showLabel = shouldShowEdgeLabel(viewport.scale, active, pinned)
+                // 长边轻微二次弯曲（短边/平行边沿用原曲率）：跨列长线不再与短边
+                // 完全重叠，读者能顺着弯度把它与节点文字区分开。
+                const baseCurvature = curvatures[index] ?? 0
+                const curvature = baseCurvature !== 0 ? baseCurvature : longEdgeCurvature(from, to, index)
+                const geometry = edgeGeometry(from, to, curvature)
                 // 粗细 = 两端度数之和的对数刻度（枢纽链路更粗，但不会被 20 度压扁）。
                 const baseWidth = edgeWidthOf(edgeDegrees, edge)
                 return (
@@ -840,23 +1047,35 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
                       d={geometry.path}
                       fill="none"
                       stroke={
-                        selectedEdge || hoveredEdge || active ? 'var(--dsw-alias-brand-primary)' : edgeColor(edge)
+                        selectedEdge || inHover || hoveredEdge || focusActive
+                          ? 'var(--dsw-alias-brand-primary)'
+                          : edgeColor(edge)
                       }
                       strokeWidth={
-                        selectedEdge
-                          ? EDGE_WIDTH_MAX + 0.8
-                          : hoveredEdge
-                            ? baseWidth + 1
-                            : active
-                              ? baseWidth + 0.6
-                              : baseWidth
+                        inHover
+                          ? baseWidth + 1.2
+                          : selectedEdge
+                            ? EDGE_WIDTH_MAX + 0.8
+                            : hoveredEdge
+                              ? baseWidth + 1
+                              : focusActive
+                                ? baseWidth + 0.6
+                                : baseWidth
                       }
-                      strokeOpacity={focusId === null && selectedEdgeId === null ? 0.9 : selectedEdge || hoveredEdge || active ? 1 : 0.22}
-                      markerEnd={selectedEdge || hoveredEdge || active ? 'url(#rg-arrow-active)' : 'url(#rg-arrow)'}
+                      strokeOpacity={
+                        hoverDimmed
+                          ? 0.1
+                          : focusId === null && selectedEdgeId === null
+                            ? 0.9
+                            : selectedEdge || inHover || hoveredEdge || focusActive
+                              ? 1
+                              : 0.22
+                      }
+                      markerEnd={hoverDimmed ? 'url(#rg-arrow)' : selectedEdge || inHover || hoveredEdge || focusActive ? 'url(#rg-arrow-active)' : 'url(#rg-arrow)'}
                     />
                     {/* 方向文字：高亮/悬停/选中任一时显示（只给被关注的边，
                         每条都标会让图面变成文字噪声）。 */}
-                    {(active || hoveredEdge || selectedEdge) && geometry.labelAnchor !== null && (
+                    {showLabel && geometry.labelAnchor !== null && (
                       <text x={geometry.labelAnchor.x} y={geometry.labelAnchor.y - 4} textAnchor="middle" className="rg-graph-edge-label">
                         {t(edgeKindKey(edge.kind))}
                       </text>
@@ -871,11 +1090,19 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
                 )
               })}
               {visibleNodes.map((node) => {
-                const dimmed = focusId !== null && !highlighted.has(node.id)
+                const hoverEmphasis = hoverHighlight !== null && hoverHighlight.nodes.has(node.id)
+                // 悬停高亮优先级高于聚焦：离开后自动回到聚焦态（不需要清空选中）。
+                const dimmed =
+                  hoverHighlight !== null
+                    ? isDimmedByHighlight(hoverHighlight, 'node', node.id)
+                    : focusId !== null && !highlighted.has(node.id)
                 const hovered = hoverId === node.id
                 const selected = node.id === focusId
                 const matched = matchIds.has(node.id)
                 const dragged = nodeDragRef.current?.id === node.id
+                // 截断是渲染策略：省略的字符数写进 title，完整文本另有出口（详情卡/aria-label）。
+                const labelText = ellipsize(node.label, 22)
+                const detailText = node.detail === undefined ? null : ellipsize(node.detail, 28)
                 return (
                   <g
                     key={node.id}
@@ -888,7 +1115,7 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
                       transform: `translate(${node.x}px, ${node.y}px)`,
                       transition: dragged ? 'none' : undefined,
                     }}
-                    opacity={dimmed ? 0.3 : 1}
+                    opacity={dimmed ? (hoverHighlight !== null ? 0.18 : 0.3) : 1}
                     className="rg-graph-node"
                     role="button"
                     tabIndex={0}
@@ -922,8 +1149,12 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
                       rx={10}
                       className="rg-graph-node-bg"
                       fill="var(--dsw-alias-bg-layer-1)"
-                      stroke={selected || hovered ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-border-l1)'}
-                      strokeWidth={selected || hovered ? 2 : 1}
+                      stroke={
+                        selected || hovered || hoverEmphasis
+                          ? 'var(--dsw-alias-brand-primary)'
+                          : 'var(--dsw-alias-border-l1)'
+                      }
+                      strokeWidth={selected || hovered ? 2 : hoverEmphasis ? 1.6 : 1}
                       cursor={dragged ? 'grabbing' : 'grab'}
                     />
                     {/* 搜索命中：额外的虚线描边（颜色之外的第二通道）。 */}
@@ -945,16 +1176,24 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
                       d={shapePath(node.shape, 14, NODE_HEIGHT / 2)}
                       fill={colorOf(node, colorMode, (column) => stageOfColumn.get(column))}
                     />
-                    <text x={30} y={22} className="rg-graph-node-label">
-                      {node.label.length > 22 ? `${node.label.slice(0, 22)}…` : node.label}
+                    <text x={30} y={22} className="rg-graph-node-label" stroke="var(--dsw-alias-bg-layer-1)" strokeWidth={3} paintOrder="stroke" strokeLinejoin="round">
+                      {labelText.text}
                     </text>
-                    {node.detail && (
-                      <text x={30} y={40} className="rg-graph-node-detail">
-                        {node.detail.length > 28 ? `${node.detail.slice(0, 28)}…` : node.detail}
+                    {detailText !== null && (
+                      <text x={30} y={40} className="rg-graph-node-detail" stroke="var(--dsw-alias-bg-layer-1)" strokeWidth={2.5} paintOrder="stroke" strokeLinejoin="round">
+                        {detailText.text}
                       </text>
                     )}
-                    {/* 悬停完整提示：被截断的 label / detail 在原生 tooltip 里完整可读。 */}
-                    <title>{node.detail ? `${node.label} — ${node.detail}` : node.label}</title>
+                    {/* 悬停完整提示：被截断的 label / detail 在原生 tooltip 里完整可读，
+                        并显式说出省略了多少字符（静默截断 = 假陈述）。 */}
+                    <title>
+                      {detailText !== null ? `${labelText.full} — ${detailText.full}` : labelText.full}
+                      {labelText.truncated || (detailText !== null && detailText.truncated)
+                        ? ` · ${t('graph.omittedChars', {
+                            count: labelText.omitted + (detailText?.omitted ?? 0),
+                          })}`
+                        : ''}
+                    </title>
                   </g>
                 )
               })}
@@ -983,7 +1222,7 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
           )}
           {/* 过滤把图滤空了：必须说出来，而不是留一块干净的空白 ——
               「干净空白」与「什么都没显示出来」在观感上完全一样（假绿）。 */}
-          {visibleNodes.length === 0 && (hidden.size > 0 || onlyConnected) && (
+          {visibleNodes.length === 0 && (hidden.size > 0 || hiddenEdgeKinds.size > 0 || hiddenTones.size > 0 || onlyConnected) && (
             <div className="rg-graph-filtered-empty" role="status">
               {t('graph.filteredEmpty')}
               <button
@@ -991,6 +1230,8 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
                 className="rg-link"
                 onClick={() => {
                   setHidden(new Set())
+                  setHiddenEdgeKinds(new Set())
+                  setHiddenTones(new Set())
                   setOnlyConnected(false)
                 }}
               >
@@ -1020,6 +1261,20 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
       {/* 状态条：缩放的「轨迹」在数字上可读（百分比 + 计数 + 当前选中）。 */}
       <div className="rg-graph-status" role="status">
         <span className="rg-graph-zoom-label">{t('graph.zoomLevel')} {zoomLabel(viewport.scale)}</span>
+        {/* fit 的可读下界是显式策略：被钳制过就要说出来，否则「适配后仍看不全」
+            会被误读成功能坏了。 */}
+        {fitNotice !== null && (
+          <span className="rg-graph-fitnote" title={t(fitNotice === 'all' ? 'graph.fitAllHint' : 'graph.fitClampedHint')}>
+            {fitNotice === 'all'
+              ? t('graph.fitAllNote')
+              : t('graph.fitClampedMax', { scale: FIT_SCALE_MAX })}
+          </span>
+        )}
+        {viewNotice === 'collapse' && (
+          <span className="rg-graph-fitnote" title={t('graph.collapseKeptZoomHint')}>
+            {t('graph.collapseKeptZoom')}
+          </span>
+        )}
         <span>{t('graph.counts', { nodes: visibleNodes.length, edges: visibleEdges.length })}</span>
         {selectedLabel !== null && (
           <span className="rg-graph-status-selected">

@@ -1,24 +1,25 @@
 # 变异测试报告（M4 / RQ4）
-**生成时间**：2026-11-10T15:28:47.659Z
+**生成时间**：2026-11-11T07:19:19.506Z
 **命令**：`node scripts/mutation.mjs --metric meaningful --min-kill-rate 0.8`
 ## 1. 汇总（双口径）
 | 项 | 值 |
 |---|---|
-| 变异体总数 | 44 |
-| 断言杀死 | 21 |
+| 变异体总数 | 53 |
+| 断言杀死 | 41 |
 | 语法杀死（不计入杀灭率） | 0 |
-| 存活 | 23 |
-| ├ 已证等价（账本剔除） | 5 |
-| └ 未归因（留在分母 = 真实缺口/未证等价） | 18 |
-| **原始口径杀灭率** | **47.7%**（21/44） |
-| **有意义口径杀灭率** | **53.8%**（21/39） |
+| 存活 | 12 |
+| ├ 已证等价（账本剔除） | 10 |
+| └ 未归因（留在分母 = 真实缺口/未证等价） | 2 |
+| **原始口径杀灭率** | **77.4%**（41/53） |
+| **有意义口径杀灭率** | **95.3%**（41/43） |
 | 门禁采用口径 | `meaningful` |
-| 门禁阈值 / 结果 | 80.0% / FAIL（meaningful 口径） |
-| 账本有效条目 | 5（.cycles/verify/mutation-equivalents.json） |
+| 门禁阈值 / 结果 | 80.0% / PASS（meaningful 口径） |
+| 账本有效条目 | 10（.cycles/verify/mutation-equivalents.json） |
 | 账本 STALE-EQUIVALENT | 0 |
 | 账本被拒条目（缺 reason/proof） | 0 |
 | 账本未生效条目 | 0 |
-| 无直接测试的源码文件 | 16 |
+| 无直接测试的源码文件 | 14 |
+| 基线自检（变异前） | PASS（35 个直接测试文件，整表重跑 1 次） |
 > 判定口径：只有「变异体可解析、且被断言抓住」才计入杀灭率；语法杀死不计入。
 > **原始口径**不剔除任何存活体；**有意义口径**只剔除账本中已证等价、且本轮源码核对通过的存活体。
 > `--min-kill-rate` 自 cycle-13 起**默认按有意义口径判定**（此前为原始口径）；`--metric raw` 可显式切回。
@@ -27,10 +28,15 @@
 | 文件:行 | 变异子 | 变异 | 等价理由（为什么行为不变） | 证明（钉住不可达性的断言） |
 |---|---|---|---|---|
 | `src/host/observe/control-band.ts:38` | comparison | 比较方向 < → <=（i <= crashTimes） | 多出的一轮取 i === crashTimes.length：crashTimes[i] 为 undefined，被 ?? 0 兜底成 0，于是 gap = 0 − 最后一个时刻 = 负值；紧接着的 gap > 0 守卫把它过滤，gaps 数组与后续全部断言不变。 | tests/unit/observability-math.test.ts:倒序时间戳 ⇒ 诚实不可判定（负间隔全过滤）—— 该断言钉住「负间隔会被 gap > 0 过滤」这个等价性的承重事实。 |
-| `src/host/observe/observability.ts:120` | comparison | 比较方向 < → <=（sampleSize <= 1） | 唯一分歧点是 n === 1。变异版本命中守卫直接 return 1；原版本落到底部公式 max(1, min(4, round(log10(1) + 0.5))) = max(1, round(0.5)) = 1。两条路径同为 1，且 n < 1 与 n > 1 的行为完全相同。 | tests/unit/observability-math.test.ts:位数夹在 [1,4]（displayDigits(0) === 1 钉住守卫分支返回 1）与 3 个样本只配 1 位有效数字（displayDigits(3) === 1 钉住下限夹到 1）。 |
-| `src/host/data/store.ts:231` | comparison | 比较方向 <= → <（pid < 0） | 唯一分歧点是 pid === 0。变异版本不再把 0 判成 incomplete，但随后 !incomplete && processAlive(0) 中 processAlive(0) 为 false，因此同样不进 report.kept，继续走到 rmSync + report.removed。与「incomplete ⇒ 不探活 ⇒ 直接删」的分支终点相同（删掉该锁文件）。 | tests/unit/core.test.ts:pidAlive(0) === false（非法 pid 不是进程）—— 该断言钉住 processAlive(0) 为 false，即两条路径都不保留 pid=0 的锁。 |
 | `src/host/risk/risk-bayes.ts:147` | comparison | 比较方向 < → <=（x <= 1） | 唯一分歧点是 x === 1。变异版本走递推 lgamma(2) − log(1) = lnΓ(2) − 0；Γ(2) = 1 ⇒ lnΓ(2) = 0。原路径 lnΓ(1) = 0。数学上恒等；实现上 z=1 与 z=0 两条 Lanczos 路径的数值差约 1e-15，远小于先验断言的 1e-8 容差，故可观测行为不变。 | tests/unit/risk-bayes.test.ts:先验 95% 下界 = 0.025（均匀分布的解析分位）与 先验均值 = 0.5（均为 1e-8/1e-12 容差）—— 先验 Beta(1,1) 的 logBeta(1,1) 三次走 lgamma(1)，容差钉住该处 x=1 的数值不变。 |
 | `src/host/observe/survival.ts:116` | comparison | 比较方向 > → >=（zeros >= 0） | 进入该分支的必要条件是 gaps 含非有限值或 ≤ 0 的间隔。crashSeries 先 filter(Number.isFinite) 再 sort，因此 gaps 恒 ≥ 0 ⇒ 只有「零间隔」能触发该分支 ⇒ zeros > 0 在分支内恒真。改成 >= 0 只替换了不可达分支（非有限/负间隔）的文案，返回的 Metric 与原因不变。 | tests/unit/observability-math.test.ts:乱序时间戳会被排序 ⇒ 不产生负间隔（故负间隔分支不可达）—— 这条断言就是为钉住该不可达性而加的（见 mutation-attribution.md §3.4）。 |
+| `src/host/guard/decision.ts:126` | try-catch | 删除 try/catch 兜底（保留 try 体） | 唯一调用 writeSafe 自带同粒度 try/catch（decision.ts:189），writeFileAtomicSync 的异常在那里已被吞掉；JSON.stringify 的输入是纯数据对象（无环），不会抛。因此删除外层 try 后没有任何异常能到达它 —— 两层防御删掉一层，可观测行为不变。 | tests/unit/core.test.ts:决策写失败不冒泡（内层 writeSafe 已兜底）—— 把分区路径占成文件后调用 writeDecision，断言不抛出，钉住内层兜底存在。 |
+| `src/host/guard/guarded-rows.ts:105` | try-catch | 删除 try/catch 兜底（保留 try 体） | try 体只调用四个自带兜底的函数：readPatchRows（patch.ts:63 catch 返回 []）、readDeclaredDependencies（store.ts:766 catch 返回 []）、resolveBundlePatch（本文件:74 catch 返回 undefined）、appendPatchText（本文件:158/208/223 catch，失败返回 {ok:false}）。正常与损坏输入下 try 体都无可抛异常 ⇒ 删除外层 try 不改变返回值。 | tests/unit/core.test.ts:损坏的包清单被跳过（钉住 resolveBundlePatch 的兜底）＋ 备份写失败不冒泡（钉住 appendPatchText/ensurePatchBackup 的兜底）；tests/unit/resilience-fallback.test.ts 另有「写入被校验拦下时返回 blocked」与「不可写 patch 返回 ok:false」。 |
+| `src/host/risk/risk-calibration.ts:315` | comparison | 比较方向 < → <=（i <= events） | 唯一分歧点是 i === events.length：events[i] 为 undefined，紧接着的 `if (!event) continue` 直接跳过，marks/byBundle/run/stats 全部不变。删除该守卫才会改变行为，而本次变异没有动守卫。 | tests/unit/core.test.ts:journal 尾部的 undefined 洞被跳过（统计与没有它逐字段一致）—— 用一个显式 undefined 事件钉住 `if (!event) continue` 的跳过语义，不可达的越界项走同一条守卫。 |
+| `src/host/risk/risk-calibration.ts:350` | comparison | 比较方向 < → <=（i <= events） | 唯一分歧点是 i === events.length：events[i] 为 undefined，紧接着的 `if (!event) continue` 直接跳过，marks/byBundle/run/stats 全部不变。删除该守卫才会改变行为，而本次变异没有动守卫。 | tests/unit/core.test.ts:journal 尾部的 undefined 洞被跳过（统计与没有它逐字段一致）—— 用一个显式 undefined 事件钉住 `if (!event) continue` 的跳过语义，不可达的越界项走同一条守卫。 |
+| `src/host/data/store.ts:752` | comparison | 比较方向 > → >=（limit >= 0） | 唯一分歧点是 limit === 0：原式 Math.min(Math.floor(0), lines.length) = 0；变异式走 `: 0` 分支也得到 take = 0。`lines.slice(lines.length - 0)` 在两种写法下都是 []。limit 为负数/非有限时两侧同样得到 0。 | tests/unit/core.test.ts:readJournal(0) 读 0 行（钉住 limit===0 的取值是 0 而不是「全部」）＋ readJournal(1) 读 1 行（钉住同一表达式的上界行为）。 |
+| `src/host/data/store.ts:245` | try-catch | 删除 try/catch 兜底（保留 try 体） | try 体唯一的调用 cleanStaleLocks 自身是全函数：readdirSync 有 catch（返回空报告）、每个条目的 statSync/readFileSync/rmSync 各有 catch、processAlive 的 process.kill 有 catch。因此正常与残缺输入下 try 体都无可抛异常，删除外层 try 不改变 init 的结果（init 的硬要求只有 mkdir 备份目录）。 | tests/unit/core.test.ts:目录不存在时返回空报告（不抛）＋ 内容为 "0" 的锁必须被清理 ＋ 死进程 pid 的锁必须被清理 —— 三条断言都直接调用 cleanStaleLocks 并断言不抛、且给出确定报告。 |
+| `src/host/core/metric.ts:113` | comparison | 比较方向 < → <=（sampleSize <= 1） | 唯一分歧点是 sampleSize === 1。原式命中守卫直接 return 1；变异式落到底部公式 Math.max(1, Math.min(4, Math.round(Math.log10(1) + 0.5))) = Math.max(1, Math.round(0.5)) = 1。两条路径同为 1，n<1 与 n>1 的行为完全相同。 | tests/unit/core.test.ts:displayDigits(1) = 1（n=1 与守卫分支同值）；同类边界由 tests/unit/observability-math.test.ts 的 displayDigits(0)===1 / displayDigits(3)===1 钉住。 |
 ## 3. 账本自检（腐烂必须可见）
 ### 3.1 STALE-EQUIVALENT
 > 条目指向的 file:line 当前已无法由同一变异子生成同一变异（行号漂移或文本改写）。
@@ -41,57 +47,66 @@
 ### 3.3 未生效条目（有效但与存活体不匹配）
 无。
 ## 4. 存活变异体
-已证等价 5 个（已从有意义分母剔除）；未归因 18 个（留在分母，按纪律不剔除）。
+已证等价 10 个（已从有意义分母剔除）；未归因 2 个（留在分母，按纪律不剔除）。
 - `src/host/observe/control-band.ts:38` [comparison] 比较方向 < → <=（i <= crashTimes） 【已证等价 → 剔除】
-- `src/host/observe/observability.ts:120` [comparison] 比较方向 < → <=（sampleSize <= 1） 【已证等价 → 剔除】
-- `src/host/data/store.ts:231` [comparison] 比较方向 <= → <（pid < 0） 【已证等价 → 剔除】
 - `src/host/risk/risk-bayes.ts:147` [comparison] 比较方向 < → <=（x <= 1） 【已证等价 → 剔除】
 - `src/host/observe/survival.ts:116` [comparison] 比较方向 > → >=（zeros >= 0） 【已证等价 → 剔除】
-- `src/host/core/atomic-sync.ts:48` [try-catch] 删除 try/catch 兜底（保留 try 体） 【未归因 → 留分母】
-- `src/host/core/atomic-sync.ts:53` [try-catch] 删除 try/catch 兜底（保留 try 体） 【未归因 → 留分母】
-- `src/host/core/isolation.ts:212` [try-catch] 删除 try/catch 兜底（保留 try 体） 【未归因 → 留分母】
-- `src/host/data/archive.ts:105` [try-catch] 删除 try/catch 兜底（保留 try 体） 【未归因 → 留分母】
-- `src/host/data/archive.ts:113` [try-catch] 删除 try/catch 兜底（保留 try 体） 【未归因 → 留分母】
-- `src/host/data/store.ts:707` [comparison] 比较方向 > → >=（limit >= 0） 【未归因 → 留分母】
-- `src/host/data/store.ts:210` [try-catch] 删除 try/catch 兜底（保留 try 体） 【未归因 → 留分母】
-- `src/host/guard/decision.ts:126` [try-catch] 删除 try/catch 兜底（保留 try 体） 【未归因 → 留分母】
-- `src/host/guard/guarded-rows.ts:74` [try-catch] 删除 try/catch 兜底（保留 try 体） 【未归因 → 留分母】
-- `src/host/guard/guarded-rows.ts:105` [try-catch] 删除 try/catch 兜底（保留 try 体） 【未归因 → 留分母】
-- `src/host/guard/recovery-actions.ts:138` [try-catch] 删除 try/catch 兜底（保留 try 体） 【未归因 → 留分母】
-- `src/host/guard/recovery-actions.ts:144` [try-catch] 删除 try/catch 兜底（保留 try 体） 【未归因 → 留分母】
-- `src/host/guard/sentinel.ts:54` [try-catch] 删除 try/catch 兜底（保留 try 体） 【未归因 → 留分母】
+- `src/host/guard/decision.ts:126` [try-catch] 删除 try/catch 兜底（保留 try 体） 【已证等价 → 剔除】
+- `src/host/guard/guarded-rows.ts:105` [try-catch] 删除 try/catch 兜底（保留 try 体） 【已证等价 → 剔除】
+- `src/host/risk/risk-calibration.ts:315` [comparison] 比较方向 < → <=（i <= events） 【已证等价 → 剔除】
+- `src/host/risk/risk-calibration.ts:350` [comparison] 比较方向 < → <=（i <= events） 【已证等价 → 剔除】
+- `src/host/data/store.ts:752` [comparison] 比较方向 > → >=（limit >= 0） 【已证等价 → 剔除】
+- `src/host/data/store.ts:245` [try-catch] 删除 try/catch 兜底（保留 try 体） 【已证等价 → 剔除】
+- `src/host/core/metric.ts:113` [comparison] 比较方向 < → <=（sampleSize <= 1） 【已证等价 → 剔除】
+- `src/host/data/store.ts:297` [try-catch] 删除 try/catch 兜底（保留 try 体） 【未归因 → 留分母】
 - `src/host/observe/markov.ts:166` [comparison] 比较方向 < → <=（i <= a） 【未归因 → 留分母】
-- `src/host/profile/patch.ts:127` [try-catch] 删除 try/catch 兜底（保留 try 体） 【未归因 → 留分母】
-- `src/host/risk/risk-bayes.ts:146` [comparison] 比较方向 <= → <（x < 0） 【未归因 → 留分母】
-- `src/host/risk/risk-calibration.ts:315` [comparison] 比较方向 < → <=（i <= events） 【未归因 → 留分母】
-- `src/host/risk/risk-calibration.ts:350` [comparison] 比较方向 < → <=（i <= events） 【未归因 → 留分母】
 > 未归因 ≠ 已确认测试缺口：其中可能包含「需要 IO 故障注入才能判定」的边界
 > （删除 try/catch 类，见 `.cycles/verify/mutation-attribution.md`），以及「行为可能等价但无断言钉住」的条目。
 > 二者都留在分母里，因为**工具判定不了不等于等价**。
 ## 5. 断言杀死明细
 | 文件:行 | 变异子 | 变异 | 杀死者 |
 |---|---|---|---|
-| `src/host/core/isolation.ts:173` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/host/isolation-parallel.test.ts` |
+| `src/host/core/atomic-sync.ts:48` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/core.test.ts` |
+| `src/host/core/atomic-sync.ts:53` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/core.test.ts` |
+| `src/host/core/isolation.ts:175` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/host/isolation-parallel.test.ts` |
+| `src/host/core/isolation.ts:214` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/core.test.ts` |
 | `src/host/core/lifecycle.ts:253` | comparison | 比较方向 >= → >（i > 0） | `tests/unit/lifecycle-steps.test.ts` |
-| `src/host/core/lifecycle.ts:432` | comparison | 比较方向 <= → <（changeCount < 1） | `tests/unit/risk-frequency.test.ts` |
-| `src/host/data/store.ts:185` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/store-lock.test.ts` |
+| `src/host/core/lifecycle.ts:432` | comparison | 比较方向 <= → <（changeCount < 1） | `tests/unit/deterministic-evidence.test.ts` |
+| `src/host/core/metric.ts:95` | comparison | 比较方向 <= → <（sampleSize < 0） | `tests/unit/core.test.ts` |
+| `src/host/data/archive.ts:105` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/core.test.ts` |
+| `src/host/data/archive.ts:113` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/core.test.ts` |
+| `src/host/data/lock-hygiene.ts:88` | comparison | 比较方向 <= → <（pid < 0） | `tests/unit/core.test.ts` |
+| `src/host/data/lock-hygiene.ts:42` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/core.test.ts` |
+| `src/host/data/lock-hygiene.ts:67` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/core.test.ts` |
+| `src/host/guard/boot-orchestration.ts:76` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/boot-degradation.test.ts` |
+| `src/host/guard/boot-orchestration.ts:150` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/boot-degradation.test.ts` |
 | `src/host/guard/decision-evidence.ts:57` | comparison | 比较方向 >= → >（i > 0） | `tests/unit/decision-evidence.test.ts` |
 | `src/host/guard/decision.ts:113` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/resilience-fallback.test.ts` |
+| `src/host/guard/guarded-rows.ts:74` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/core.test.ts` |
+| `src/host/guard/quarantine-plan.ts:280` | comparison | 比较方向 < → <=（round <= maxRounds） | `tests/unit/quarantine-plan.test.ts` |
+| `src/host/guard/recovery-actions.ts:138` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/core.test.ts` |
+| `src/host/guard/recovery-actions.ts:144` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/core.test.ts` |
 | `src/host/guard/recovery-policy.ts:123` | comparison | 比较方向 < → <=（abnormalSeq <= required） | `tests/unit/recovery-policy.test.ts` |
-| `src/host/guard/recovery-policy.ts:230` | comparison | 比较方向 >= → >（i > 0） | `tests/unit/hazard-threshold.test.ts` |
+| `src/host/guard/recovery-policy.ts:276` | comparison | 比较方向 >= → >（i > 0） | `tests/unit/deterministic-evidence.test.ts` |
 | `src/host/guard/sentinel.ts:79` | comparison | 比较方向 <= → <（pid < 0） | `tests/unit/core.test.ts` |
 | `src/host/guard/sentinel.ts:43` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/resilience-fallback.test.ts` |
+| `src/host/guard/sentinel.ts:54` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/core.test.ts` |
 | `src/host/observe/control-band.ts:40` | comparison | 比较方向 > → >=（gap >= 0） | `tests/unit/observability-math.test.ts` |
 | `src/host/observe/markov.ts:122` | comparison | 比较方向 > → >=（samples >= 0） | `tests/unit/observability-math.test.ts` |
-| `src/host/observe/observability.ts:109` | comparison | 比较方向 <= → <（sampleSize < 0） | `tests/unit/observability-math.test.ts` |
+| `src/host/observe/observability.ts:197` | comparison | 比较方向 < → <=（i <= this） | `tests/unit/observability-math.test.ts` |
+| `src/host/observe/observability.ts:204` | comparison | 比较方向 <= → <（limit < 0） | `tests/unit/observability-math.test.ts` |
 | `src/host/observe/preventive.ts:101` | comparison | 比较方向 > → >=（sigma >= 0） | `tests/unit/observability-math.test.ts` |
 | `src/host/observe/preventive.ts:107` | comparison | 比较方向 > → >=（iqr >= 0） | `tests/unit/observability-math.test.ts` |
 | `src/host/observe/survival.ts:113` | comparison | 比较方向 <= → <（g < 0） | `tests/unit/observability-math.test.ts` |
-| `src/host/profile/patch.ts:76` | comparison | 比较方向 < → <=（i <= scanned） | `tests/unit/patch-safety.test.ts` |
-| `src/host/profile/patch.ts:90` | comparison | 比较方向 < → <=（j <= scanned） | `tests/unit/patch-safety.test.ts` |
+| `src/host/profile/patch.ts:76` | comparison | 比较方向 < → <=（i <= scanned） | `tests/unit/core.test.ts` |
+| `src/host/profile/patch.ts:90` | comparison | 比较方向 < → <=（j <= scanned） | `tests/unit/core.test.ts` |
 | `src/host/profile/patch.ts:63` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/resilience-fallback.test.ts` |
+| `src/host/profile/patch.ts:127` | try-catch | 删除 try/catch 兜底（保留 try 体） | `tests/unit/core.test.ts` |
+| `src/host/risk/risk-bayes.ts:146` | comparison | 比较方向 <= → <（x < 0） | `tests/unit/core.test.ts` |
 | `src/host/surface/tool-render.ts:196` | comparison | 比较方向 > → >=（omitted >= 0） | `tests/host/display-truncation.test.ts` |
 | `src/host/surface/tool-render.ts:199` | comparison | 比较方向 > → >=（extra >= 0） | `tests/host/display-truncation.test.ts` |
+| `src/host/surface/tool-text.ts:198` | comparison | 比较方向 < → <=（i <= text） | `tests/unit/core.test.ts` |
+| `src/host/surface/tool-text.ts:238` | comparison | 比较方向 > → >=（w >= budget） | `tests/unit/core.test.ts` |
 ## 6. 语法杀死明细
 > 这些变异体把源码改成了不可解析形态。它们不计入杀灭率，但值得记录 ——
 > 若某类变异子的语法杀死率长期偏高，说明该变异子的文本变换需要收窄。
@@ -99,70 +114,15 @@
 ## 7. 无直接测试的源码文件
 - `src/host/core/self-describe.ts`
 - `src/host/guard/boot-notes.ts`
+- `src/host/guard/conflict-declarations.ts`
+- `src/host/guard/conflict-findings.ts`
 - `src/host/guard/decision-views.ts`
 - `src/host/guard/event-watch.ts`
 - `src/host/guard/official-observe.ts`
 - `src/host/guard/startup-record.ts`
 - `src/host/observe/cooccurrence-store.ts`
-- `src/host/observe/observations.ts`
 - `src/host/profile/patch-yaml.ts`
-- `src/host/surface/partition-snapshot.ts`
 - `src/host/surface/status-view.ts`
 - `src/host/surface/tool-dispatch.ts`
 - `src/host/surface/tool-presentation.ts`
 - `src/host/surface/tool-registration.ts`
-- `src/host/surface/tool-text.ts`
-- `src/shared/graph-contract.ts`
-
-## 8. 附注（人工补充，生成器不产出这一节）
-
-### 8.1 分母为什么从 cycle-12 的 40 变成 44
-
-- **+2 `src/host/guard/abnormal-boot.ts`**：工具此前只按 `.js` 后缀匹配「直接测试」，
-  而它唯一的直接测试 `tests/host/reload-journey.test.ts` 用 `.ts` 导入 ⇒ 它被判
-  「无直接测试」、**从未被评估**。cycle-13 修复（`.js`/`.ts` 双后缀 + 结尾引号）
-  后进池。这是**漏判被修正**，不是测试退步。
-- **+2 `src/host/core/atomic-sync.ts`**：cycle-13 新增模块（同步原子写原语）。
-- 目录重构（`git mv` 到 `src/host/<domain>/`、`src/client/<area>/`）本身
-  **不增减变异点**，只改路径；`src/shared/` 已扫描，`src/client/**` 按路径段排除。
-
-> 因此：40 口径下的 47.5% 与 44 口径下的数字**不可直接横比**；分母变化本身是
-> 一次修正，报告必须同时给出「分子/分母」，只报百分比会掩盖这一点。
-
-### 8.2 已知噪声：一条 KILL 不可复现
-
-`src/host/core/isolation.ts:212`（删除 try/catch）在连续三次全量中
-**1 次 KILL、2 次 SURV**；唯一的杀死者是 `tests/host/isolation-parallel.test.ts`。
-该 killer 是**并发**隔离回归（多分区并发 + 临时 IO），失败带有非确定性。
-
-- 处置：本报告采用 2/3 一致的 **SURV** 结论（原始 21/44）。
-- 纪律：**不可复现的 KILL 不能当作稳定测试强度的证据**；若门禁消费此指标，
-  应先固定该并发测试的确定性，或把它的 kill 归因单列（而不是静默算进分子）。
-
-### 8.3 未归因的 18 个存活体构成（为什么它们留在分母）
-
-- **13 个 try/catch**（含上面那条 flaky 的 `isolation.ts:212`）：删除 try 只改变
-  「异常发生时」的行为，而现有测试**不制造 IO 异常**。这是 E4.2「故障注入」
-  的边界，**不是等价体**，因此一律留在分母。
-- **4 个「行为可读等价但没有断言钉住」**：`store.ts:707`（`limit > 0` → `>= 0`，
-  分歧点 `limit === 0` 无断言覆盖）、`markov.ts:166`（越界项经 `?? 0` 恒为 0，
-  无断言钉住该兜底）、`risk-calibration.ts:315/350`（`events[i]` 在 `i === length`
-  恒为 `undefined`，被 `if (!event) continue` 跳过，无断言钉住该守卫）。
-  **行为等价不等于可以剔除**：没有 proof 的等价就是自我豁免，按纪律不登记。
-- **1 个「存疑」**：`risk-bayes.ts:146`（`x <= 0` → `< 0`）。`x === 0` 时原路径返回
-  `NaN`、变异路径返回 `+Infinity` —— **行为不同**，不是等价体。公开 API 走不到
-  `x = 0`（`alpha = 1 + hits ≥ 1`），但它仍是「未证/存疑」，留在分母。
-
-### 8.4 账本 5 条的可复核性
-
-5 条全部通过「file:line 重生成校验」（同一变异子今天仍能在该行生成完全相同的
-`original → mutated`），0 条 STALE、0 条被拒、0 条未生效。每条都带 `reason`
-与 `proof`（见 §2）。**没有登记**的等价候选（§8.3 的 4 条「无断言钉住」+
-1 条存疑）不因「看起来等价」而豁免。
-
-### 8.5 账本锚定策略（设计结论，不在本轮实现）
-
-完整路径是条目的**身份**，代码指纹只做诊断/迁移线索：路径变了就报
-`STALE-EQUIVALENT`，由人确认后重锚 —— **等价性不跟随代码搬家**。原因：
-等价理由常依赖模块内其它不变量（如 `survival.ts:116` 依赖 `crashSeries` 的
-filter+sort），按 basename 自动跟随会把一条断言静默搬到语义不同的模块。

@@ -1,6 +1,6 @@
 import { useState, type ReactElement } from 'react'
 import { t } from '../i18n/i18n.ts'
-import type { PanelSnapshot } from '../../host/surface/snapshot.ts'
+import type { PanelSnapshotView } from './snapshot-view.ts'
 import type { GraphData } from '../../shared/graph-contract.ts'
 import { analyzeStructure, structureInsights, type NodeDegree } from '../graph/graph-analysis.ts'
 import { dataFlowStages, diagnosticsRows, markovView, stageLabelOf } from './panel-model.ts'
@@ -29,27 +29,41 @@ import { dataFlowStages, diagnosticsRows, markovView, stageLabelOf } from './pan
  * 诚实边界：空图不画这一条（不伪造「0 个枢纽是健康」的结论）。
  */
 export function GraphStructureBar({ graph, onLocate }: { graph: GraphData; onLocate: (id: string) => void }): ReactElement | null {
+  // Hooks 必须在任何提前 return 之前调用（Rules of Hooks）：
+  // 空图早退若发生在 useState 之前，换数据后 hook 槽位会整体错位。
+  const [expanded, setExpanded] = useState(false)
   const structure = analyzeStructure(graph.nodes, graph.edges)
   if (structure.empty) return null
   const insights = structureInsights(structure)
   const chip = (key: string, list: NodeDegree[], tone: string): ReactElement | null => {
     if (list.length === 0) return null
+    // 渲染层截断：只显示前 2 个，但省略数必须说出来，且可展开（数据层是全量）。
+    const shown = expanded ? list : list.slice(0, 2)
     return (
       <span className={`rg-struct-chip rg-tone-bg-${tone}`} key={key}>
         <span className="rg-struct-label">{t(key)}</span>
         <span className="rg-struct-count">{list.length}</span>
-        {list.slice(0, 2).map((node) => (
+        {shown.map((node) => (
           <button
             type="button"
             key={node.id}
             className="rg-link rg-struct-node"
             onClick={() => onLocate(node.id)}
-            title={`${node.label} · 进 ${node.inDegree} / 出 ${node.outDegree}`}
+            title={t('graphStruct.nodeTitle', { label: node.label, in: node.inDegree, out: node.outDegree })}
           >
             {node.label}
           </button>
         ))}
-        {list.length > 2 && <span className="rg-struct-more">{t('graphStruct.more', { count: list.length - 2 })}</span>}
+        {list.length > shown.length && (
+          <button type="button" className="rg-link rg-struct-more" onClick={() => setExpanded(true)}>
+            {t('graphStruct.more', { count: list.length - shown.length })}
+          </button>
+        )}
+        {expanded && list.length > 2 && (
+          <button type="button" className="rg-link rg-struct-more" onClick={() => setExpanded(false)}>
+            {t('graphStruct.less')}
+          </button>
+        )}
       </span>
     )
   }
@@ -74,7 +88,7 @@ export function GraphStructureBar({ graph, onLocate }: { graph: GraphData; onLoc
  *  省略了多少说出来 —— 静默 slice(0,4) 会让用户以为长期占比只有这 4 个阶段。 */
 const STATIONARY_VISIBLE = 4
 
-export function MarkovBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+export function MarkovBody({ snapshot }: { snapshot: PanelSnapshotView }): ReactElement {
   // useState 必须在**任何**提前 return 之前调用：Rules of Hooks 不是风格问题 ——
   // 早退时少调一个 hook，下一次渲染的 hook 槽位会整体错位，症状是
   // 「切换数据后状态串到别的卡上」，比报错更难查。
@@ -152,7 +166,7 @@ export function MarkovBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElem
 
 /* ---------- 数据流 ---------- */
 
-export function DataFlowBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+export function DataFlowBody({ snapshot }: { snapshot: PanelSnapshotView }): ReactElement {
   const stages = dataFlowStages(snapshot)
   return (
     <ol className="rg-dataflow" aria-label={t('dataflow.title')}>
@@ -176,7 +190,7 @@ export function DataFlowBody({ snapshot }: { snapshot: PanelSnapshot }): ReactEl
 
 /* ---------- 系统诊断 ---------- */
 
-export function DiagnosticsBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+export function DiagnosticsBody({ snapshot }: { snapshot: PanelSnapshotView }): ReactElement {
   const rows = diagnosticsRows(snapshot)
   const issuesUrl = snapshot.diagnostics.issuesUrl
   return (

@@ -1,4 +1,26 @@
-# 对外面 API（dsh-recency-guard v0.14.0）
+# 对外面 API（dsh-recency-guard v0.16.0）
+
+> 本文件里的路由 / 工具签名 / 配置项从 `src/host/surface/routes.ts`、
+> `src/host/surface/tool-registration.ts`、`src/host/capability/capability.ts`
+> 与 `src/index.ts` 实抄；契约变更必须在这里留一行。
+
+## 0.0g v0.16 契约变更一句话清单
+
+| 变更 | 影响 | 兼容性 |
+| --- | --- | --- |
+| **新增 [`dsh-plugin.json`](../../dsh-plugin.json)（社区 manifest draft v0.15）** | 市场 / 权限审计可读到 host entry（`dist/index.js`）、consumed contract（Tool）、4 条 permissions、工具 / 面板席位 / 9 条路由 | **纯新增**（运行时不加载它；dsh 安装仍走 `package.json`） |
+| **版本四锚点统一 0.16.0** | `package.json` / README / `docs/agents` / `dsh-plugin.json` 同值；npm latest 仍为 0.12.1，发布后才会对齐 | 文档与元数据级，不影响运行时 API |
+| **`package.json` 的 `files` 增补** `assets` / `screenshots.json` / `dsh-plugin.json` | npm 包内包含市场图标与 manifest（此前图标不会随包发布） | 打包内容变化，无 API 变化 |
+| **README 面向用户重构 + `docs/agents/capabilities.md` 新增** | 能力"注册→生产→消费"有了独立清单与双向比对口径；README 的历史增量压缩为版本记录 | 纯文档 |
+| **新增确定性冲突证据（`conflicts`）** | `status` / `PanelSnapshot` / `decision.json` 新增 `conflicts: ConflictFinding[]`：4 类 finding（`declared-conflict` / `duplicate-service` / `dsh-version` / `missing-dependency`），每条带 `source{file,line}` 与 `declaration` 原文 | **纯追加**（无声明 ⇒ 空数组，不猜；旧消费方忽略即可） |
+| **新增未解决冲突（`unresolved`）与贪心隔离** | `decision.json` / `status` / `PanelSnapshot` / `recover` 输出新增 `unresolved`；`recover` 改为贪心最小隔离集（含依赖联动、`dshCompat.priority` 排序），残余必须上屏 | 行为变更：`maxAutoDisable` 语义收紧为**整组上限**；无声明时仍是纯 recency（逐位不变） |
+| **`lastRecoveryVerdict` 新增可选 `deterministic`** | `{ findings, targets }`：为什么这次是确定性证据、关了谁 | 兼容（只增） |
+| **`decision.json` 新增 `unresolved` 字段** | 守护行仍只读 `disable`；`unresolved` 是展示/审计字段 | 兼容（旧决策文件无该字段 ⇒ 空） |
+| **常态路径写锁 + 锁卫生** | `writeDecisionLocked` / `updateDecisionLocked` / `writePartitionIndexLocked`；`data/lock-hygiene.ts` 清理 0 字节/死 PID 锁 | 内部（数据面更耐崩溃；无字段变化） |
+| **rescue CLI 新增可写面** | `rescues`（只读）/ `apply` / `restore`（默认 dry-run，需 `--yes`；两阶段 prepared→applied + before/afterHash；`--resume` 按原 index 回插） | **新命令面**（旧命令语义不变；写命令默认不写） |
+| **journal 真追加 + 降级标记** | journal 改为 append-only；启动编排的降级失败追加 `kind:'note'` 且带 `degraded: true`（重启后仍可查、面板/`history` 可消费） | 兼容（`degraded` 纯追加；读方忽略未知字段） |
+| **状态对账 / CAS 清零** | 哨兵在场且决策文件有 `disable` 时，启动按决策补 `crashSeq`/`autoDisabled`；干净启动只在计数未被本轮崩溃改过时归零 | 内部（数据面更耐竞态；无字段变化） |
+| **`PanelSnapshotView` 可空契约** | 客户端把宿主会发 `null`/省略的字段（`metrics` / `capability` / `markov` / `revision` 等）显式放宽；渲染层诚实降级 | 客户端类型层（对外 JSON 形状不变） |
 
 ## 0.0f v0.13 契约变更一句话清单
 
@@ -151,13 +173,25 @@ v0.4 起 `execute` 返回**规范 JSON 对象**（不再是字符串）：
 会话命令窗口显示的是 `output.render` 投影的人读文本（✔/✘ + 缩进明细行），
 不是转义 JSON —— 结构化事实与人读文本**同源**。
 
+### 参数 schema（实抄自 `tool-registration.ts`）
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `action` | string | 是 | enum：`status` / `history` / `recover` / `restore` / `reenable` / `backups` / `archive` / `archives`（来自 `TOOL_SURFACE.actions`） |
+| `bundle` | string | 否 | `reenable` 的目标插件名（包名） |
+| `limit` | number | 否 | `history` 返回的事件条数，默认 40 |
+| `reason` | string | 否 | `archive` 的归档原因（可选） |
+
+`execute(args, exec)` 每次先 `exec.signal.throwIfAborted()`，再按 `action` 查
+`TOOL_ACTIONS` 分派；未知 action 抛错（调用错误，不是业务失败）。
+
 ### actions
 
 | action | 参数 | 行为 |
 |---|---|---|
-| `status` | — | 崩溃状态、嫌疑排名（**全量**，v0.8 起不再截断 10）、实验性名单、量化指标；输出带 `workspace` + `projectKey`（隔离归因）与「插件版本」「问题反馈」 |
+| `status` | — | 崩溃状态、嫌疑排名（**全量**，v0.8 起不再截断 10）、实验性名单、量化指标、**当前 `conflicts`（声明式冲突，带出处）与上次 `unresolved`（隔离后残余）**；输出带 `workspace` + `projectKey`（隔离归因）与「插件版本」「问题反馈」 |
 | `history` | `limit?=40` | 安装/更新/崩溃/恢复事件时间线 |
-| `recover` | — | 立即按最近更新执行一次恢复关闭（crashSeq=1） |
+| `recover` | — | 立即做一次恢复：按确定性冲突做**贪心最小隔离**（含依赖联动、优先级排序；无声明时退回纯 recency），返回 `disabled` + `unresolved` + `note` |
 | `restore` | — | 重新启用非嫌疑插件，首要嫌疑保持关闭 |
 | `reenable` | `bundle` | 手动重新启用某个插件 |
 | `backups` | — | 配置备份清单 |
@@ -213,6 +247,13 @@ v0.4 起 `execute` 返回**规范 JSON 对象**（不再是字符串）：
 
 缺席即诚实：数据不可用时返回 `{available:false, reason}`，不返回空数组假装没问题。
 
+宿主侧接线签名（实抄自 [`routes.ts`](../../src/host/surface/routes.ts) 的 `RouteContext`）：
+`profileDir` / `workspace` / `profileName` / `projectKey` 四个事实字段，
+以及 `snapshot()` / `snapshotPartition(key)` / `graph()` / `isolation()` / `lifecycle()` /
+`archives()` / `archive(reason)` / `reenable(bundle)` / `restore()` / `recover()` 十个回调；
+可选 `currentRevision?()`（缺席 ⇒ 跳过 409 核对）、`onRegister?(exposedName)`（注册成功回执）、
+`logError?(message)`（桥接宿主 logger，缺席回落 console）。
+
 ### 2.1 v0.12 动作路由的乐观并发（409 语义）
 
 面板每 5s 轮询一次快照，用户点击时依据的地图最长可能陈旧 5 秒。动作路由
@@ -248,6 +289,78 @@ journal 尾），无额外状态、崩溃重启后同一份事实必得同一枚
 宿主给的 409 语义全部蒸发，闭环断在客户端。分支逻辑挂 `conflict` 字段
 而不是挂 `reason` 文案（文案会改，分支不能跟着坏）。
 
+### 2.2 离线 rescue CLI（v0.16 新增可写面）
+
+宿主起不来时的零依赖逃生通道。**默认只读**；写命令不带 `--yes` 只打印计划（dry-run）。
+
+| 命令 | 写盘 | 语义 |
+| --- | --- | --- |
+| `status` / `history` / `decision` / `archives` / `rescues` | 否 | 读守护产物；`rescues` 列出两阶段 rescue 记录 |
+| `apply --profile-dir <dir> [--bundle a,b] [--reason <text>]` | 仅 `--yes` | 把决策 `disable` 名单（或 `--bundle`）从 profile 的 `dsh.profile.bundles` 摘掉 |
+| `restore --profile-dir <dir> [--id <uuid>] [--resume]` | 仅 `--yes` | 按记录里的**原 index 升序**回插；`--resume` 做中断恢复 |
+
+两阶段契约（记录在 `<profile>/.recency-guard/rescue/<uuid>.json`）：
+
+```jsonc
+{
+  "id": "<uuid>",
+  "status": "prepared" | "applied" | "restored",
+  "beforeHash": "<sha256(profile/package.json 修改前)>",
+  "afterHash": "<sha256(修改后)>",
+  "removed": [{ "name": "...", "index": 3 }],
+  "reason": "..."
+}
+```
+
+- `prepared` + 当前哈希等于 `afterHash` ⇒ 第二步实际已完成，`restore --resume` 按已生效回插；
+- 当前哈希等于 `beforeHash` ⇒ 第二步没发生，记录作废（不动 profile）；
+- 哈希既不是 before 也不是 after / 记录被篡改 ⇒ **退出码 3 拒绝**，绝不硬改。
+- 退出码：`0` 正常、`1` 参数错误、`2` 有未恢复崩溃、`3` 拒绝（现场已变）。
+
+### 2.3 `decision.json` 形状（预启动决策，v0.16 增补）
+
+```jsonc
+{
+  "capturedAt": "2026-11-11T…",
+  "suspects": [/* DecisionSuspect：rank/risk/factors/streak/changeCount/source/evidence */],
+  "disable": ["dsh-bad-plugin"],          // 守护行**只读**这个字段
+  "reason": "crash-recovery" | "none",
+  "crashSeq": 3,
+  "phase": "prepared" | "quarantined" | "reconciled",
+  "deterministicEvidence": {              // v0.16：为什么是确定性证据
+    "findings": [/* ConflictFinding：kind/message/plugins/source/declaration */],
+    "targets": ["dsh-bad-plugin"]
+  },
+  "unresolved": [/* v0.16：贪心隔离后仍治不了的 error finding */]
+}
+```
+
+**兼容性**：`disable` 仍是唯一影响启动行为的字段；`deterministicEvidence` / `unresolved`
+是纯追加的展示与审计事实（旧决策文件缺字段 ⇒ `undefined`，不是空数组）。
+`deterministicEvidence` 同时镜像进 `state.json` 的
+`lastRecoveryVerdict.deterministic{findings,targets}`，两侧同形。
+
+### 2.4 `journal.jsonl` 记录（append-only，v0.16 定稿）
+
+每行一条 JSON：
+
+```jsonc
+{
+  "t": "2026-11-11T…",
+  "kind": "install" | "update" | "crash-detected" | "disable" | "restore" | "note" | …,
+  "bundle": "dsh-x",              // 视 kind 而定
+  "detail": "…",                  // 人读
+  "degraded": true,               // v0.16：启动编排降级（机器可读；普通事件无此字段）
+  "audit": { "actor": "tool", "action": "recover", "justification": "…" }
+}
+```
+
+- **真追加**：`appendSync`（崩溃路径）/ `append`（异步）都用 `appendFile*`，
+  不整读整写；行数裁剪只在异步、加锁的安全时机执行（>1000 行），崩溃路径永不裁剪。
+- `degraded: true` 目前来自启动编排的三处失败兜底：分区索引加锁提交、`recordChanges`、
+  官方实验插件观测。它替代「只写 logger」——日志不进事后可查的数据面。
+- 未知字段必须被读方忽略（向后兼容）；消费方不得依赖行序以外的结构。
+
 ## 3. 面板快照契约（PanelSnapshot 摘要）
 
 ```
@@ -267,6 +380,9 @@ eventFlow[]                  **v0.10**：事件流/状态流转时序（stage/ac
 markov                       **v0.10**：转移矩阵（rows[].probabilities/stationary/samples）
 backupPolicy                 **v0.9**：备份策略投影（versionedBackups/retain/root…）
 lastRecoveryVerdict?         **v0.9.1**：最近恢复判定（观察中 N/M 轮 或 已行动）
+                             **v0.16**：可选 `deterministic{findings,targets}`（为什么是确定性证据）
+conflicts?                   **v0.16**：当前仍成立的声明式冲突（kind/message/plugins/source/declaration）
+unresolved?                  **v0.16**：上次隔离后仍治不了的 error finding（读 decision.json）
 revision                     **v0.12**：乐观并发凭证（12 hex，从 state+decision+journal 尾派生）
                              —— 动作请求带 `expectedRevision` 回传它；跨分区只读视图恒 null
 diagnostics                  **v0.10**：插件/宿主版本、平台、快照耗时、repositoryUrl/issuesUrl
@@ -282,6 +398,14 @@ metrics/capability/markov 为 null —— 那些是当前进程的状态机事�
 只读视图没有可改的事实，而动作只作用于当前分区 —— 拿对方的凭证去核对
 必然产生假冲突。用 null 而不是 undefined 是为了让「这个版本没有凭证」与
 「跨分区没有凭证」两种事实可区分（缺席要可归因）。
+
+**v0.16 补充（客户端可空契约）**：跨分区投影还可能出现 `stabilityScore: null`、
+`metrics: null`、`capability: null`、`markov: null`，以及**整段省略**
+`decisionSuspects` / `calibration` / `bayes` / `cooccurrence`。客户端用
+[`snapshot-view.ts`](../../src/client/panel/snapshot-view.ts) 的 `PanelSnapshotView`
+显式放宽这些字段（只放宽、不复制契约），渲染层降级而不是把面板打进错误边界；
+该清单由 [`panel-snapshot-nullability.test.ts`](../../tests/contract/panel-snapshot-nullability.test.ts) 守护。
+对外 JSON 形状不变 —— 这是客户端类型层的修正，不是宿主发新字段。
 
 ### 3.0a v0.12 L4 审计线（journal 的机器可读部分）
 
@@ -331,13 +455,30 @@ metrics/capability/markov 为 null —— 那些是当前进程的状态机事�
 - **曲线边**：二次贝塞尔 `curveEdgePath`；平行边按 `parallelIndexes` +
   `parallelCurvature` 奇偶交替弯曲；高亮边的生产/消费标签锚在
   `midpointOfQuadratic` 闭式中点。
+- **v0.16 声明式冲突卡**：`conflicts`（当前仍成立）与 `unresolved`（上次隔离后治不了）
+  **分区展示**，每条带 `kind / message / source{file,line} / declaration`；
+  合并两者会让「有冲突」与「试过但治不了」无法区分，所以是两个字段、两个区。
+- **v0.16 可空视图**：`PanelSnapshotView` 对宿主会发 `null`/省略的字段做类型层放宽，
+  渲染层显示「不可判定 / 只读视图」而不是崩溃；契约门 `panel-snapshot-nullability`。
+- **v0.16 图谱交互拆分**：交互意图（`graph-interaction.ts`）、布局（`graph-layout.ts`）、
+  调色（`graph-palette.ts`）各自成模块；悬停 / 拖拽 / 键盘 / 图例 / fit 视图各有纯函数测试。
 
 ## 4. 能力清单（对 Agent 的承诺）
 
-能力图见 `src/host/capability/capability-specs.ts`；对外暴露：
-`recency-guard.panel` / `recency-guard.graph` / `recency-guard.reset` /
-`recency-guard.isolation` / `recency_guard`（工具，承载 status/recover/archive 等）。
-清单是投影：注册处为真相，契约测试双向比对（漏登/虚登都会响亮失败）。
+能力图见 `src/host/capability/capability-specs.ts`（22 条能力，12 条对外暴露）；
+完整清单、生产/消费方向与双向比对口径见 [capabilities.md](./capabilities.md)。
+
+对外暴露名共四组：
+
+- **工具**：`recency_guard`（1 个注册名，8 个 action）；
+- **读路由**：`recency-guard.panel` / `recency-guard.graph` / `recency-guard.isolation` /
+  `recency-guard.lifecycle` / `recency-guard.archives`；
+- **写路由**：`recency-guard.reset` / `recency-guard.reenable` /
+  `recency-guard.restore` / `recency-guard.recover`；
+- **面板席位**：`main`（keyed）+ `sidebar.panellist`（list），id 同为 `recency-guard`
+  （客户端注册，不在宿主名称空间里）。
+
+清单是投影：注册处为真相，契约测试双向比对（漏登 / 虚登都会响亮失败）。
 
 ## 5. 安装与配置
 
@@ -349,7 +490,7 @@ npx @deepseek-ai/dsh@<ver> plugin --profile <profile> add file:/绝对路径/dsh
 |---|---|---|
 | `enabled` | true | false 时只记录不关闭 |
 | `includeExperimental` | true | experimental 命名是否算嫌疑 |
-| `maxAutoDisable` | 2 | 单次恢复最多关闭数 |
+| `maxAutoDisable` | 2 | 单次恢复最多停用数；**整组上限**（依赖联动可能一次关一组，整组放不进则不动） |
 | `autoRestore` | true | 稳定后自动恢复非嫌疑 |
 | `confirmRounds` | 2 | **v0.9**：多嫌疑行动阈值（唯一嫌疑不受限） |
 | `versionedBackups` | true | **v0.8**：带版本的时间线备份开关 |

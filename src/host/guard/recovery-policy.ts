@@ -133,6 +133,30 @@ export function abnormalExitDecision(
 /** 恢复决策的阶段。 */
 export type DecisionPhase = 'prepared' | 'quarantined' | 'reconciled'
 
+/**
+ * 声明式冲突证据（T14-03）—— 第三类确定性证据。
+ *
+ * ## 为什么它不需要等 confirmRounds
+ *
+ * v0.9 的分级里「确定性证据」只有一条：**唯一嫌疑**。新增的这条来自插件
+ * 自己的声明（`dshCompat.conflicts` / `requires` / `dsh`），是作者写下的
+ * 硬事实，可由 `source`（文件 + 行号）逐字复核 —— 它不依赖「最近更新过」
+ * 这种相关性，因此不该被概率计数拖住。
+ *
+ * ## 为什么 target 与 finding 分开传
+ *
+ * `findings` 是**为什么**（上屏给人看），`targets` 是**关谁**（决策输入）。
+ * 两者由 `quarantine-plan.ts` 从同一份 finding 算出，但分开传递能让
+ * 「受保护插件导致治不了」这一类情形表达清楚：finding 在，targets 为空
+ * ⇒ 本轮不行动，残余进 `unresolved`。
+ */
+export interface DeterministicEvidence {
+  /** 命中的 error 级 finding（人读原因，写进决策快照与 status）。 */
+  findings: ReadonlyArray<{ kind: string; message: string; plugins: readonly string[] }>
+  /** 应隔离的插件（已排除受保护者）。空数组 ⇒ 本选项不改变判定。 */
+  targets: readonly string[]
+}
+
 /** 置信分级判定结果。 */
 export interface ConfidenceVerdict {
   /** 本轮是否允许动手（false = 只记录不关闭）。 */
@@ -205,12 +229,34 @@ export function assessConfidence(
     hardEscalateAfter?: number
     hazardDirection?: HazardLike
     falsePositiveStats?: FalsePositiveStats
+    /**
+     * 声明式冲突证据（T14-03，可选）。
+     *
+     * **不传 / `targets` 为空 ⇒ 与 v0.15 行为逐位一致**（硬要求：
+     * 老 profile 没有任何声明时，判定结果不许变化 —— 回归锁见
+     * `tests/unit/deterministic-evidence.test.ts`）。
+     */
+    deterministicEvidence?: DeterministicEvidence
   } = {},
 ): ConfidenceVerdict {
   const confirmRounds = Math.max(1, options.confirmRounds ?? 2)
   const names = currentSuspects.map((s) => s.bundle)
   if (names.length === 0) {
     return { act: false, evidence: 'probabilistic', rounds: 0, required: confirmRounds, label: '没有嫌疑插件，无需恢复' }
+  }
+  // 声明式冲突：命中即确定性证据，第 1 轮就行动（理由见 DeterministicEvidence 头注）。
+  // 顺序放在「唯一嫌疑」之前：多嫌疑下这条也必须立刻生效，否则崩溃循环
+  // 会为了等 confirmRounds 白白重演。而 targets 为空时完全跳过 ⇒ 旧行为不变。
+  const declaredEvidence = options.deterministicEvidence
+  if (declaredEvidence !== undefined && declaredEvidence.targets.length > 0) {
+    const kinds = [...new Set(declaredEvidence.findings.map((f) => f.kind))].join('/') || '声明式冲突'
+    return {
+      act: true,
+      evidence: 'deterministic',
+      rounds: 1,
+      required: 1,
+      label: `${kinds} 命中 ${declaredEvidence.targets.join('、')}：确定性证据（声明可复核），第 1 轮即行动`,
+    }
   }
   if (names.length === 1) {
     return {

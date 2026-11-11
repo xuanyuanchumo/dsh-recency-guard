@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "cycle": "cycle-13",
+  "cycle": "cycle-14",
   "metric": "E4.1 有意义杀灭率",
   "note": "每条都已证等价（reason）+ 有断言钉住等价所依赖的事实（proof）。缺任一字段的条目会被 scripts/mutation.mjs 拒绝登记。未登记 ≠ 已确认测试缺口：存疑条目一律留在分母。",
   "entries": [
@@ -13,26 +13,6 @@
       "mutated": "i <= crashTimes",
       "reason": "多出的一轮取 i === crashTimes.length：crashTimes[i] 为 undefined，被 ?? 0 兜底成 0，于是 gap = 0 − 最后一个时刻 = 负值；紧接着的 gap > 0 守卫把它过滤，gaps 数组与后续全部断言不变。",
       "proof": "tests/unit/observability-math.test.ts:倒序时间戳 ⇒ 诚实不可判定（负间隔全过滤）—— 该断言钉住「负间隔会被 gap > 0 过滤」这个等价性的承重事实。"
-    },
-    {
-      "file": "src/host/observe/observability.ts",
-      "line": 120,
-      "mutator": "comparison",
-      "label": "比较方向 < → <=（sampleSize <= 1）",
-      "original": "sampleSize < 1",
-      "mutated": "sampleSize <= 1",
-      "reason": "唯一分歧点是 n === 1。变异版本命中守卫直接 return 1；原版本落到底部公式 max(1, min(4, round(log10(1) + 0.5))) = max(1, round(0.5)) = 1。两条路径同为 1，且 n < 1 与 n > 1 的行为完全相同。",
-      "proof": "tests/unit/observability-math.test.ts:位数夹在 [1,4]（displayDigits(0) === 1 钉住守卫分支返回 1）与 3 个样本只配 1 位有效数字（displayDigits(3) === 1 钉住下限夹到 1）。"
-    },
-    {
-      "file": "src/host/data/store.ts",
-      "line": 231,
-      "mutator": "comparison",
-      "label": "比较方向 <= → <（pid < 0）",
-      "original": "pid <= 0",
-      "mutated": "pid < 0",
-      "reason": "唯一分歧点是 pid === 0。变异版本不再把 0 判成 incomplete，但随后 !incomplete && processAlive(0) 中 processAlive(0) 为 false，因此同样不进 report.kept，继续走到 rmSync + report.removed。与「incomplete ⇒ 不探活 ⇒ 直接删」的分支终点相同（删掉该锁文件）。",
-      "proof": "tests/unit/core.test.ts:pidAlive(0) === false（非法 pid 不是进程）—— 该断言钉住 processAlive(0) 为 false，即两条路径都不保留 pid=0 的锁。"
     },
     {
       "file": "src/host/risk/risk-bayes.ts",
@@ -53,6 +33,76 @@
       "mutated": "zeros >= 0",
       "reason": "进入该分支的必要条件是 gaps 含非有限值或 ≤ 0 的间隔。crashSeries 先 filter(Number.isFinite) 再 sort，因此 gaps 恒 ≥ 0 ⇒ 只有「零间隔」能触发该分支 ⇒ zeros > 0 在分支内恒真。改成 >= 0 只替换了不可达分支（非有限/负间隔）的文案，返回的 Metric 与原因不变。",
       "proof": "tests/unit/observability-math.test.ts:乱序时间戳会被排序 ⇒ 不产生负间隔（故负间隔分支不可达）—— 这条断言就是为钉住该不可达性而加的（见 mutation-attribution.md §3.4）。"
+    },
+    {
+      "file": "src/host/guard/decision.ts",
+      "line": 126,
+      "mutator": "try-catch",
+      "label": "删除 try/catch 兜底（保留 try 体）",
+      "original": "try {\n    writeSafe(decisionPath(partitionDir), JSON.stringify(decision, null, 2))\n  } catch {\n    /* best effort */\n  }",
+      "mutated": "{\n\n    writeSafe(decisionPath(partitionDir), JSON.stringify(decision, null, 2))\n  \n}",
+      "reason": "唯一调用 writeSafe 自带同粒度 try/catch（decision.ts:189），writeFileAtomicSync 的异常在那里已被吞掉；JSON.stringify 的输入是纯数据对象（无环），不会抛。因此删除外层 try 后没有任何异常能到达它 —— 两层防御删掉一层，可观测行为不变。",
+      "proof": "tests/unit/core.test.ts:决策写失败不冒泡（内层 writeSafe 已兜底）—— 把分区路径占成文件后调用 writeDecision，断言不抛出，钉住内层兜底存在。"
+    },
+    {
+      "file": "src/host/guard/guarded-rows.ts",
+      "line": 105,
+      "mutator": "try-catch",
+      "label": "删除 try/catch 兜底（保留 try 体）",
+      "original": "try {\n    const existing = new Set(readPatchRows(patchPath).map((r) => r.id))\n    const chunks: string[] = []\n    for (const row of findGuardableRows(profileDir)) {\n      if (existing.has(row.rowId)) {\n        skipped.push(row)\n        continue\n      }\n      chunks.push(guardedRowText(row.rowId, row.bundleName, guardExpression(row.bundleName)))\n      existing.add(row.rowId)\n      added.push(row)\n    }\n    if (chunks.length > 0) {\n      const result = appendPatchText(patchPath, chunks.join('\\n'))\n      if (!result.ok) {\n        // 写入被拦下：patch 保持原样，profile 仍可启动。守护行缺失是可接受的退化，\n        // 「把 profile 写崩」不是。added 必须回退，否则调用方会记录假的成功。\n        return { added: [], skipped, blocked: result.reason, warnings: result.warnings }\n      }\n      return { added, skipped, warnings: result.warnings }\n    }\n    return { added, skipped }\n  } catch {\n    /* 守护行安装失败不该拖垮宿主启动 */\n  }",
+      "mutated": "{\n\n    const existing = new Set(readPatchRows(patchPath).map((r) => r.id))\n    const chunks: string[] = []\n    for (const row of findGuardableRows(profileDir)) {\n      if (existing.has(row.rowId)) {\n        skipped.push(row)\n        continue\n      }\n      chunks.push(guardedRowText(row.rowId, row.bundleName, guardExpression(row.bundleName)))\n      existing.add(row.rowId)\n      added.push(row)\n    }\n    if (chunks.length > 0) {\n      const result = appendPatchText(patchPath, chunks.join('\\n'))\n      if (!result.ok) {\n        // 写入被拦下：patch 保持原样，profile 仍可启动。守护行缺失是可接受的退化，\n        // 「把 profile 写崩」不是。added 必须回退，否则调用方会记录假的成功。\n        return { added: [], skipped, blocked: result.reason, warnings: result.warnings }\n      }\n      return { added, skipped, warnings: result.warnings }\n    }\n    return { added, skipped }\n  \n}",
+      "reason": "try 体只调用四个自带兜底的函数：readPatchRows（patch.ts:63 catch 返回 []）、readDeclaredDependencies（store.ts:766 catch 返回 []）、resolveBundlePatch（本文件:74 catch 返回 undefined）、appendPatchText（本文件:158/208/223 catch，失败返回 {ok:false}）。正常与损坏输入下 try 体都无可抛异常 ⇒ 删除外层 try 不改变返回值。",
+      "proof": "tests/unit/core.test.ts:损坏的包清单被跳过（钉住 resolveBundlePatch 的兜底）＋ 备份写失败不冒泡（钉住 appendPatchText/ensurePatchBackup 的兜底）；tests/unit/resilience-fallback.test.ts 另有「写入被校验拦下时返回 blocked」与「不可写 patch 返回 ok:false」。"
+    },
+    {
+      "file": "src/host/risk/risk-calibration.ts",
+      "line": 315,
+      "mutator": "comparison",
+      "label": "比较方向 < → <=（i <= events）",
+      "original": "i < events",
+      "mutated": "i <= events",
+      "reason": "唯一分歧点是 i === events.length：events[i] 为 undefined，紧接着的 `if (!event) continue` 直接跳过，marks/byBundle/run/stats 全部不变。删除该守卫才会改变行为，而本次变异没有动守卫。",
+      "proof": "tests/unit/core.test.ts:journal 尾部的 undefined 洞被跳过（统计与没有它逐字段一致）—— 用一个显式 undefined 事件钉住 `if (!event) continue` 的跳过语义，不可达的越界项走同一条守卫。"
+    },
+    {
+      "file": "src/host/risk/risk-calibration.ts",
+      "line": 350,
+      "mutator": "comparison",
+      "label": "比较方向 < → <=（i <= events）",
+      "original": "i < events",
+      "mutated": "i <= events",
+      "reason": "唯一分歧点是 i === events.length：events[i] 为 undefined，紧接着的 `if (!event) continue` 直接跳过，marks/byBundle/run/stats 全部不变。删除该守卫才会改变行为，而本次变异没有动守卫。",
+      "proof": "tests/unit/core.test.ts:journal 尾部的 undefined 洞被跳过（统计与没有它逐字段一致）—— 用一个显式 undefined 事件钉住 `if (!event) continue` 的跳过语义，不可达的越界项走同一条守卫。"
+    },
+    {
+      "file": "src/host/data/store.ts",
+      "line": 752,
+      "mutator": "comparison",
+      "label": "比较方向 > → >=（limit >= 0）",
+      "original": "limit > 0",
+      "mutated": "limit >= 0",
+      "reason": "唯一分歧点是 limit === 0：原式 Math.min(Math.floor(0), lines.length) = 0；变异式走 `: 0` 分支也得到 take = 0。`lines.slice(lines.length - 0)` 在两种写法下都是 []。limit 为负数/非有限时两侧同样得到 0。",
+      "proof": "tests/unit/core.test.ts:readJournal(0) 读 0 行（钉住 limit===0 的取值是 0 而不是「全部」）＋ readJournal(1) 读 1 行（钉住同一表达式的上界行为）。"
+    },
+    {
+      "file": "src/host/data/store.ts",
+      "line": 245,
+      "mutator": "try-catch",
+      "label": "删除 try/catch 兜底（保留 try 体）",
+      "original": "try {\n      cleanStaleLocks(this.dir)\n    } catch {\n      /* best effort：init 的唯一硬要求是备份目录存在 */\n    }",
+      "mutated": "{\n\n      cleanStaleLocks(this.dir)\n    \n}",
+      "reason": "try 体唯一的调用 cleanStaleLocks 自身是全函数：readdirSync 有 catch（返回空报告）、每个条目的 statSync/readFileSync/rmSync 各有 catch、processAlive 的 process.kill 有 catch。因此正常与残缺输入下 try 体都无可抛异常，删除外层 try 不改变 init 的结果（init 的硬要求只有 mkdir 备份目录）。",
+      "proof": "tests/unit/core.test.ts:目录不存在时返回空报告（不抛）＋ 内容为 \"0\" 的锁必须被清理 ＋ 死进程 pid 的锁必须被清理 —— 三条断言都直接调用 cleanStaleLocks 并断言不抛、且给出确定报告。"
+    },
+    {
+      "file": "src/host/core/metric.ts",
+      "line": 113,
+      "mutator": "comparison",
+      "label": "比较方向 < → <=（sampleSize <= 1）",
+      "original": "sampleSize < 1",
+      "mutated": "sampleSize <= 1",
+      "reason": "唯一分歧点是 sampleSize === 1。原式命中守卫直接 return 1；变异式落到底部公式 Math.max(1, Math.min(4, Math.round(Math.log10(1) + 0.5))) = Math.max(1, Math.round(0.5)) = 1。两条路径同为 1，n<1 与 n>1 的行为完全相同。",
+      "proof": "tests/unit/core.test.ts:displayDigits(1) = 1（n=1 与守卫分支同值）；同类边界由 tests/unit/observability-math.test.ts 的 displayDigits(0)===1 / displayDigits(3)===1 钉住。"
     }
   ]
 }

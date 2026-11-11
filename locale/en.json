@@ -21,7 +21,26 @@
     "pollingOn": "polling every {seconds}s",
     "pollingPaused": "polling paused (the view is frozen at the pause moment)",
     "restore": "Restore non-suspects",
-    "stale": "Data is {minutes} min old (polling paused)"
+    "stale": "Data is {minutes} min old (polling paused)",
+    "degradedGraph": "Graph unavailable: {reason} (not shown ≠ no relationships)",
+    "degradedGraphStale": "Graph temporarily unavailable: {reason} (showing the last successful data)",
+    "degradedArchives": "Archives unavailable: {reason} (not shown ≠ no archives)",
+    "degradedArchivesStale": "Archives temporarily unavailable: {reason} (showing the last successful data)"
+  },
+  "groups": {
+    "overview": "Overview",
+    "decisions": "Decisions",
+    "observation": "Observation",
+    "capabilities": "Capability graph",
+    "diagnostics": "Diagnostics"
+  },
+  "error": {
+    "title": "Panel render failed",
+    "hint": "The rest of the data is still in the guard process; only this block failed to render. Copy the summary below when reporting.",
+    "summary": "Error summary",
+    "retry": "Retry",
+    "copy": "Copy error summary",
+    "copied": "Copied"
   },
   "sections": {
     "backupPolicy": "Backup policy",
@@ -61,6 +80,7 @@
     "fewerTransitions": "Show fewer transitions"
   },
   "metrics": {
+    "title": "Metrics",
     "crashRate": "Crash rate",
     "crashPressure": "Crash pressure (EWMA)",
     "meanRecoveryTime": "Mean recovery time",
@@ -71,7 +91,9 @@
     "intervals": "Crash intervals (median / CV)",
     "changePoint": "CUSUM change point",
     "controlBand": "Control band (Shewhart)",
-    "undefined": "not determinable"
+    "undefined": "not determinable",
+    "valueUndefined": "Metric is marked defined but its value is empty (incomplete shape)",
+    "unavailableReason": "A cross-partition read-only view has no runtime metrics (unavailable ≠ all zero)"
   },
   "markov": {
     "title": "Transition matrix",
@@ -167,7 +189,9 @@
     "sinks": "Consumes only",
     "isolated": "Isolated",
     "edges": "{count} edges",
-    "more": "+{count} more"
+    "more": "+{count} more",
+    "less": "Show less",
+    "nodeTitle": "{label} · in {in} / out {out}"
   },
   "decisionEvidence": {
     "empty": "No suspect list yet (no crash-recovery decision has been made)",
@@ -202,6 +226,7 @@
     "list": "Registered / produces / consumes",
     "none": "The graph has no capability node",
     "graphMissing": "Graph data is not ready: the produce/consume links live in the graph only, and nothing is guessed here",
+    "unavailable": "A cross-partition read-only view has no capability matrix (unavailable ≠ 0 items)",
     "colName": "Capability",
     "colStage": "Stage",
     "colExposed": "Exposed",
@@ -221,12 +246,23 @@
   },
   "graph": {
     "title": "Capability production and consumption",
-    "hint": "ctrl/⌘ + wheel zoom · drag to pan · drag a node to nudge it · click to highlight · double-click to centre · Esc to exit",
+    "hint": "ctrl/⌘ + wheel zoom · drag to pan · drag a node to nudge it · hover for its neighbourhood · click to highlight · double-click to centre · Esc to exit",
     "zoomGroup": "Zoom",
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",
     "fit": "Fit",
-    "reset": "Clear observation",
+    "fitClamped": "Fitted at the readable lower bound ({scale}×)",
+    "fitClampedMax": "Fitted at the readable upper bound ({scale}×)",
+    "fitAllNote": "Fitted the whole graph (dense content, small text — use Expand view)",
+    "fitAllHint": "The first frame keeps every node fully visible; use Expand view or + to read small text.",
+    "fitClampedHint": "Fitting the whole graph would shrink text below readability; pan to reach edge nodes after fitting.",
+    "expandView": "Expand view",
+    "collapseView": "Restore view",
+    "expandHint": "Grow the graph to 70% of the viewport; Esc collapses it first (one layer at a time)",
+    "collapseKeptZoom": "Height restored (zoom kept)",
+    "collapseKeptZoomHint": "Restoring the view does not reset zoom/pan; use Fit to re-fit the whole graph.",
+    "reset": "Reset view",
+    "resetHint": "Back to 100% zoom, centred (also clears observation state and legend filters)",
     "zoomLevel": "zoom",
     "counts": "{nodes} nodes · {edges} edges",
     "selected": "selected",
@@ -234,10 +270,15 @@
     "components": "Components",
     "isolated": "Isolated nodes",
     "legend": "Show or hide by type",
+    "typeLegend": "Node kinds",
+    "edgeLegend": "Edge semantics",
+    "edgeLegendToggle": "Show or hide \"{kind}\" edges",
+    "toneLegend": "Semantic colours",
+    "toneLegendToggle": "Show or hide \"{tone}\" nodes",
     "legendToggle": "Show or hide \"{kind}\"",
     "empty": "The graph is empty",
     "unavailable": "Graph data unavailable (the host returned no graph).",
-    "search": "Search nodes (Enter locates the first)",
+    "search": "Search nodes (↑↓ to step, Enter to locate)",
     "searchResults": "Search results",
     "noResults": "No matching node",
     "details": "Node details",
@@ -262,6 +303,13 @@
       "kind": "Kind",
       "stage": "Stage"
     },
+    "tone": {
+      "neutral": "Neutral",
+      "info": "Info",
+      "success": "Success",
+      "warn": "Warn",
+      "error": "Error"
+    },
     "onlyConnected": "Connected only",
     "onlyConnectedHint": "Keep only the subgraph reachable from the selected node (select a node first)",
     "kind": {
@@ -272,6 +320,7 @@
       "gap": "Gap"
     },
     "matchIndex": "Match {index}/{total}",
+    "omittedChars": "{count} characters omitted",
     "edgeDetails": "Edge details",
     "edgeFrom": "Produces (from)",
     "edgeTo": "Consumes (to)",
@@ -285,8 +334,11 @@
       "label": "Link range",
       "hops1": "direct",
       "hops2": "2 hops",
+      "hops3": "3 hops",
       "closure": "all linked"
     },
+    "hopDepth": "within {depth} hop(s)",
+    "hopDepthAll": "all linked (no hop limit)",
     "filteredEmpty": "The current filters hid every node.",
     "filteredEmptyReset": "Show everything",
     "searchMore": "{count} more matches"
@@ -340,6 +392,7 @@
     "delta": "Delta",
     "points": "pp",
     "undefined": "undetermined",
+    "unavailable": "This view has no co-occurrence check (unavailable ≠ hit rate 0%)",
     "mayWeightYes": "Weighting is supported",
     "mayWeightNo": "Weighting is not supported"
   },
@@ -347,6 +400,7 @@
     "threshold": "Confirm rounds",
     "rate": "False-positive rate",
     "insufficient": "Insufficient samples - undefined (not 0%)",
+    "unavailable": "This view has no calibration section (unavailable ≠ threshold 0)",
     "unattributedRestores": "Evidence gaps",
     "evidenceGap": "Evidence gaps",
     "evidenceGapHint": "(records may be damaged; rate understated)"
@@ -356,6 +410,7 @@
     "hint": "A second reading alongside \"Suspect ranking\" (research doc 07 2.3: parallel reading, never replaces the default)",
     "posterior": "Posterior mean",
     "score": "Bayes score",
-    "insufficient": "Sparse samples - undefined"
+    "insufficient": "Sparse samples - undefined",
+    "unavailable": "This view has no Bayesian reading (unavailable ≠ no suspect)"
   }
 }

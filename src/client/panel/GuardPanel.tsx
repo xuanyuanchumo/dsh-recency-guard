@@ -22,9 +22,10 @@ import {
   type ArchiveEntry,
 } from './PanelCards.tsx'
 import { DataFlowBody, DiagnosticsBody, GraphStructureBar, MarkovBody } from './InsightCards.tsx'
-import { panelForm, partitionView, shortenPath, type PanelForm } from './panel-model.ts'
+import { PanelErrorBoundary } from './PanelErrorBoundary.tsx'
+import { degradedRoutes, panelForm, partitionView, shortenPath, type DegradedRoute, type PanelForm } from './panel-model.ts'
 import { VIEWPORT_HEIGHT_NARROW, VIEWPORT_HEIGHT_WIDE } from '../graph/graph-model.ts'
-import type { PanelSnapshot } from '../../host/surface/snapshot.ts'
+import type { PanelSnapshotView } from './snapshot-view.ts'
 import type { GraphData } from '../../shared/graph-contract.ts'
 
 /**
@@ -52,7 +53,7 @@ import type { GraphData } from '../../shared/graph-contract.ts'
  */
 export interface GuardPanelProps {
   /** 拉取快照；传入分区键时请求该分区（宿主不支持时如实降级，见下方 notice）。 */
-  fetchSnapshot: (partition?: string) => Promise<FetchResult<PanelSnapshot>>
+  fetchSnapshot: (partition?: string) => Promise<FetchResult<PanelSnapshotView>>
   fetchGraph: (partition?: string) => Promise<FetchResult<GraphData>>
   /** 拉取历史归档（缺席即不显示归档卡片 —— 组件保持独立可用）。 */
   fetchArchives?: (partition?: string) => Promise<FetchResult<unknown>>
@@ -85,7 +86,7 @@ function saveCollapsed(cards: ReadonlySet<string>): void {
 }
 
 export function GuardPanel(props: GuardPanelProps): ReactElement {
-  const [snapshot, setSnapshot] = useState<PanelSnapshot | null>(null)
+  const [snapshot, setSnapshot] = useState<PanelSnapshotView | null>(null)
   const [graph, setGraph] = useState<GraphData | null>(null)
   const [archives, setArchives] = useState<ArchiveEntry[] | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
@@ -101,6 +102,14 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
   const [requestedKey, setRequestedKey] = useState<string | null>(null)
   /** 数据面实际返回的分区与请求不一致时的诚实提示。 */
   const [partitionMismatch, setPartitionMismatch] = useState<{ requested: string; actual: string } | null>(null)
+  /**
+   * 可选项数据面当前**不可得**的清单（图谱/归档）。
+   *
+   * 与 `failure` 分开：快照失败 = 面板整体不可用；图谱/归档失败 =
+   * 其余事实仍然可读。混成一个状态会让「图谱没读到」被渲染成
+   * 「什么都没读到」，也会把可用的事实一起藏掉。
+   */
+  const [degraded, setDegraded] = useState<DegradedRoute[]>([])
   /**
    * 上一次动作因状态已变（409）被拦下。
    *
@@ -140,6 +149,14 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
       }
       if (graphResult.ok) setGraph(graphResult.data)
       if (archivesResult.ok) setArchives(archiveEntriesOf(archivesResult.data))
+      // 降级清单在每次加载后重算：路由恢复时提示必须自动消失（不能只增不减）。
+      setDegraded(
+        degradedRoutes({
+          graph: graphResult,
+          archives: archivesResult,
+          archivesInjected: props.fetchArchives !== undefined,
+        }),
+      )
     },
     [props.fetchSnapshot, props.fetchGraph, props.fetchArchives],
   )
@@ -363,10 +380,28 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
           <p className="rg-empty">{t('panel.loading')}</p>
         </div>
       ) : (
+        <PanelErrorBoundary onRetry={() => void load(requestedKey)}>
         <>
           <KpiStrip snapshot={snapshot} />
 
+          {/* 降级如实说明：路由不可得 ≠ 读数为零。放在 KPI 之后、卡片之前，
+              因为它解释的是「下面哪些块不完整」。 */}
+          {degraded.length > 0 && (
+            <p className="rg-notice rg-notice-degraded" role="status">
+              {degraded
+                .map((route) =>
+                  route.key === 'graph'
+                    ? t(graph === null ? 'panel.degradedGraph' : 'panel.degradedGraphStale', { reason: route.reason })
+                    : t(archives === null ? 'panel.degradedArchives' : 'panel.degradedArchivesStale', {
+                        reason: route.reason,
+                      }),
+                )
+                .join(' · ')}
+            </p>
+          )}
+
           <div className="rg-grid">
+            <h2 className="rg-group-title">{t('groups.overview')}</h2>
             <Card
               id="lifecycle"
               title={t('sections.state')}
@@ -393,6 +428,7 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
             >
               <BackupPolicyBody snapshot={snapshot} />
             </Card>
+            <h2 className="rg-group-title">{t('groups.decisions')}</h2>
             <Card
               id="decisions"
               title={t('sections.decisions')}
@@ -405,7 +441,11 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
             <Card
               id="decision-evidence"
               title={t('sections.decisionEvidence')}
-              hint={t('decisionEvidence.count', { count: snapshot.decisionSuspects.length })}
+              hint={
+                snapshot.decisionSuspects == null
+                  ? t('metrics.undefined')
+                  : t('decisionEvidence.count', { count: snapshot.decisionSuspects.length })
+              }
               collapsed={collapsed.has('decision-evidence')}
               onToggle={() => toggleCollapse('decision-evidence')}
             >
@@ -415,7 +455,11 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
             <Card
               id="calibration"
               title={t('sections.calibration')}
-              hint={t('calibration.threshold') + ` ${snapshot.calibration.decision.required}`}
+              hint={
+                snapshot.calibration == null
+                  ? t('metrics.undefined')
+                  : t('calibration.threshold') + ` ${snapshot.calibration.decision.required}`
+              }
               collapsed={collapsed.has('calibration')}
               onToggle={() => toggleCollapse('calibration')}
             >
@@ -425,7 +469,7 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
             <Card
               id="bayes"
               title={t('sections.bayes')}
-              hint={t('bayes.score') + ` ${snapshot.bayes.length}`}
+              hint={snapshot.bayes == null ? t('metrics.undefined') : t('bayes.score') + ` ${snapshot.bayes.length}`}
               collapsed={collapsed.has('bayes')}
               onToggle={() => toggleCollapse('bayes')}
             >
@@ -434,16 +478,25 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
             <Card
               id="cooccurrence"
               title={t('sections.cooccurrence')}
-              hint={t('cooccurrence.count', { count: snapshot.cooccurrence.samples })}
+              hint={
+                snapshot.cooccurrence == null
+                  ? t('metrics.undefined')
+                  : t('cooccurrence.count', { count: snapshot.cooccurrence.samples })
+              }
               collapsed={collapsed.has('cooccurrence')}
               onToggle={() => toggleCollapse('cooccurrence')}
             >
               <CooccurrenceBody snapshot={snapshot} />
             </Card>
+            <h2 className="rg-group-title">{t('groups.capabilities')}</h2>
             <Card
               id="capabilities"
               title={t('sections.capabilities')}
-              hint={t('capabilities.hintCount', { count: snapshot.capability.total })}
+              hint={
+                snapshot.capability == null
+                  ? t('metrics.undefined')
+                  : t('capabilities.hintCount', { count: snapshot.capability.total })
+              }
               collapsed={collapsed.has('capabilities')}
               onToggle={() => toggleCollapse('capabilities')}
             >
@@ -454,6 +507,7 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
                 onSelect={locateInGraph}
               />
             </Card>
+            <h2 className="rg-group-title">{t('groups.observation')}</h2>
             <Card
               id="risks"
               title={t('sections.risks')}
@@ -503,6 +557,7 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
             >
               <DataFlowBody snapshot={snapshot} />
             </Card>
+            <h2 className="rg-group-title">{t('groups.diagnostics')}</h2>
             <Card
               id="diagnostics"
               title={t('sections.diagnostics')}
@@ -564,6 +619,7 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
             <span>{polling ? t('panel.pollingOn', { seconds: POLL_INTERVAL / 1000 }) : t('panel.stale', { minutes: staleMinutes })}</span>
           </footer>
         </>
+        </PanelErrorBoundary>
       )}
     </section>
   )

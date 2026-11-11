@@ -101,3 +101,35 @@ v0.1 的验证结论（沙箱 profile `sb-rg`，两个会抛未捕获异常的�
 - 评审：`.cycles/REVIEW.md`
 - 评估报告：`.cycles/cycles/cycle-5/项目评估报告.md`
 - README：`README.md`（用户视角的操作说明）
+
+## 8. v0.16.0 增量需求（cycle-14 · 2026-11-11，本轮意图基线追加）
+
+> 起点事实（实测，不假设）：`npm test` 47/47 全绿、`tsc` 0、`build` 0；但
+> **版本四个锚点全部不一致**（`package.json` 0.14.0 / git 提交信息声称 v0.15.0 /
+> 最新 tag 只到 v0.11.4 / npm latest 0.12.1），说明「发布链」从未随版本推进；
+> 上一循环 G2 的 **E4.1 变异杀灭率 53.8% < 80% 判 FAIL** 未收口；
+> 研究文档 10 的 P1/P2 借鉴项（确定性冲突证据、贪心最小隔离集、依赖联动停用、
+> 可写 rescue、常态路径锁）**全部未落地**。
+
+| # | 增量需求 | 验收标准（可观察） |
+|---|---|---|
+| R19 | **版本四锚点同步** | `package.json` / `README.md` 顶部 / `docs/agents/*.md` / `dsh-plugin.json` 四处同为 `0.16.0`；`quick-validate` 的版本守卫通过；git tag 与 npm latest 一致 |
+| R20 | **市场收录面** | 新增 `dsh-plugin.json`（facets/requires/contributes/permissions，形态对齐 dsh-ops）；`docs/market-submission.md` 更新到 v0.16.0 且 YAML 通过 YAML 解析；README 徽章/安装/能力表与代码逐条可核对 |
+| R21 | **确定性冲突证据（借鉴 compat-guardian）** | 读第三方插件声明的 `dshCompat`/manifest，产出 `declared-conflict`/`duplicate-service`/`dsh-version` 三类 finding；命中时进决策的 `deterministic` 分支，**不等 `confirmRounds`**；未命中不改变既有行为（回归锁） |
+| R22 | **贪心最小隔离集 + 依赖联动** | 隔离循环「取候选 → 标记 → 重算 error」，返回 `unresolved`；被停用 bundle 的**依赖者**一并进停用计划；候选排序 = 已禁用优先 → priority 升序 → 列表靠后（不是纯 recency） |
+| R23 | **图谱可交互化与信息密度** | 节点可拖拽（布局记忆）、悬停邻域高亮、边类型/节点色调图例可开关、搜索定位、fit/reset、k 跳深度可调、键盘可达；新增交互全部有纯函数单测；窄屏单列不重叠 |
+| R24 | **面板现代化与完整性** | 卡片分组、诚实空态/降级态、错误边界、诊断卡（插件/宿主版本、分区键、仓库与反馈入口）、刷新/暂停轮询、归档确认；只用 `--dsw-alias-*` 主题变量；中文文案与 en 对等 |
+| R25 | **E4.1 有意义杀灭率 ≥ 80%** | `node scripts/mutation.mjs --min-kill-rate 0.8` exit 0；每个存活体有归因（补测试杀死 / 逐条证等价 / 工具边界），**原始口径同时打印** |
+| R26 | **自举闭环与举他** | 归档 cycle 产物后按**最新事实**重跑评估（不继承旧结论）；`anic_bootstrap_other` 在独立目标项目上验证；沙箱 `sb-rg-c14` 安装 + 用户旅程通过后才更新桌面端；热重载不丢状态 |
+
+工程约束（延续）：不使用重量级可视化库（纯 SVG + 自研布局）；崩溃路径同步 IO；
+`Metric` 不可判定为 null；client 不得 import host/node:*；所有新代码带中文注释说明「为什么」；
+时间一律北京时间；写测试报告到 `.cycles/cycles/cycle-14/test-reports/`。
+
+## 9. 验收基线（v0.16.0 判据）
+
+1. R1-R18 既有验收全部回归通过；
+2. R19-R26 逐条按上表核验，且 E4.1 门禁从 FAIL 转 PASS；
+3. `dsh-dev-sandbox` 沙箱安装 + 用户旅程 100% 通过后才允许更新桌面端；
+4. npm publish 0.16.0 + GitHub tag/release v0.16.0 成功，且与 `package.json` 一致；
+5. 归档后重跑（最新事实）通过，避免旧产物污染判断。

@@ -16,7 +16,7 @@
 
 import type { GuardStage, StageTransition } from '../../host/core/lifecycle.ts'
 import type { GraphData } from '../../shared/graph-contract.ts'
-import type { PanelSnapshot } from '../../host/surface/snapshot.ts'
+import type { PanelSnapshotView } from './snapshot-view.ts'
 import { t } from '../i18n/i18n.ts'
 
 /**
@@ -139,7 +139,7 @@ export interface DecisionEntry {
  *
  * 时间缺失的条目**不伪造时间**：排在末尾并留空时刻（诚实优先于整齐）。
  */
-export function decisionHistory(snapshot: PanelSnapshot, limit = 12): DecisionEntry[] {
+export function decisionHistory(snapshot: PanelSnapshotView, limit = 12): DecisionEntry[] {
   const entries: DecisionEntry[] = []
   for (const event of snapshot.recentEvents) {
     if (event.kind === 'crash-detected') {
@@ -202,7 +202,7 @@ export interface DecisionEvidenceRow {
  * 该行 `risk`/`factors` 保持 0 并由 `hasEvidence` 标记，面板显示
  * 「该决策未记录因子（旧版本）」而不是把 0 当成「零风险」。
  */
-export function decisionEvidenceRows(snapshot: PanelSnapshot): { rows: DecisionEvidenceRow[]; hasEvidence: boolean } {
+export function decisionEvidenceRows(snapshot: PanelSnapshotView): { rows: DecisionEvidenceRow[]; hasEvidence: boolean } {
   const list = snapshot.decisionSuspects ?? []
   let hasEvidence = false
   const rows = list.map((suspect, index) => {
@@ -240,80 +240,156 @@ function pctOf(value: number): string {
   return `${(value * 100).toFixed(1)}%`
 }
 
+/** 有限数字判定：把「null / undefined / NaN / Infinity」统一成不可判定。 */
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function pctText(value: unknown): string {
+  return isFiniteNumber(value) ? pctOf(value) : t('metrics.undefined')
+}
+
+function secondsText(value: unknown, digits = 1): string {
+  return isFiniteNumber(value) ? `${(value / 1000).toFixed(digits)} s` : t('metrics.undefined')
+}
+
+/**
+ * 稳定性评分视图 —— null（无样本 / 跨分区只读视图）是**不可判定**，不是 0 分。
+ *
+ * 为什么几何也在这里算：圆环的弧长直接由评分推出；若组件里写
+ * `Math.min(1, Math.max(0, score))`，null 会被 Math 隐式转成 0 —— 一个
+ * 完整的空圆环读起来就是「稳定性 0%」，正是本仓库最忌讳的假绿。
+ * 把「不可判定」编码进返回对象，组件就没有机会把 null 当 0 画。
+ */
+export interface StabilityView {
+  defined: boolean
+  /** 圆环/进度条比例 ∈ [0,100]；defined=false 时为 0（渲染层不得据此显示 0 分）。 */
+  percent: number
+  /** 可读读数；不可判定时为字典里的「不可判定」。 */
+  text: string
+}
+
+export function stabilityView(score: number | null | undefined): StabilityView {
+  if (!isFiniteNumber(score)) return { defined: false, percent: 0, text: t('metrics.undefined') }
+  const clamped = Math.min(1, Math.max(0, score))
+  return { defined: true, percent: clamped * 100, text: score.toFixed(2) }
+}
+
 /**
  * 指标行 —— 快照里的每个 Metric<T> 都转成「一定有东西可读」的一行。
  *
  * 关键不变式：`defined === false` 时读数是「不可判定」而**绝不是 0**
  * （把无数据当零，界面会显示一切正常）。
+ *
+ * v0.16 契约修复：`defined === true` **不等于子字段非空** ——
+ * `intervals.value.cv` 在间隔样本 < 2 时就是 null（宿主类型已声明可空）。
+ * 此前 formatter 被 `as never` 逃过类型检查，真机上 `cv.toFixed` 直接把
+ * 面板打进错误边界。现在 push 是泛型的、**不做任何 as 断言**：
+ * formatter 的参数类型必须真的容纳宿主声明的可空子字段，否则 tsc 报错。
  */
-export function metricRows(snapshot: PanelSnapshot): MetricRow[] {
+export function metricRows(snapshot: PanelSnapshotView): MetricRow[] {
   const metrics = snapshot.metrics
+  // 跨分区只读视图不提供运行时指标（宿主显式发 null）：如实说不可判定，
+  // 不构造 8 行假 0 —— 「读不到」与「一切为零」是两件事。
+  if (metrics === null) {
+    return [
+      {
+        key: 'unavailable',
+        label: t('metrics.title'),
+        value: t('metrics.undefined'),
+        defined: false,
+        reason: t('metrics.unavailableReason'),
+        bar: null,
+      },
+    ]
+  }
   const rows: MetricRow[] = []
-  const push = (
+  /**
+   * 泛型 push —— **不做 `as never`**。
+   *
+   * 宿主 `Metric<T>.value` 的类型是 `T | null`；`defined=true` 只表示
+   * 「该指标有定义」，不保证 value 非空（运行时还可能出现 defined=true
+   * + value=null 的旧记录）。所以：
+   * 1. 顶层 value 为 null ⇒ 整行不可判定并说明原因；
+   * 2. formatter 的参数类型是 T 本身 —— 若 T 含可空子字段（如
+   *    `IntervalStats.cv`），写窄了 tsc 会直接报错，不再能靠断言逃过。
+   */
+  const push = <T,>(
     key: string,
     label: string,
-    metric: { value: unknown; defined: boolean; reason?: string },
-    format: (value: never) => string,
+    metric: { value: T | null; defined: boolean; reason?: string },
+    format: (value: T) => string,
     bar: number | null,
   ): void => {
+    const raw = metric.value
+    const usable = metric.defined && raw !== null
     rows.push({
       key,
       label,
-      value: metric.defined ? format(metric.value as never) : t('metrics.undefined'),
-      defined: metric.defined,
-      reason: metric.defined ? null : (metric.reason ?? null),
-      bar: metric.defined ? bar : null,
+      value: usable ? format(raw) : t('metrics.undefined'),
+      defined: usable,
+      reason: usable ? null : (metric.reason ?? (metric.defined ? t('metrics.valueUndefined') : null)),
+      bar: usable ? bar : null,
     })
   }
 
-  push('crashRate', t('metrics.crashRate'), metrics.crashRate, (value: number) => pctOf(value), metrics.crashRate.value ?? null)
+  push('crashRate', t('metrics.crashRate'), metrics.crashRate, (value: number) => pctText(value), metrics.crashRate.value ?? null)
   push(
     'crashPressure',
     t('metrics.crashPressure'),
     metrics.crashPressure,
-    (value: number) => value.toFixed(2),
+    (value: number) => (isFiniteNumber(value) ? value.toFixed(2) : t('metrics.undefined')),
     metrics.crashPressure.value ?? null,
   )
   push(
     'detectionRate',
     t('metrics.detectionRate'),
     metrics.detectionRate,
-    (value: number) => pctOf(value),
+    (value: number) => pctText(value),
     metrics.detectionRate.value ?? null,
   )
   push(
     'isolationPurity',
     t('metrics.isolationPurity'),
     metrics.isolationPurity,
-    (value: number) => pctOf(value),
+    (value: number) => pctText(value),
     metrics.isolationPurity.value ?? null,
   )
   push(
     'meanRecoveryTime',
     t('metrics.meanRecoveryTime'),
     metrics.meanRecoveryTime,
-    (value: number) => `${(value / 1000).toFixed(2)} s`,
+    (value: number) => secondsText(value, 2),
     null,
   )
   push(
     'intervals',
     t('metrics.intervals'),
     metrics.intervals,
-    (value: { medianMs: number; cv: number }) => `${(value.medianMs / 1000).toFixed(1)} s · CV ${value.cv.toFixed(2)}`,
+    (value: { medianMs: number; cv: number | null; cvReason?: string }) => {
+      // cv 可空（宿主类型如此）：null 时把**宿主给的原因**一起显示，
+      // 而不是静默留白 —— 用户需要知道「为什么这条读不出来」。
+      const cv = isFiniteNumber(value.cv)
+        ? `CV ${value.cv.toFixed(2)}`
+        : `CV ${t('metrics.undefined')}${value.cvReason ? `（${value.cvReason}）` : ''}`
+      return `${secondsText(value.medianMs, 1)} · ${cv}`
+    },
     null,
   )
   push(
     'changePoint',
     t('metrics.changePoint'),
     metrics.changePoint,
-    (value: { index: number; at: string | null }) => `${t('kpi.changePointYes')} · #${value.index}`,
+    (value: { index: number }) =>
+      isFiniteNumber(value.index) ? `${t('kpi.changePointYes')} · #${value.index}` : t('metrics.undefined'),
     null,
   )
   push(
     'controlBand',
     t('metrics.controlBand'),
     metrics.controlBand,
-    (value: { label: string }) => value.label,
+    (value: { label: unknown }) =>
+      typeof value.label === 'string' && value.label !== '' ? value.label : t('metrics.undefined'),
     null,
   )
   return rows
@@ -344,7 +420,7 @@ export interface MarkovRowView {
 const MARKOV_EXITS_LIMIT = 2
 
 /** 马尔可夫分析的视图投影（纯函数：面板不直接读 markov 内部结构）。 */
-export function markovView(snapshot: PanelSnapshot): {
+export function markovView(snapshot: PanelSnapshotView): {
   rows: MarkovRowView[]
   stationary: Array<{ stage: string; share: number; percent: number }>
   converged: boolean
@@ -353,6 +429,11 @@ export function markovView(snapshot: PanelSnapshot): {
   available: boolean
 } {
   const markov = snapshot.markov
+  // 跨分区只读视图不提供转移矩阵（依赖本进程迁移历史）：null 不是「空矩阵」，
+  // 而是「不可得」。返回 available:false，组件据此显示空态而不是崩溃。
+  if (markov === null) {
+    return { rows: [], stationary: [], converged: false, samples: 0, summary: '', available: false }
+  }
   const rows: MarkovRowView[] = markov.rows.map((row) => {
     const selfLoop = row.probabilities?.[row.stage]
     // 跨阶段去向：排除自环与零概率，按概率降序取 top-N（并列按阶段名稳定排序）。
@@ -406,7 +487,7 @@ export interface DataFlowStage {
  * 从快照自身推导链路读数，保证「链路图」与「链路实际承载数据」同源 ——
  * 单独接口迟早会和快照漂移。
  */
-export function dataFlowStages(snapshot: PanelSnapshot): DataFlowStage[] {
+export function dataFlowStages(snapshot: PanelSnapshotView): DataFlowStage[] {
   const flowCount = snapshot.eventFlow.length
   return [
     {
@@ -448,15 +529,21 @@ export interface DiagnosticsRow {
 }
 
 /** 系统诊断投影：版本事实 + 分区键 + 反馈入口。 */
-export function diagnosticsRows(snapshot: PanelSnapshot): DiagnosticsRow[] {
+export function diagnosticsRows(snapshot: PanelSnapshotView): DiagnosticsRow[] {
   const d = snapshot.diagnostics
   const rows: DiagnosticsRow[] = [
     { key: 'pluginVersion', label: t('diagnostics.pluginVersion'), value: d.pluginVersion ?? t('diagnostics.unknown'), href: null },
     { key: 'hostVersion', label: t('diagnostics.hostVersion'), value: d.hostVersion ?? t('diagnostics.unknown'), href: null },
     { key: 'platform', label: t('diagnostics.platform'), value: `${d.platform} · node ${d.nodeVersion}`, href: null },
-    { key: 'partition', label: t('diagnostics.partition'), value: `${snapshot.projectKey.slice(0, 8)}…`, href: null },
+    { key: 'partition', label: t('diagnostics.partition'), value: snapshot.projectKey, href: null },
     { key: 'dataPlane', label: t('diagnostics.dataPlane'), value: t('diagnostics.dataPlaneOk'), href: null },
-    { key: 'snapshotMs', label: t('diagnostics.snapshotMs'), value: `${d.snapshotMs} ms`, href: null },
+    {
+      key: 'snapshotMs',
+      label: t('diagnostics.snapshotMs'),
+      // 跨分区视图不测耗时（宿主发 null）：不可判定，不是「0 ms」（那会读成「极快」）。
+      value: typeof d.snapshotMs === 'number' && Number.isFinite(d.snapshotMs) ? `${d.snapshotMs} ms` : t('metrics.undefined'),
+      href: null,
+    },
   ]
   if (d.repositoryUrl !== null) {
     rows.push({ key: 'repository', label: t('diagnostics.repository'), value: shortRepoUrl(d.repositoryUrl), href: d.repositoryUrl })
@@ -467,6 +554,64 @@ export function diagnosticsRows(snapshot: PanelSnapshot): DiagnosticsRow[] {
 /** 仓库链接的短显示（协议与域名去掉，路径留着）。 */
 function shortRepoUrl(url: string): string {
   return url.replace(/^https:\/\/[^/]+\//, '')
+}
+
+/* ---------- 降级与错误摘要（诚实边界的可断言形态） ---------- */
+
+/** 一条可选数据路由的结果（面板只关心「有没有」与「为什么没有」）。 */
+export interface RouteStatus {
+  ok: boolean
+  reason?: string
+}
+
+export interface DegradedRoute {
+  key: 'graph' | 'archives'
+  reason: string
+}
+
+/**
+ * 哪些数据面**不可得**，以及原因。
+ *
+ * 为什么不能只是「没数据就少画一张卡」：面板是观测设施，缺数据的界面
+ * 必须能区分「确实是零」与「根本没读到」。静默隐藏会让用户把「图谱没画」
+ * 读成「没有关系」—— 那正是本仓库最忌讳的假绿。
+ *
+ * `archivesInjected === false`（宿主没有该路由）不算降级：面板本来就不承诺
+ * 归档能力，如实隐藏即可；只有**注入了却读取失败**才是「不可得」。
+ */
+export function degradedRoutes(input: {
+  graph: RouteStatus
+  archives: RouteStatus
+  archivesInjected: boolean
+}): DegradedRoute[] {
+  const out: DegradedRoute[] = []
+  if (!input.graph.ok) out.push({ key: 'graph', reason: input.graph.reason ?? 'unknown' })
+  if (input.archivesInjected && !input.archives.ok) {
+    out.push({ key: 'archives', reason: input.archives.reason ?? 'unknown' })
+  }
+  return out
+}
+
+/**
+ * 渲染错误的可复制摘要。
+ *
+ * 为什么不用 `String(error)`：`[object Object]` 对排查零信息量；而
+ * `JSON.stringify` 在循环引用时会抛 —— 摘要函数自己再抛就形成了
+ * 「错误处理路径里的错误」。三级回退：Error → 字符串 → 安全 JSON → 兜底。
+ */
+export function errorSummary(error: unknown): string {
+  if (error instanceof Error) {
+    const stack = error.stack === undefined ? '' : `\n${error.stack}`
+    return `${error.name}: ${error.message}${stack}`.trim()
+  }
+  if (typeof error === 'string') return error
+  try {
+    const json = JSON.stringify(error)
+    if (json !== undefined) return json
+  } catch {
+    /* 循环引用或不可序列化：继续回退 */
+  }
+  return String(error)
 }
 
 /* ---------- 项目隔离 ---------- */
@@ -494,7 +639,7 @@ export interface PartitionView {
  * 为什么「当前」要显式标记而不是靠选中态：用户切换查看历史分区后，
  * 必须一眼看出「哪一个是宿主正在写的那一个」，否则会误以为切换改变了宿主。
  */
-export function partitionView(snapshot: PanelSnapshot, selectedKey: string | null): PartitionView {
+export function partitionView(snapshot: PanelSnapshotView, selectedKey: string | null): PartitionView {
   const options: PartitionOption[] = snapshot.partitions.map((partition) => ({
     key: partition.key,
     label: partition.label,

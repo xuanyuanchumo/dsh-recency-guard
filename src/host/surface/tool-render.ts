@@ -289,6 +289,13 @@ interface StatusLike {
   }
   /** 当前工作区（规范化路径；缺失时省略该行 —— 旧数据诚实降级）。 */
   workspace?: string
+  /**
+   * 声明式冲突（T14-03）：`status` 数据面已带 `conflicts`/`unresolved`，
+   * 这里只做**命令窗口上屏** —— 排障现场常在命令窗口，看不到就等于没有。
+   * 两者分开渲染：前者是「现在仍成立的冲突」，后者是「上次隔离后治不了的」。
+   */
+  conflicts?: Array<{ kind: string; message: string; plugins: string[]; source: { file: string; line: number } }>
+  unresolved?: Array<{ kind: string; message: string; plugins: string[] }>
   /** 分区键（与 workspace 成对出现）。 */
   projectKey?: string
   /** 插件自身版本（v0.10 R18；缺失时省略该行）。 */
@@ -384,6 +391,27 @@ export function formatStatus(s: StatusLike): ToolOutcome {
     empty: '没有 experimental/beta 命名的插件',
   })
 
+  // 声明式冲突（T14-03）：旧调用方不传 ⇒ 整段省略（诚实降级：
+  // 「没传」与「没有冲突」不是一回事，所以这里用 undefined 判定而不是空数组）。
+  if (s.conflicts !== undefined) {
+    sections.push({
+      title: `声明式冲突（共 ${s.conflicts.length} 条，带出处可复核）`,
+      items: s.conflicts.map((c) => `${c.kind}：${c.message}（${c.source.file}:${c.source.line}）`),
+      limit: 10,
+      empty: '当前没有命中任何声明式冲突（没有声明 ⇒ 不猜）',
+    })
+  }
+  if (s.unresolved !== undefined) {
+    // 残余必须上屏：它是「守护治不了这条」的唯一渠道，静默吞掉会让用户
+    // 以为隔离成功了，而下一轮崩溃还会重演。
+    sections.push({
+      title: `未解决的冲突（共 ${s.unresolved.length} 条）`,
+      items: s.unresolved.map((c) => `${c.kind}：${c.message}`),
+      limit: 10,
+      empty: '上次隔离后没有残余冲突',
+    })
+  }
+
   // 决策因子（v0.13 方向③）：回答「为什么是它被选中」。
   // 旧版决策文件没有 evidence ⇒ 用 empty 文案说明「未记录」，绝不列 0。
   const evidence = s.decisionEvidence
@@ -463,22 +491,33 @@ export function formatHistory(events: JsonSafe[]): ToolOutcome {
  * （实测 `recover(none)` 输出「没有可关闭的嫌疑插件」两遍）。同一事实
  * 显示两次会让用户以为发生了两件事。
  */
-export function formatRecover(r: { disabled: string[]; note: string }): ToolOutcome {
+export function formatRecover(r: { disabled: string[]; note: string; unresolved?: Array<{ kind: string; message: string }> }): ToolOutcome {
   const items = r.disabled.map((b) => `已关闭 ${b}`)
   const note = r.note.trim()
   const duplicate = note.length > 0 && (items.includes(note) || (r.disabled.length === 0 && items.length === 0))
+  const sections: SectionInput[] = [
+    {
+      title: `本次关闭（共 ${r.disabled.length} 个）`,
+      items,
+      empty: '没有可关闭的嫌疑插件 —— 当前没有符合条件的第三方/实验性插件',
+    },
+  ]
+  // 残余冲突（T14-03）：必须上屏。它是「守护尝试过但仍治不了」的唯一渠道，
+  // 例如冲突只涉及受保护/官方组件 —— 静默会让用户以为隔离成功。
+  if (r.unresolved !== undefined) {
+    sections.push({
+      title: `未解决的冲突（共 ${r.unresolved.length} 条）`,
+      items: r.unresolved.map((c) => `${c.kind}：${c.message}`),
+      limit: 10,
+      empty: '没有未解决的确定性冲突',
+    })
+  }
   return ok(
     'recover',
     `已按最近更新关闭 ${r.disabled.length} 个嫌疑插件`,
     {
       facts: duplicate ? [] : [['说明', note]],
-      sections: [
-        {
-          title: `本次关闭（共 ${r.disabled.length} 个）`,
-          items,
-          empty: '没有可关闭的嫌疑插件 —— 当前没有符合条件的第三方/实验性插件',
-        },
-      ],
+      sections,
     },
     { ...r },
   )

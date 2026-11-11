@@ -1,7 +1,7 @@
 import { useState, type ReactElement, type ReactNode } from 'react'
 import { t } from '../i18n/i18n.ts'
 import type { GraphData } from '../../shared/graph-contract.ts'
-import type { PanelSnapshot } from '../../host/surface/snapshot.ts'
+import type { PanelSnapshotView } from './snapshot-view.ts'
 import {
   agoLabel,
   capabilityRows,
@@ -12,6 +12,7 @@ import {
   metricRows,
   namesOf,
   partitionView,
+  stabilityView,
   stageLabelOf,
   stageRail,
   type DecisionEntry,
@@ -28,6 +29,27 @@ import {
  * 诚实边界贯穿全部卡片：不可判定的读数显示「不可判定」并附原因，
  * 空态与加载态各有自己的文案，绝不把「没有数据」渲染成「一切为零」。
  */
+
+/**
+ * 数值格式化 —— 所有「可能可空」的读数统一走这里。
+ *
+ * 为什么不在每处写 `value !== null ? value.toFixed(n) : …`：宿主契约里
+ * `Metric<T>`、贝叶斯/校准的嵌套读数都可能是 null（或 undefined），
+ * 逐个手写判定必然漏一处（v0.16 真机就是 `intervals.cv.toFixed` 漏了）。
+ * 统一入口保证「null / undefined / NaN / Infinity」都落到不可判定文案。
+ */
+function numText(value: unknown, digits: number): string {
+  return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : t('metrics.undefined')
+}
+
+function pctTextOf(value: unknown, digits = 1): string {
+  return typeof value === 'number' && Number.isFinite(value) ? `${(value * 100).toFixed(digits)}%` : t('metrics.undefined')
+}
+
+/** 比例条形宽度（不可判定时给 0 宽且不渲染数值，绝不画成「0 分条」）。 */
+function barPercent(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.round(Math.min(1, Math.max(0, value)) * 100) : 0
+}
 
 /* ---------- 可折叠卡片骨架 ---------- */
 
@@ -62,7 +84,9 @@ export function Card({
         aria-expanded={!collapsed}
         aria-controls={`rg-card-body-${id}`}
       >
-        <span className="rg-card-title">{title}</span>
+        <span className="rg-card-title" title={title}>
+          {title}
+        </span>
         {hint !== undefined && <span className="rg-card-head-hint">{hint}</span>}
         {/* 扩大按钮必须 stopPropagation：它是头部内的第二个动作，
             点它不该触发折叠。 */}
@@ -102,84 +126,106 @@ export function Card({
 
 /* ---------- KPI 摘要条 ---------- */
 
-export function KpiStrip({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+export function KpiStrip({ snapshot }: { snapshot: PanelSnapshotView }): ReactElement {
   const metrics = snapshot.metrics
-  const crashRate = metrics.crashRate.defined ? metrics.crashRate.value : null
-  const pressure = metrics.crashPressure.defined ? metrics.crashPressure.value : null
+  // 稳定性评分可空（无样本 / 跨分区视图）：null 必须显示「不可判定」，
+  // 绝不经过 Math 变成 0 分圆环（那会被读成「稳定性 0%」的假绿）。
+  const stability = stabilityView(snapshot.stabilityScore)
+  const crashRate = metrics !== null && metrics.crashRate.defined ? metrics.crashRate.value : null
+  const pressure = metrics !== null && metrics.crashPressure.defined ? metrics.crashPressure.value : null
   return (
     <div className="rg-kpis" role="group" aria-label={t('kpi.title')}>
       <div className="rg-kpi">
         <StabilityRing score={snapshot.stabilityScore} />
         <div className="rg-kpi-meta">
           <span className="rg-kpi-label">{t('state.stability')}</span>
-          <span className="rg-kpi-value">{snapshot.stabilityScore.toFixed(2)}</span>
+          <span className={`rg-kpi-value${stability.defined ? '' : ' rg-metric-undefined'}`}>{stability.text}</span>
         </div>
       </div>
       <div className="rg-kpi">
         <span className={`rg-badge rg-badge-${snapshot.stage}`}>{stageLabelOf(snapshot.stage, snapshot.stageLabel)}</span>
         <span className="rg-kpi-label">{t('state.stage')}</span>
       </div>
-      <div className="rg-kpi">
-        <span className="rg-kpi-value rg-kpi-big">
-          {crashRate !== null ? `${(crashRate * 100).toFixed(1)}%` : t('metrics.undefined')}
-        </span>
-        <span className="rg-kpi-label">{t('metrics.crashRate')}</span>
-        {metrics.crashRate.defined && <span className="rg-kpi-detail">{metrics.crashRate.label}</span>}
-      </div>
-      <div className="rg-kpi">
-        <span className="rg-kpi-value rg-kpi-big">{pressure !== null ? pressure.toFixed(2) : t('metrics.undefined')}</span>
-        <span className="rg-kpi-label">{t('metrics.crashPressure')}</span>
-        {metrics.crashPressure.defined && <span className="rg-kpi-detail">{metrics.crashPressure.label}</span>}
-      </div>
-      <div className="rg-kpi">
-        <span className={`rg-badge rg-badge-${metrics.trend.verdict}`}>{t(`trend.${metrics.trend.verdict}`)}</span>
-        <span className="rg-kpi-label">{t('metrics.trend')}</span>
-        {metrics.trend.samples > 0 && (
-          <span className="rg-kpi-detail">
-            {t('metrics.trendSamples', { count: metrics.trend.samples, slope: metrics.trend.rawSlope })}
-          </span>
-        )}
-      </div>
-      <div className="rg-kpi">
-        <span className="rg-kpi-value">{metrics.changePoint.defined ? t('kpi.changePointYes') : t('kpi.changePointNo')}</span>
-        <span className="rg-kpi-label">{t('metrics.changePoint')}</span>
-        {metrics.changePoint.defined && metrics.changePoint.value !== null && (
-          <span className="rg-kpi-detail">{metrics.changePoint.label}</span>
-        )}
-      </div>
+      {metrics === null ? (
+        // 一行「不可判定 + 原因」代替 4 个假读数（跨分区视图不提供运行时指标）。
+        <div className="rg-kpi">
+          <span className="rg-kpi-value rg-metric-undefined">{t('metrics.undefined')}</span>
+          <span className="rg-kpi-label">{t('metrics.title')}</span>
+          <span className="rg-kpi-detail">{t('metrics.unavailableReason')}</span>
+        </div>
+      ) : (
+        <>
+          <div className="rg-kpi">
+            <span className="rg-kpi-value rg-kpi-big">
+              {crashRate !== null ? `${(crashRate * 100).toFixed(1)}%` : t('metrics.undefined')}
+            </span>
+            <span className="rg-kpi-label">{t('metrics.crashRate')}</span>
+            {metrics.crashRate.defined && <span className="rg-kpi-detail">{metrics.crashRate.label}</span>}
+          </div>
+          <div className="rg-kpi">
+            <span className="rg-kpi-value rg-kpi-big">{pressure !== null ? pressure.toFixed(2) : t('metrics.undefined')}</span>
+            <span className="rg-kpi-label">{t('metrics.crashPressure')}</span>
+            {metrics.crashPressure.defined && <span className="rg-kpi-detail">{metrics.crashPressure.label}</span>}
+          </div>
+          <div className="rg-kpi">
+            <span className={`rg-badge rg-badge-${metrics.trend.verdict}`}>{t(`trend.${metrics.trend.verdict}`)}</span>
+            <span className="rg-kpi-label">{t('metrics.trend')}</span>
+            {metrics.trend.samples > 0 && (
+              <span className="rg-kpi-detail">
+                {t('metrics.trendSamples', { count: metrics.trend.samples, slope: metrics.trend.rawSlope })}
+              </span>
+            )}
+          </div>
+          <div className="rg-kpi">
+            <span className="rg-kpi-value">{metrics.changePoint.defined ? t('kpi.changePointYes') : t('kpi.changePointNo')}</span>
+            <span className="rg-kpi-label">{t('metrics.changePoint')}</span>
+            {metrics.changePoint.defined && metrics.changePoint.value !== null && (
+              <span className="rg-kpi-detail">{metrics.changePoint.label}</span>
+            )}
+          </div>
+        </>
+      )}
     </div>
   )
 }
 
-/** 稳定性圆环 —— SVG 弧长 = 评分 × 周长（颜色之外还有数字通道）。 */
-function StabilityRing({ score }: { score: number }): ReactElement {
-  const clamped = Math.min(1, Math.max(0, score))
+/**
+ * 稳定性圆环 —— SVG 弧长 = 评分 × 周长（颜色之外还有数字通道）。
+ *
+ * 评分 null（无样本 / 跨分区视图）时画**空轨道 + 「?」**而不是 0 分圆环：
+ * 「不可判定」必须与「0 分」在视觉上可区分，否则用户会把「还没样本」
+ * 读成「稳定性崩了」。
+ */
+function StabilityRing({ score }: { score: number | null }): ReactElement {
+  const stability = stabilityView(score)
   const radius = 18
   const circumference = 2 * Math.PI * radius
-  const dash = circumference * clamped
+  const dash = (circumference * stability.percent) / 100
   return (
     <svg
-      className="rg-ring"
+      className={`rg-ring${stability.defined ? '' : ' rg-ring-undefined'}`}
       width="46"
       height="46"
       viewBox="0 0 46 46"
       role="img"
-      aria-label={`${t('state.stability')} ${clamped.toFixed(2)}`}
+      aria-label={`${t('state.stability')} ${stability.text}`}
     >
       <circle cx="23" cy="23" r={radius} fill="none" stroke="var(--dsw-alias-bg-layer-2)" strokeWidth="5" />
-      <circle
-        cx="23"
-        cy="23"
-        r={radius}
-        fill="none"
-        stroke="var(--dsw-alias-brand-primary)"
-        strokeWidth="5"
-        strokeLinecap="round"
-        strokeDasharray={`${dash} ${circumference - dash}`}
-        transform="rotate(-90 23 23)"
-      />
+      {stability.defined ? (
+        <circle
+          cx="23"
+          cy="23"
+          r={radius}
+          fill="none"
+          stroke="var(--dsw-alias-brand-primary)"
+          strokeWidth="5"
+          strokeLinecap="round"
+          strokeDasharray={`${dash} ${circumference - dash}`}
+          transform="rotate(-90 23 23)"
+        />
+      ) : null}
       <text x="23" y="27" textAnchor="middle" className="rg-ring-text">
-        {Math.round(clamped * 100)}
+        {stability.defined ? Math.round(stability.percent) : '?'}
       </text>
     </svg>
   )
@@ -193,8 +239,9 @@ function StabilityRing({ score }: { score: number }): ReactElement {
  */
 const TRANSITIONS_INITIAL = 8
 
-export function LifecycleBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+export function LifecycleBody({ snapshot }: { snapshot: PanelSnapshotView }): ReactElement {
   const rail = stageRail(snapshot.stage, snapshot.transitions)
+  const stability = stabilityView(snapshot.stabilityScore)
   const verdict = snapshot.lastRecoveryVerdict
   // 迁移列表的渲染层上限 + 显式「还有 N 次」按钮。
   // 此前是静默 `slice(-8)`：崩溃 20 次的 profile 只露出最后 8 条，且没有任何
@@ -237,10 +284,12 @@ export function LifecycleBody({ snapshot }: { snapshot: PanelSnapshot }): ReactE
       <dl className="rg-dl">
         <dt>{t('state.stability')}</dt>
         <dd>
-          {snapshot.stabilityScore.toFixed(2)}
-          <span className="rg-bar" aria-hidden>
-            <span className="rg-bar-fill" style={{ width: `${Math.round(snapshot.stabilityScore * 100)}%` }} />
-          </span>
+          <span className={stability.defined ? undefined : 'rg-metric-undefined'}>{stability.text}</span>
+          {stability.defined && (
+            <span className="rg-bar" aria-hidden>
+              <span className="rg-bar-fill" style={{ width: `${Math.round(stability.percent)}%` }} />
+            </span>
+          )}
         </dd>
         <dt>{t('state.transitions')}</dt>
         <dd>{snapshot.transitions.length}</dd>
@@ -283,7 +332,7 @@ export function LifecycleBody({ snapshot }: { snapshot: PanelSnapshot }): ReactE
 
 /* ---------- 指标 ---------- */
 
-export function MetricsBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+export function MetricsBody({ snapshot }: { snapshot: PanelSnapshotView }): ReactElement {
   const rows = metricRows(snapshot)
   return (
     <ul className="rg-metrics">
@@ -310,18 +359,22 @@ export function RisksBody({
   snapshot,
   onReenable,
 }: {
-  snapshot: PanelSnapshot
+  snapshot: PanelSnapshotView
   onReenable: (bundle: string) => void
 }): ReactElement {
-  if (snapshot.risks.length === 0) return <p className="rg-empty">{t('risks.empty')}</p>
+  // Hooks 必须在提前 return 之前（Rules of Hooks）：此前 `risks.length === 0`
+  // 的早退在 useState 之前，空列表与非空列表切换时 hook 槽位会错位。
+  const [showAllRisks, setShowAllRisks] = useState(false)
+  // 旧宿主/跨分区视图可能整段省略 risks：省略 = 无排名可读，不是「零个嫌疑」。
+  const risks = snapshot.risks ?? []
+  if (risks.length === 0) return <p className="rg-empty">{t('risks.empty')}</p>
   // v0.8.1：默认展开 15 行 + 显式「还有 N 个」展开按钮。
   // 此前静默 slice(0, 8)：装了 20 个插件的 profile 在面板上只看得见 8 个，
   // 且没有任何提示 —— 「排名显示不全」的实测根源就在这里。
   // 用局部 useState 而不是卡片折叠：展开的是列表，不是整张卡。
   const INITIAL_VISIBLE = 15
-  const [showAllRisks, setShowAllRisks] = useState(false)
-  const visibleRisks = showAllRisks ? snapshot.risks : snapshot.risks.slice(0, INITIAL_VISIBLE)
-  const hiddenCount = snapshot.risks.length - visibleRisks.length
+  const visibleRisks = showAllRisks ? risks : risks.slice(0, INITIAL_VISIBLE)
+  const hiddenCount = risks.length - visibleRisks.length
   return (
     <>
       <ul className="rg-risks">
@@ -332,10 +385,10 @@ export function RisksBody({
                 {risk.bundle}
               </span>
               {risk.experimental && <span className="rg-chip">{t('risks.experimental')}</span>}
-              <span className="rg-risk-score">{risk.risk.toFixed(2)}</span>
+              <span className="rg-risk-score">{numText(risk.risk, 2)}</span>
             </div>
             <span className="rg-bar rg-bar-wide" aria-hidden>
-              <span className="rg-bar-fill" style={{ width: `${Math.round(risk.risk * 100)}%` }} />
+              <span className="rg-bar-fill" style={{ width: `${barPercent(risk.risk)}%` }} />
             </span>
             <span className="rg-risk-detail">{risk.label}</span>
             <div className="rg-risk-actions">
@@ -357,7 +410,7 @@ export function RisksBody({
 
 /* ---------- 备份策略（v0.9：只读投影 + 指引；改配置走宿主设置页） ---------- */
 
-export function BackupPolicyBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+export function BackupPolicyBody({ snapshot }: { snapshot: PanelSnapshotView }): ReactElement {
   const p = snapshot.backupPolicy
   return (
     <>
@@ -390,13 +443,16 @@ export function CapabilityBody({
   selectedId,
   onSelect,
 }: {
-  snapshot: PanelSnapshot
+  snapshot: PanelSnapshotView
   graph: GraphData | null
   selectedId: string | null
   onSelect: (id: string | null) => void
 }): ReactElement {
   const capability = snapshot.capability
   const [expanded, setExpanded] = useState(false)
+  // 跨分区只读视图不还原能力矩阵（宿主发 null）：如实说不可得，不渲染假 0。
+  // 提前 return 放在 useState **之后**（Rules of Hooks：hook 槽位必须稳定）。
+  if (capability === null) return <p className="rg-empty">{t('capabilities.unavailable')}</p>
   // 全量表只算**一次**：此前判断条件与展开态各调一次 `capabilityRows(graph, 200)`，
   // 一次渲染算两遍全表（每行都要扫一遍边表 ⇒ O(N·E)），而 200 本身是
   // **数据层**截断 —— 能力超过 200 项就会静默消失（CLAUDE.md 明令禁止的那条：
@@ -423,10 +479,12 @@ export function CapabilityBody({
         <dt>{t('capabilities.connected')}</dt>
         <dd>{capability.connected}</dd>
         <dt>{t('capabilities.connectivity')}</dt>
-        <dd>{(capability.connectivity * 100).toFixed(0)}%</dd>
+        <dd>{Number.isFinite(capability.connectivity) ? `${(capability.connectivity * 100).toFixed(0)}%` : t('metrics.undefined')}</dd>
         <dt>{t('capabilities.components')}</dt>
         <dd>
-          {snapshot.graphConnectivity.components} · {t('capabilities.isolatedCount', { count: snapshot.graphConnectivity.isolated })}
+          {snapshot.graphConnectivity === null
+            ? t('metrics.undefined')
+            : `${snapshot.graphConnectivity.components} · ${t('capabilities.isolatedCount', { count: snapshot.graphConnectivity.isolated })}`}
         </dd>
       </dl>
 
@@ -541,7 +599,7 @@ function gapLabel(kind: string): string {
 
 /* ---------- 崩溃决策历史 ---------- */
 
-export function DecisionsBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+export function DecisionsBody({ snapshot }: { snapshot: PanelSnapshotView }): ReactElement {
   const entries: DecisionEntry[] = decisionHistory(snapshot)
   if (entries.length === 0) return <p className="rg-empty">{t('decisions.empty')}</p>
   return (
@@ -582,7 +640,7 @@ function decisionTone(kind: DecisionEntry['kind']): string {
  * 诚实边界：旧版决策文件没有 `evidence`，此时**不画假条形图**，
  * 直接说明「该决策未记录因子」。把 0 画成条形会让人误读为「零风险」。
  */
-export function DecisionEvidenceBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+export function DecisionEvidenceBody({ snapshot }: { snapshot: PanelSnapshotView }): ReactElement {
   const { rows, hasEvidence } = decisionEvidenceRows(snapshot)
   if (rows.length === 0) return <p className="rg-empty">{t('decisionEvidence.empty')}</p>
   if (!hasEvidence) return <p className="rg-empty">{t('decisionEvidence.legacy')}</p>
@@ -597,7 +655,7 @@ export function DecisionEvidenceBody({ snapshot }: { snapshot: PanelSnapshot }):
               <strong className="rg-evidence-bundle">{row.bundle}</strong>
               {row.head && <span className="rg-badge rg-badge-error">{t('decisionEvidence.head')}</span>}
               <span className="rg-evidence-risk" title={t('decisionEvidence.riskHint')}>
-                {t('decisionEvidence.risk')} {row.risk.toFixed(3)}
+                {t('decisionEvidence.risk')} {numText(row.risk, 3)}
               </span>
             </div>
             <div className="rg-evidence-bars">
@@ -613,10 +671,10 @@ export function DecisionEvidenceBody({ snapshot }: { snapshot: PanelSnapshot }):
                   <span className="rg-evidence-bar-track">
                     <span
                       className={`rg-evidence-bar rg-tone-${tone}`}
-                      style={{ width: `${Math.max(0, Math.min(1, value)) * 100}%` }}
+                      style={{ width: `${barPercent(value)}%` }}
                     />
                   </span>
-                  <span className="rg-evidence-bar-value">{value.toFixed(3)}</span>
+                  <span className="rg-evidence-bar-value">{numText(value, 3)}</span>
                 </div>
               ))}
             </div>
@@ -652,10 +710,16 @@ export function DecisionEvidenceBody({ snapshot }: { snapshot: PanelSnapshot }):
  * 诚实边界：任一侧样本不足 ⇒ 命中率显示「不可判定」而不是 0%
  * （0% 会被读成「这类崩溃从不关插件」，那是伪造的证据）。
  */
-export function CooccurrenceBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+export function CooccurrenceBody({ snapshot }: { snapshot: PanelSnapshotView }): ReactElement {
   const c = snapshot.cooccurrence
-  const rate = (value: number | null): string => (value === null ? t('cooccurrence.undefined') : `${(value * 100).toFixed(1)}%`)
-  const delta = c.hitRateDelta === null ? t('cooccurrence.undefined') : `${(c.hitRateDelta * 100).toFixed(1)} ${t('cooccurrence.points')}`
+  // 共现验证需要两套样本同时在场；跨分区视图不承诺它。
+  if (c === null || c === undefined) return <p className="rg-empty">{t('cooccurrence.unavailable')}</p>
+  const rate = (value: unknown): string =>
+    typeof value === 'number' && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : t('cooccurrence.undefined')
+  const delta =
+    typeof c.hitRateDelta === 'number' && Number.isFinite(c.hitRateDelta)
+      ? `${(c.hitRateDelta * 100).toFixed(1)} ${t('cooccurrence.points')}`
+      : t('cooccurrence.undefined')
   return (
     <>
       <p className="rg-hint">{t('cooccurrence.hint')}</p>
@@ -687,7 +751,7 @@ export function PartitionsBody({
   selectedKey,
   onSelect,
 }: {
-  snapshot: PanelSnapshot
+  snapshot: PanelSnapshotView
   selectedKey: string
   onSelect: (key: string) => void
 }): ReactElement {
@@ -755,7 +819,7 @@ function PartitionRow({
 /** 事件流默认展示条数（超出给「还有 N 条」展开按钮 —— 与 risks 卡同款纪律）。 */
 const EVENTS_INITIAL = 12
 
-export function EventsBody({ events }: { events: PanelSnapshot['recentEvents'] }): ReactElement {
+export function EventsBody({ events }: { events: PanelSnapshotView['recentEvents'] }): ReactElement {
   const [showAll, setShowAll] = useState(false)
   if (events.length === 0) return <p className="rg-empty">{t('panel.emptyHint')}</p>
   // 快照给的是升序尾部；显示按时间倒序（最新在最上）。
@@ -894,8 +958,13 @@ export function archiveEntriesOf(payload: unknown): ArchiveEntry[] {
  * 「有记录但样本 < 5」。用 `autoDisables` 区分二者，绝不把任一情形
  * 画成「误伤率 0%」（那是把「没数据」谎报成「没问题」）。
  */
-export function CalibrationBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
-  const { rate, decision, explanation } = snapshot.calibration
+export function CalibrationBody({ snapshot }: { snapshot: PanelSnapshotView }): ReactElement {
+  const calibration = snapshot.calibration
+  // 旧宿主/跨分区视图可能整段省略校准段：不可得 ≠ 阈值 0。
+  if (calibration === null || calibration === undefined) {
+    return <p className="rg-empty">{t('calibration.unavailable')}</p>
+  }
+  const { rate, decision, explanation } = calibration
   const sampleShort = rate.value === null
   return (
     <>
@@ -914,11 +983,11 @@ export function CalibrationBody({ snapshot }: { snapshot: PanelSnapshot }): Reac
             <span className="rg-empty-inline">{t('calibration.insufficient')}</span>
           ) : (
             <>
-              {(rate.value!.rate * 100).toFixed(1)}%
+              {pctTextOf(rate.value!.rate)}
               <span className="rg-evidence-meta">
                 {' '}
-                （{rate.value!.falsePositives}/{rate.value!.autoDisables}，95% 区间{' '}
-                {(rate.value!.lower * 100).toFixed(1)}–{(rate.value!.upper * 100).toFixed(1)}%）
+                （{numText(rate.value!.falsePositives, 0)}/{numText(rate.value!.autoDisables, 0)}，95% 区间{' '}
+                {pctTextOf(rate.value!.lower)}–{pctTextOf(rate.value!.upper)}）
               </span>
             </>
           )}
@@ -928,11 +997,11 @@ export function CalibrationBody({ snapshot }: { snapshot: PanelSnapshot }): Reac
           它是「记录可能损坏」的信号，常态应为 0；恒显示一个 0 会让用户
           对它脱敏，真出问题时反而看不见。缺口 >0 时上面的误伤率不可信 ——
           两者并排出现，用户才能读出「这个 0% 是记录缺失造成的」。 */}
-      {snapshot.calibration.unattributedRestores > 0 && (
+      {calibration.unattributedRestores > 0 && (
         <div className="rg-kv">
           <span className="rg-kv-key">{t('calibration.evidenceGap')}</span>
           <span className="rg-kv-value">
-            <span className="rg-badge rg-badge-warn">{snapshot.calibration.unattributedRestores}</span>
+            <span className="rg-badge rg-badge-warn">{calibration.unattributedRestores}</span>
             <span className="rg-evidence-meta"> {t('calibration.evidenceGapHint')}</span>
           </span>
         </div>
@@ -947,8 +1016,10 @@ export function CalibrationBody({ snapshot }: { snapshot: PanelSnapshot }): Reac
  * `riskScore` 并列。刻意同时显示两者，让用户看见分歧 ——
  * 只显示一套会把「模型有分歧」这个重要事实藏起来。
  */
-export function BayesBody({ snapshot }: { snapshot: PanelSnapshot }): ReactElement {
+export function BayesBody({ snapshot }: { snapshot: PanelSnapshotView }): ReactElement {
   const rows = snapshot.bayes
+  // 省略/为 null 是「这一段不可得」，与「有样本但零嫌疑」是两件事。
+  if (rows === null || rows === undefined) return <p className="rg-empty">{t('bayes.unavailable')}</p>
   if (rows.length === 0) return <p className="rg-empty">{t('bayes.empty')}</p>
   return (
     <>
@@ -961,13 +1032,13 @@ export function BayesBody({ snapshot }: { snapshot: PanelSnapshot }): ReactEleme
             {row.defined && row.value !== null ? (
               <>
                 <span className="rg-evidence-risk">
-                  {t('bayes.posterior')} {row.value.mean.toFixed(3)}
+                  {t('bayes.posterior')} {numText(row.value.mean, 3)}
                 </span>
                 <span className="rg-evidence-meta">
-                  [{row.value.lower95.toFixed(3)}, {row.value.upper95.toFixed(3)}]
+                  [{numText(row.value.lower95, 3)}, {numText(row.value.upper95, 3)}]
                 </span>
                 <span className="rg-evidence-meta">
-                  n={row.value.samples}（命中 {row.value.hits} / 未命中 {row.value.misses}）
+                  n={numText(row.value.samples, 0)}（命中 {numText(row.value.hits, 0)} / 未命中 {numText(row.value.misses, 0)}）
                 </span>
               </>
             ) : (
@@ -975,7 +1046,7 @@ export function BayesBody({ snapshot }: { snapshot: PanelSnapshot }): ReactEleme
             )}
             {row.value !== null && (
               <span className="rg-evidence-meta">
-                {t('bayes.score')} {row.value.score.toFixed(3)}
+                {t('bayes.score')} {numText(row.value.score, 3)}
               </span>
             )}
           </li>

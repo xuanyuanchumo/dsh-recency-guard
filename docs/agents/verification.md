@@ -17,7 +17,7 @@
 npm run build          # esbuild 双产物：dist/index.js + dist/client.js
 npx tsc --noEmit       # 类型
 npm run lint           # 类型 + 未使用符号
-npm test               # 分层运行器：Core / Host / Client / Contract
+npm test               # 分层运行器：Core 29 / Host 10 / Client 20 / Contract 7 = 68
 ```
 
 判据：**四条全零错误**。分批跑会掩盖相互影响，必须顺序跑完。
@@ -77,7 +77,7 @@ dsh --profile sb-rg-c5 --port 3081 --no-open
 
 ## 3. 路由层（运行时数据面）
 
-插件注册 8 条路由，逐条探测（Bearer token 从启动日志取）：
+插件注册 **9 条路由**（5 条 GET + 4 条 POST），逐条探测（Bearer token 从启动日志取）：
 
 ```powershell
 $t = "<token>"
@@ -90,11 +90,11 @@ foreach ($p in $gets) {
 }
 ```
 
-POST 三条（`recover` / `reenable` / `archive`）用最小合法 body 各打一次。
+POST 四条（`recover` / `reenable` / `archive` / `restore`）用最小合法 body 各打一次。
 
-判据：**8/8 = 200**。任一 500 都会把面板整块拖黑，属于可观测性设施的可用性缺陷，
+判据：**9/9 = 200**。任一 500 都会把面板整块拖黑，属于可观测性设施的可用性缺陷，
 不是"小问题"。实测曾出现 `isolation` / `lifecycle` 双双 500（RouteContext 缺
-provider），修复后 8/8 通过。
+provider），修复后 9/9 通过。
 
 ---
 
@@ -228,3 +228,145 @@ appendPatchText(patchPath, '- id: evil\n  name: @evil/pkg\n')   // => ok:false
 
 每轮循环把执行输出落到 `.cycles/cycles/cycle-<n>/test-reports/*.md`。
 **只跑测试不写报告会被评估器判 Q2 FAIL**（`No test reports`），这是实测踩过的坑。
+
+---
+
+## 7. 发布面校验（v0.16.0 新增）
+
+每次发版前，除 §1 的四条命令外，再跑下面三条。**任何一条不通过都不许 tag / publish。**
+
+### 7.1 四锚点同值
+
+```bash
+node -e "const a=require('./package.json'),b=require('./dsh-plugin.json');console.log('pkg',a.version,'manifest',b.version,a.version===b.version?'OK':'MISMATCH');if(a.version!==b.version)process.exit(1)"
+grep -n "v0\.16\.0\|0\.16\.0" README.md docs/agents/api.md docs/agents/design.md docs/agents/architecture.md dsh-plugin.json
+```
+
+判据：`OK`，且 README / 三份 agents 文档 / manifest 全部命中当前版本。
+
+### 7.2 manifest 可解析且符合 schema
+
+```bash
+node -e "JSON.parse(require('fs').readFileSync('dsh-plugin.json','utf8'));console.log('parse OK')"
+```
+
+完整 JSON Schema 校验（需要网络取 schema；`$schema` 字段里是同一 URL）：
+
+```bash
+node -e "(async()=>{const s=await (await fetch(require('./dsh-plugin.json').\$schema)).json();const Ajv=require('ajv');const v=new Ajv({strict:false,allErrors:true}).compile(s);const ok=v(require('./dsh-plugin.json'));console.log('schema',ok?'OK':'FAIL');if(!ok){console.log(JSON.stringify(v.errors,null,2));process.exit(1)}})()"
+```
+
+判据：`parse OK` + `schema OK`。字段增删前先想清楚：**写不出代码依据的字段不要写**
+（见 [design.md](./design.md) §16.2）。
+
+### 7.3 市场投稿 YAML 可解析
+
+```bash
+node -e "const fs=require('fs');const t=fs.readFileSync('docs/market-submission.md','utf8');const m=t.match(/\`\`\`yaml\n([\s\S]*?)\`\`\`/);if(!m)throw new Error('no yaml block');const YAML=require('yaml');const d=YAML.parse(m[1]);console.log('keys',Object.keys(d).join(','));console.log('category',d.category);console.log('url',d.url);console.log('en',typeof d.description.en,'zh',typeof d.description.zh)"
+```
+
+判据：
+
+- 能解析出对象，`description.en` 是字符串（该字段是必填）；
+- `category` ∈ awesome-dsh-plugin 的合法取值（本项目用 `security`）；
+- `url` 与 `package.json` 的 `repository.url` 指向同一仓库；
+- 描述里出现 `: `（冒号+空格）时整段**带引号**，否则 YAML 会读成嵌套键；
+- **不写** `tarball:` / `npm:` 键（前者会因文件名带版本号而静默 404；后者手写会被校验拒绝）。
+
+### 7.4 `screenshots.json` 路径真实存在
+
+```bash
+node -e "const fs=require('fs');const list=require('./screenshots.json');const bad=list.filter(p=>!fs.existsSync(p));console.log('screenshots',list.length,'missing',bad);if(bad.length)process.exit(1)"
+```
+
+判据：`missing []`。声明了却 404 的图比不声明更糟 —— 市场详情页会直接破图。
+
+---
+
+## 8. 确定性冲突 / 贪心隔离 / 可写 rescue（v0.16 定稿）
+
+### 8.1 确定性证据必须能回指原文
+
+```bash
+npx tsx tests/unit/conflict-findings.test.ts
+npx tsx tests/unit/deterministic-evidence.test.ts
+npx tsx tests/unit/unresolved-surfacing.test.ts
+```
+
+判据：
+
+- 四类 finding（`declared-conflict` / `duplicate-service` / `dsh-version` / `missing-dependency`）
+  都有正例与**沉默例**：没声明、范围不可判定、对手不在场 ⇒ 输出里**不出现**；
+- 每条 finding 带 `source.file` / `source.line` / `declaration`，可回指原文；
+- `unresolved` 能出现在 `status` 输出、`decision.json` 与 `recover` 结果里
+  （静默吞掉 = 假装治好）。
+
+### 8.2 贪心隔离与依赖联动
+
+```bash
+npx tsx tests/unit/quarantine-plan.test.ts
+npx tsx tests/unit/crash-decision.test.ts
+```
+
+判据：
+
+- **无声明 ⇒ 纯 recency 顺序逐位不变**（有双向排序夹具）；
+- 关 X 会连带关依赖它的插件（闭包；环状依赖不死循环）；
+- 配额按**整组**判定：整组放不进 `maxAutoDisable` ⇒ 一个都不动，残余进 `unresolved`；
+- 受保护（官方/本插件/只读行）永不隔离；命中但全受保护 ⇒ 不行动，不用 recency 顶替。
+
+### 8.3 可写 rescue（dry-run → 两阶段 → 中断恢复）
+
+```bash
+# 默认 dry-run：不写盘，只打印计划（退出码 0）
+node bin/rescue.mjs apply --profile-dir "<profile>" --bundle dsh-bad-plugin
+
+# 真正落盘（需显式 --yes）
+node bin/rescue.mjs apply --profile-dir "<profile>" --yes
+node bin/rescue.mjs rescues --profile-dir "<profile>"     # 只读：记录清单
+
+# 中断恢复
+node bin/rescue.mjs restore --profile-dir "<profile>" --resume --yes
+```
+
+判据（`tests/unit/rescue-cli.test.ts` 覆盖）：
+
+- 不带 `--yes` **绝不修改** profile `package.json`；
+- `prepared` 记录含 `beforeHash` / `afterHash` / 原 index；`restore --resume` 按哈希判定第二步是否生效；
+- 回插按原 index 升序，回插后 bundle 顺序与隔离前一致；
+- 现场哈希不符 / 记录被篡改 ⇒ 退出码 **3** 拒绝，文件不变（不是"尽力改一下"）。
+
+### 8.4 契约门（v0.16 新增）
+
+```bash
+npx tsx tests/contract/panel-snapshot-nullability.test.ts
+npx tsx tests/contract/client-host-boundary.test.ts
+```
+
+判据：全部 PASS。可空清单只允许放宽**宿主已证明可空**的字段；
+client 仍不得运行时 import host（`import type` 豁免）。
+
+### 8.5 竞态与降级（T14-08 真机修复）
+
+```bash
+npx tsx tests/unit/journal-append-race.test.ts
+npx tsx tests/unit/boot-crashseq-race.test.ts
+npx tsx tests/unit/state-reconcile.test.ts
+npx tsx tests/unit/boot-degradation.test.ts
+npx tsx tests/unit/quarantine-plan.test.ts   # roundBudget / 预算耗尽分支
+```
+
+判据：
+
+- **journal append-only**：并发写不会用旧快照覆盖崩溃事件（`crash-detected` 仍在）；
+- **state 对账**：哨兵在场且决策文件有 `disable` 时，`crashSeq` / `autoDisabled`
+  被补回；无哨兵 / 非 `crash-recovery` / 空名单 ⇒ **不补**（幂等、不猜）；
+- **CAS 清零**：干净启动只归零未被本轮崩溃改过的计数；崩溃后的 `crashSeq` 不被覆盖；
+- **降级留痕**：启动编排的 catch 落 journal `note` + `degraded:true`，
+  `commitPartitionIndex` 注入点可稳定复现失败分支；
+- **死分支可断言**：`roundBudget(P)=P+1`，注入更小预算可命中 `terminatedBy:'cap'`。
+
+### 8.6 全量基线
+
+`npm test` = **68/68**（Core 29 / Host 10 / Client 20 / Contract 7）；
+`npx tsc --noEmit` 0；`npm run lint` 0；`npm run build` 双产物成功。

@@ -728,7 +728,43 @@
       "timestamp": "2026-11-10T16:08:06.871Z",
       "previousHash": "0766f63b890567fde3a63a22e48c6c5794e84359f7b75009be24b29a395f9a37",
       "hash": "ba5016a54e6d7253da206fdf0d848850b664949528d6b60d9a4d5b0200d7a7f8"
+    },
+    {
+      "gate": "G0",
+      "gateName": "评估收敛门",
+      "result": "FAIL",
+      "detail": "Evaluation report found in cycle-14 (16 dimension rows) [Q1:PASS,Q5:FAIL]",
+      "timestamp": "2026-11-11T07:41:47.743Z",
+      "previousHash": "ba5016a54e6d7253da206fdf0d848850b664949528d6b60d9a4d5b0200d7a7f8",
+      "hash": "1e59a5c7b1178ec7a53b76ed34781abcc27db16f33a91b95cfe5fc69e603f5c1"
+    },
+    {
+      "gate": "G1",
+      "gateName": "任务收敛门",
+      "result": "FAIL",
+      "detail": "No task entries found (fill the task tables in 任务清单.md) §cycle-14",
+      "timestamp": "2026-11-11T07:41:47.770Z",
+      "previousHash": "1e59a5c7b1178ec7a53b76ed34781abcc27db16f33a91b95cfe5fc69e603f5c1",
+      "hash": "30496bdf7b9fcbfc0d2913dc8223a9cde65b3d72575332e77daf378601c44ada"
+    },
+    {
+      "gate": "G2",
+      "gateName": "测试收敛门",
+      "result": "FAIL",
+      "detail": "Test report summary not recognized: 变异测试报告.md has no 通过/失败 rows (expected the §2 汇总 table) §cycle-14",
+      "timestamp": "2026-11-11T07:41:47.784Z",
+      "previousHash": "30496bdf7b9fcbfc0d2913dc8223a9cde65b3d72575332e77daf378601c44ada",
+      "hash": "c54f4a2c04d19c00d443ee97af351f4b4f5489af1eabdd0093c401e31eae38d4"
+    },
+    {
+      "gate": "G3",
+      "gateName": "构建收敛门",
+      "result": "PASS",
+      "detail": "Build passed: npm run build §cycle-14 [dist=absent] [Q3:PASS,Q4:PASS]",
+      "timestamp": "2026-11-11T07:41:48.944Z",
+      "previousHash": "c54f4a2c04d19c00d443ee97af351f4b4f5489af1eabdd0093c401e31eae38d4",
+      "hash": "06febe174113e4b86a505082e4438f2178236cd4c888b8f1f99f892b629abc9a"
     }
   ],
-  "chainHead": "ba5016a54e6d7253da206fdf0d848850b664949528d6b60d9a4d5b0200d7a7f8"
+  "chainHead": "06febe174113e4b86a505082e4438f2178236cd4c888b8f1f99f892b629abc9a"
 }

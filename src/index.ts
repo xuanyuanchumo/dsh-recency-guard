@@ -23,9 +23,8 @@ import { DECISION_RELATIVE_PATH, writePointer, type DecisionSuspect } from './ho
 import { rankForDecision } from './host/guard/decision-evidence.ts'
 import { GUARD_PACKAGE_NAME } from './host/guard/guarded-rows.ts'
 import { deriveObservations, deriveRiskInputs } from './host/observe/observations.ts'
-import { installExitSentinel, readSentinel, clearSentinel } from './host/guard/sentinel.ts'
-import { assessAbnormalExit, abnormalRecoveryVerdict, holdReason } from './host/guard/abnormal-boot.ts'
-import { abnormalExitEvents } from './host/guard/boot-notes.ts'
+import { installExitSentinel } from './host/guard/sentinel.ts'
+import { abnormalRecoveryVerdict } from './host/guard/abnormal-boot.ts'
 import { restoreDisabledExceptPrime, reenableOne, type RecoveryDeps } from './host/guard/recovery-actions.ts'
 import { observeOfficialExperimental } from './host/guard/official-observe.ts'
 import {
@@ -38,7 +37,14 @@ import {
   type HazardShape,
 } from './host/guard/decision-views.ts'
 import { watchPluginChanges } from './host/guard/event-watch.ts'
-import { assessConfidence, environmentChanged, reconcilePrepared, shouldRestoreAfterBoot, type CrashHistoryEntry } from './host/guard/recovery-policy.ts'
+import { environmentChanged, reconcilePrepared, type CrashHistoryEntry } from './host/guard/recovery-policy.ts'
+// 崩溃决策的组装与判定快照提取到 crash-decision.ts（组合根只做取数与落盘）。
+import { composeCrashDecision, verdictPatch } from './host/guard/crash-decision.ts'
+// 启动分流提取到 boot-orchestration.ts（判据顺序是语义，搬家不改顺序）。
+import { runBootOrchestration } from './host/guard/boot-orchestration.ts'
+// 声明式冲突证据（T14-03）：finding 是**决策输入**，隔离计划由 quarantine-plan 算。
+import { errorFindings, findingActive, findingsFor, readDeclaredPluginsSync, type ConflictFinding } from './host/guard/conflict-metadata.ts'
+import { planQuarantine, type CandidatePlugin, type RecoveryRun } from './host/guard/quarantine-plan.ts'
 import { StageMachine, type LifecycleStepName } from './host/core/lifecycle.ts'
 import { buildCapabilityGraph, verifyCapabilityContract } from './host/capability/capability-specs.ts'
 import { currentRegistrationSurface, verifySurfaceAlignment } from './host/capability/capability-specs.ts'
@@ -849,6 +855,79 @@ class Guard {
     return rows.filter((r) => wanted.has(r.moduleName) && r.enabled && r.readOnlyReason === undefined)
   }
 
+  /**
+   * 受保护 bundle —— 永不进隔离计划。
+   *
+   * 只有两类：本守护自身（关掉它 = 拆掉恢复机制）与官方实验插件
+   * （关官方组件 = 卸宿主半边）。官方包本来就被 `rankedSuspects*` 过滤掉，
+   * 这里把判据显式写出来，让「为什么它不在候选里」有单一答案，而不是
+   * 依赖上游过滤的副作用。
+   */
+  protectedBundles(): Set<string> {
+    return new Set<string>([GUARD_PACKAGE_NAME])
+  }
+
+  /**
+   * 声明式冲突扫描（同步）。
+   *
+   * 为什么同步：调用点之一是 `publishDecisionOnCrash`（process exit 处理器），
+   * 那里 await 之后进程已经死了。扫描只读 profile 的 package.json 与
+   * node_modules/<name>/package.json，几十个插件、几十毫秒，可接受。
+   *
+   * 失败（没有声明 / 装了一半 / JSON 损坏）⇒ 空数组 ⇒ 决策走旧分支：
+   * 把「扫描不出来」当成「有冲突」会把所有老插件打成确定性嫌疑。
+   */
+  scanConflictsSync(): ConflictFinding[] {
+    try {
+      const auto = new Set(this.store.readStateSync().autoDisabled.map((d) => d.name))
+      const plugins = readDeclaredPluginsSync(this.profileDir, { enabled: (name) => !auto.has(name) })
+      const findings = findingsFor(plugins, safeVersion())
+      // 只保留**当前仍成立**的 finding：涉及的插件必须全部还在场且启用。
+      // 为什么这条过滤必须在这里：禁用 B 之后「A 与 B 冲突」就不再成立，
+      // 若继续上报，每轮恢复都会看见同一条 error，计划器会去找一个已经没有
+      // 冲突的 B —— 那就变成「关了还在报、报了还要关」的死循环。
+      const active = new Set(plugins.filter((p) => p.enabled).map((p) => p.name))
+      return findings.filter((f) => findingActive(f, active))
+    } catch (err) {
+      this.ctx.logger.warn(`[recency-guard] 声明式冲突扫描失败（按无声明处理）：${describeError(err)}`)
+      return []
+    }
+  }
+
+  /**
+   * 由嫌疑排名构造隔离候选（同步）。
+   *
+   * 候选 = 嫌疑名单本身（已排除官方与守护自身）+ 声明元数据 + 依赖边。
+   * 依赖边决定「关 A 时还要关谁」，排序决定「先关谁」—— 两者都不来自
+   * 字符串改名，而来自插件自己的 package.json（数据即图）。
+   */
+  candidatesFromRanked(ranked: readonly RecencyEntry[]): CandidatePlugin[] {
+    let declared: ReturnType<typeof readDeclaredPluginsSync> = []
+    let auto = new Set<string>()
+    try {
+      auto = new Set(this.store.readStateSync().autoDisabled.map((d) => d.name))
+      declared = readDeclaredPluginsSync(this.profileDir, { enabled: (name) => !auto.has(name) })
+    } catch {
+      /* 读不到声明 ⇒ declared:false 的纯 recency 候选（旧排序 fallback） */
+    }
+    const byName = new Map(declared.map((p) => [p.name, p]))
+    const protectedSet = this.protectedBundles()
+    return ranked.map((entry, index) => {
+      const meta = byName.get(entry.bundle)
+      return {
+        name: entry.bundle,
+        enabled: !auto.has(entry.bundle),
+        alreadyDisabled: auto.has(entry.bundle),
+        ...(meta?.compat.priority === undefined ? {} : { priority: meta.compat.priority }),
+        // declared 决定排序是否启用（无声明 ⇒ 保持纯 recency 顺序，逐位不变）。
+        declared: meta?.declared === true,
+        protected: protectedSet.has(entry.bundle),
+        index,
+        ...(meta?.dependencies === undefined ? {} : { dependencies: meta.dependencies }),
+      }
+    })
+  }
+
   // ---------- lifecycle ----------
 
   /**
@@ -890,84 +969,59 @@ class Guard {
       const state = this.store.readStateSync()
       const seq = state.crashSeq + 1
       const ranked = this.decisionRankedSuspectsSync()
-      const n = Math.min(Math.max(1, seq), Math.max(1, this.config.maxAutoDisable))
-      const targets = pickSuspects(ranked, n)
-      // 置信分级（v0.9.0）：唯一嫌疑是确定性证据，第 1 轮即行动；
-      // 多嫌疑是概率性证据，连续 confirmRounds 轮同头号嫌疑才动手。
-      // 环境变化（runtime/头号插件版本）⇒ 历史计数清零。
+      // 声明式冲突（T14-03）：同步扫描第三方插件的 dshCompat / dsh-plugin.json。
+      // 必须在崩溃路径上做，且必须同步 —— 异步扫描会输给正在进行的崩溃。
+      const findings = this.scanConflictsSync()
       const history = this.readCrashHistory()
       const envChanged = environmentChanged(history[history.length - 1], safeVersion(), ranked)
-      // crashSeq 进判定（v0.11.1）：连续崩溃达到 3 次即兜底升级为行动 ——
-      // 崩溃循环本身是确定性事实，不能让计数失效把宿主钉死在循环里。
-      // v0.13 方向②：把崩溃间隔的分布形态（Weibull k）作为阈值调节输入。
-      // 只影响「多嫌疑」的概率性路径；确定性证据（唯一嫌疑）不受影响。
-      const verdict = assessConfidence(envChanged ? [] : history, ranked, {
+      // 决策组装（计划 / 判定 / 目标 / 残余）全部在 crash-decision.ts 的纯函数里：
+      // 组合根只负责「取数 → 组装 → 落盘」，不再承担决策内部的分支。
+      const decision = composeCrashDecision({
+        seq,
+        maxAutoDisable: this.config.maxAutoDisable,
         confirmRounds: this.config.confirmRounds,
-        crashSeq: seq,
+        ranked,
+        candidates: this.candidatesFromRanked(ranked),
+        findings,
+        history,
+        envChanged,
         hazardDirection: this.hazardShapeSync(),
       })
-      this.store.appendSync({
-        kind: 'note',
-        detail: `恢复判定：${verdict.label}`,
-      })
+      const { verdict } = decision
+      const targets = decision.targets
+      this.store.appendSync({ kind: 'note', detail: `恢复判定：${verdict.label}` })
       this.store.appendSync({
         kind: 'crash-detected',
         detail: `第 ${seq} 次崩溃（退出码 ${exitCode}）`,
         exitCode,
         suspects: targets.map((t) => t.bundle),
       })
-      // 共现采集（v0.13 方向④）：**只采集不改判定**。
-      // 研究文档 09 §2.4 判定方向④的数据基础不存在且共现≠因果，所以这里
-      // 只记录「崩溃当时哪些官方实验插件活跃、哪些非官方插件在场、关了谁」，
-      // 供 `verifyCooccurrence` 离线验证是否有预测力。加权留到验证达标之后。
+      // 共现采集（v0.13 方向④）：**只采集不改判定**（理由见 decision-views 头注）。
       this.recordCooccurrenceSync(ranked, verdict.act ? targets.map((t) => t.bundle) : [])
-      // 两阶段（v0.9.0）：act=false 只写 prepared（嫌疑保留、disable 为空），
-      // 守护行拿到空名单 = 全放行 —— 偶发崩溃不该有人被关。
-      // act=true 直接 quarantined（动手了），补 prepared 历史到 journal。
+      // 两阶段：act=false 只写 prepared（disable 为空 = 全放行）；act=true = quarantined。
+      // 「为什么是确定性证据」随决策一起落盘 —— 崩溃后宿主可能起不来，
+      // 此刻磁盘上的 decision.json 就是唯一还能被 rescue / 面板读到的事实。
       this.store.writeDecisionSync({
         capturedAt: new Date().toISOString(),
         suspects: this.decisionSuspectsFor(ranked, history),
-        disable: verdict.act ? targets.map((t) => t.bundle) : [],
+        disable: decision.disable,
         reason: 'crash-recovery',
         phase: verdict.act ? 'quarantined' : 'prepared',
         crashSeq: seq,
+        ...(decision.deterministicEvidence === undefined ? {} : { deterministicEvidence: decision.deterministicEvidence }),
+        ...(decision.unresolved.length === 0 ? {} : { unresolved: decision.unresolved }),
+      })
+      // 判定快照：观察轮与行动轮共用同一个构造函数（形状不许漂移）。
+      this.store.writeStateSync({
+        ...this.store.readStateSync(),
+        lastRecoveryVerdict: verdictPatch(seq, verdict, targets, decision.deterministicEvidence),
       })
       if (!verdict.act) {
         // 观察轮：不关任何插件，但崩溃证据链完整保留 —— 这是下次判定的输入。
-        // verdict 落进 state：status 工具与面板由此显示「观察中 N/M 轮」
-        // （崩溃路径是同步的，state 用 writeStateSync 已有机制带走）。
-        this.store.writeStateSync({
-          ...this.store.readStateSync(),
-          lastRecoveryVerdict: {
-            at: new Date().toISOString(),
-            crashSeq: seq,
-            evidence: verdict.evidence,
-            rounds: verdict.rounds,
-            required: verdict.required,
-            act: verdict.act,
-            label: verdict.label,
-            headSuspect: targets[0]?.bundle ?? null,
-          },
-        })
         this.recordStep('crash-decision', true, `第 ${seq} 次崩溃 → 观察轮（未关闭插件）：${verdict.label}`)
         return
       }
-      // act=true 也要带 verdict：工具显示「为什么关了它」。
-      this.store.writeStateSync({
-        ...this.store.readStateSync(),
-        lastRecoveryVerdict: {
-          at: new Date().toISOString(),
-          crashSeq: seq,
-          evidence: verdict.evidence,
-          rounds: verdict.rounds,
-          required: verdict.required,
-          act: verdict.act,
-          label: verdict.label,
-          headSuspect: targets[0]?.bundle ?? null,
-        },
-      })
-      // 指针必须与决策**同时**落地：守护行的表达式在下次启动时
-      // 只读 profile 目录下的指针。
+      // 指针必须与决策**同时**落地：守护行的表达式在下次启动时只读 profile 目录下的指针。
       writePointer(this.profileDir, this.projectKey, this.store.partitionPath)
       this.store.writeStateSync({
         ...state,
@@ -981,8 +1035,8 @@ class Guard {
           crashSeq: seq,
         })),
       })
-      // 崩溃路径是**同步**的：进入/退出由一条闭合区间表达（这里没时间做两段式，
-      // 进程随时会死，留一条永远闭合不了的区间反而是假数据）。
+      // 崩溃路径是**同步**的：进入/退出由一条闭合区间表达（进程随时会死，
+      // 留一条永远闭合不了的区间反而是假数据）。
       this.recordStep('crash-decision', true, `第 ${seq} 次崩溃 → 关闭 ${targets.map((t) => t.bundle).join(', ') || '无'}`)
     } catch (error) {
       // 崩溃路径失败必须留痕（步骤 + stderr 双通道）：决策没发出去意味着
@@ -1031,98 +1085,20 @@ class Guard {
     }
   }
 
-  /** Boot 的实现体（外层负责步骤计时与失败原因留痕）。 */
+  /** Boot 的实现体（分流逻辑见 boot-orchestration.ts；外层负责计时与失败留痕）。 */
   private async bootInner(): Promise<void> {
-    await this.store.init()
-    const state = await this.store.readState()
-    const sentinel = readSentinel(this.store.partitionPath)
-    if (sentinel) clearSentinel(this.store.partitionPath)
-    // The sentinel says the PREVIOUS run crashed: this boot is the recovery
-    // boot, and the decision it published must not be touched.
-    const crashedLastRun = sentinel !== null
-
-    // ---------- 第二条检测通道：哨兵缺席的异常终止（v0.12.1） ----------
-    // 判定集中在 abnormal-boot.ts：四种结局（clean / self-reload / concurrent /
-    // abnormal）+ 留痕文案 + 计数。留在这里的只有「按结果分流」这一层。
-    const abnormal = assessAbnormalExit(
-      {
-        sentinelPresent: sentinel !== null,
-        staleMarker: state.bootMarker,
-        currentPid: process.pid,
-      },
-      state.abnormalExitSeq ?? 0,
-    )
-    const abnormalSeqNext = abnormal.nextSeq
-    // 分流留痕由 boot-notes.ts 决定 kind 与文案（三条 if/else 移出启动主线）。
-    for (const event of abnormalExitEvents(abnormal)) this.store.appendSync(event)
-    const exitClass = abnormal.exitClass
-
-    // 两阶段对账（v0.9.0）：上一轮可能留下 prepared 记录（崩溃打断或正常
-    // 退出没走到升级）。按磁盘现状归类：autoDisabled 里有 = 关闭已走到
-    // pluginManager ⇒ confirmed；不在 ⇒ reverted（证据链保留）。
-    this.reconcilePreparedOnBoot()
-
-    // A crash recovery already published the decision and recorded the
-    // disabled bundles at the end of the crashed run.
-    const recovering = state.autoDisabled.length > 0
-
-    // 状态机迁移（白盒透明：每次迁移都带原因与时刻）。
-    if (crashedLastRun) {
-      this.machine.transition('crashed', `上次运行以退出码 ${sentinel?.exitCode ?? '未知'} 结束`)
-    } else {
-      this.machine.transition('monitoring', '启动时未发现上次崩溃')
-    }
-
-    await this.store.updateState((s) => ({
-      ...s,
-      bootMarker: { startedAt: new Date().toISOString(), pid: process.pid },
-      crashedRun: false,
-      lastExitCode: undefined,
-      // 计数随每轮启动重写：abnormal 累加，clean/concurrent 归零。
-      // 不在别处清零 ⇒ 「计数从哪来」只有一条路径可查。
-      abnormalExitSeq: abnormalSeqNext,
-    }))
-
-    try {
-      await this.recordChanges()
-    } catch (err) {
-      this.ctx.logger.warn(`[recency-guard] 记录插件变更失败：${describeError(err)}`)
-    }
-
-    // 官方实验插件观测（只记录不关闭）：与 recordChanges 同级 try/catch ——
-    // 观测通道失效不能影响变更记录与恢复主流程。
-    try {
-      await this.observeOfficialExperimental()
-    } catch (err) {
-      this.ctx.logger.warn(`[recency-guard] 官方实验插件观测失败：${describeError(err)}`)
-    }
-
-    // ---------- 恢复/升级的分支（v0.12.1 重排） ----------
-    // 判据顺序是语义问题，不是风格问题：
-    //   crashedLastRun（哨兵在）> exitClass==='abnormal'（标记残留且 pid 已死）
-    //   > recovering（名单里有被关的插件）> 干净启动。
-    // 「上一轮是否活过了启动」只能由**上一轮的退出方式**回答；此前用
-    // `!crashedLastRun` 当「活过了」的代理，在哨兵通道下成立（没哨兵=干净退出），
-    // 但新增通道之后不再成立：异常终止同样没有哨兵。若沿用旧条件，
-    // 「关了嫌疑插件 → 又死了一次（无哨兵）」会被读成「崩溃已过」而把插件
-    // 全部恢复 —— 那等于把刚建立的隔离亲手拆掉，正是崩溃循环最需要的反面。
-    if (shouldRestoreAfterBoot({ recovering, exitClass }) && !crashedLastRun) {
-      // The profile booted with the suspect(s) disabled and SURVIVED the boot,
-      // so the crash is over. Restore everything except the prime suspect,
-      // which stays off until the user confirms it with the reenable action.
-      this.ctx.logger.warn(
-        `[recency-guard] 上次崩溃已通过阻止加载 ${state.autoDisabled.map((d) => d.name).join(', ')} 恢复。`,
-      )
-      this.scheduleAutoRestore()
-    } else if (recovering) {
-      // 仍在崩溃循环里（哨兵在 / 上一轮异常终止 / 并发实例语义不明）：
-      // 决策保持原样，恢复会把嫌疑插件重新放进来、把崩溃直接带回来。
-      this.ctx.logger.warn(`[recency-guard] ${holdReason({ crashedLastRun, exitClass, abnormalSeqNext })}，保持嫌疑插件关闭。`)
-    } else if (exitClass === 'abnormal') {
-      await this.applyAbnormalRecovery(abnormalSeqNext)
-    } else {
-      await this.store.updateState((s) => ({ ...s, crashSeq: 0 }))
-    }
+    await runBootOrchestration({
+      store: this.store,
+      profileDir: this.profileDir,
+      workspace: this.workspace,
+      machine: this.machine,
+      warn: (message) => this.ctx.logger.warn(message),
+      reconcilePrepared: () => this.reconcilePreparedOnBoot(),
+      recordChanges: () => this.recordChanges(),
+      observeOfficialExperimental: () => this.observeOfficialExperimental(),
+      scheduleAutoRestore: () => this.scheduleAutoRestore(),
+      applyAbnormalRecovery: (next) => this.applyAbnormalRecovery(next),
+    })
   }
 
   /**
@@ -1170,32 +1146,87 @@ class Guard {
   }
 
   /**
-   * Disable the N most-recently-updated suspect bundles (N = min(crashSeq, maxAutoDisable)).
-   * Each target's config is backed up before disabling.
+   * 贪心最小隔离（T14-04）：取候选 → 标记停用 → 重算 error finding → 再取。
+   *
+   * ## 为什么不是「按 crashSeq 关 N 个」
+   *
+   * 旧实现是「关最近更新的 N 个」（N = 崩溃次数）。它有两个问题：
+   * 1. 关的**数量**由崩溃次数决定，而不是由「还有几条 error 没解决」决定 ——
+   *    关了 1 个就把 3 条冲突里的 1 条治好，剩下 2 条继续让宿主崩；
+   * 2. 不看依赖：关掉 A 而留下「需要 A」的 B，下次启动 B 在 import 处抛错，
+   *    用户以为「关插件反而更糟」。
+   *
+   * 现在：
+   * 1. 计划器按「error 清零」收敛（内部循环，见 `quarantine-plan.ts`）；
+   * 2. 每一步都联动停用依赖者（反向图遍历，环用 visited 防死循环）；
+   * 3. 执行完**重扫磁盘真相**再算 `unresolved` —— 计划是「应该」，
+   *    管理器的拒绝与受保护组件都不会因为计划而消失。
+   *
+   * @returns `{quarantine, unresolved, steps, note}`；`unresolved` 必须上屏。
    */
-  async recover(crashSeq: number): Promise<RecencyEntry[]> {
+  async recover(crashSeq: number): Promise<RecoveryRun> {
     const ranked = await this.decisionRankedSuspects()
-    const n = Math.min(Math.max(1, crashSeq), Math.max(1, this.config.maxAutoDisable))
-    const targets = pickSuspects(ranked, n)
+    const cap = Math.max(1, this.config.maxAutoDisable)
+    const findings = this.scanConflictsSync()
+    // 无任何声明 ⇒ **完全走旧行为**（按 recency 关 N 个，N = min(crashSeq, cap)）。
+    // 这不是兼容层而是纪律：没有可复核证据时，「最近更新」仍是本插件唯一
+    // 能用的相关性信号；让隔离计划在无声明时返回空计划会静默地什么都不关，
+    // 崩溃循环原地复活（tool 回归实测抓到过）。
+    const legacyTargets =
+      findings.length === 0 ? pickSuspects(ranked, Math.min(Math.max(1, crashSeq), cap)) : []
+    const plan = findings.length === 0 ? undefined : planQuarantine(this.candidatesFromRanked(ranked), findings, { maxDisable: cap })
+    // 计划为空（无 error 可治）时退回旧行为；计划非空则由它接管（含依赖联动）。
+    const toDisable = plan !== undefined && plan.quarantine.length > 0 ? plan.quarantine : legacyTargets.map((t) => t.bundle)
     const already = new Set((await this.store.readState()).autoDisabled.map((d) => d.name))
 
-    for (const t of targets) {
-      if (already.has(t.bundle)) continue
-      await this.disableBundle(t.bundle, 'auto-recency', crashSeq)
+    const disabledNow: string[] = []
+    for (const name of toDisable) {
+      // 已经在停用名单里的不重复执行：disableBundle 会重写备份与 journal，
+      // 对「已经关着」的插件重做一遍只会制造噪声事件（且覆盖更早的证据时间）。
+      if (already.has(name)) continue
+      await this.disableBundle(name, 'auto-recency', crashSeq)
+      disabledNow.push(name)
     }
+
+    // 执行后重扫：这一刻的 error finding 才是「仍然治不了」的真相。
+    // 例如一条冲突只涉及受保护插件 —— 计划器永远关不掉它，它必须上屏。
+    const unresolved = errorFindings(this.scanConflictsSync())
 
     // Publish the decision for the pre-boot helper, so the next boot can keep
     // the suspect off even if this process dies again before it can persist.
-    await this.publishDecision(ranked, targets.map((t) => t.bundle), 'crash-recovery', crashSeq)
-    return targets
+    const disabledNames = [...already, ...disabledNow]
+    await this.publishDecision(
+      ranked,
+      disabledNames,
+      disabledNames.length > 0 ? 'crash-recovery' : 'none',
+      crashSeq,
+      unresolved,
+      findings,
+    )
+    const legacy = plan === undefined
+    const note = legacy
+      ? '已关闭最近更新的嫌疑插件。重启 dsh 后若仍崩溃，将自动关闭最近更新的 2 个。'
+      : toDisable.length === 0
+        ? unresolved.length > 0
+          ? `没有可动的候选，仍有 ${unresolved.length} 条确定性冲突未解决（涉及受保护组件或无候选）。`
+          : '没有可关闭的嫌疑插件。'
+        : `按声明式冲突与依赖联动停用 ${disabledNow.length} 个插件${unresolved.length > 0 ? `；仍有 ${unresolved.length} 条未解决` : ''}。重启 dsh 后生效。`
+    return {
+      quarantine: disabledNames,
+      unresolved,
+      steps: plan?.steps ?? [],
+      terminatedBy: plan?.terminatedBy ?? 'executed',
+      note,
+    }
   }
 
   /** Manual recovery entry point (tool). Runs one pass with crashSeq = 1. */
   async recoverNow(): Promise<unknown> {
-    const targets = await this.recover(1)
+    const run = await this.recover(1)
     return {
-      disabled: targets.map((t) => t.bundle),
-      note: '已关闭最近更新的嫌疑插件。重启 dsh 后若仍崩溃，将自动关闭最近更新的 2 个。',
+      disabled: run.quarantine,
+      unresolved: run.unresolved,
+      note: run.note,
     }
   }
 
@@ -1231,22 +1262,54 @@ class Guard {
     return rankForDecision(await this.rankedSuspects(), await this.store.readJournal(1000))
   }
 
-  /** Publish the pre-boot decision file the guarded patch rows consult. */
+  /**
+   * Publish the pre-boot decision file the guarded patch rows consult.
+   *
+   * ## 为什么常态路径改用加锁写（T14-05）
+   *
+   * 崩溃路径继续用同步写（`writeDecisionSync`）—— 那里没有 await 的余地。
+   * 但这条异步路径（restore / 手动 recover）会出现「两个 dsh 实例同时恢复」：
+   * 无锁的 RMW 会让后写者用旧快照把前者刚关掉的插件放回去。`withFileLock`
+   * 把整段读改写串行化，锁内仍是原子 rename（读者永不见半份 JSON）。
+   *
+   * 失败降级：锁超时（活进程持有 / 记录不完整）不拖垮恢复流程，
+   * 退回同步原子写 —— 少一道并发保护，但决策本身照样落地。
+   */
   private async publishDecision(
     suspects: RecencyEntry[],
     disable: string[],
     reason: 'none' | 'crash-recovery',
     crashSeq?: number,
+    unresolved: readonly ConflictFinding[] = [],
+    findings: readonly ConflictFinding[] = [],
   ): Promise<void> {
     // 因子证据需要崩溃历史来算 streak：恢复路径上它来自既有 journal。
     const history = this.readCrashHistory()
-    this.store.writeDecisionSync({
+    const errors = errorFindings(findings)
+    const decision = {
       capturedAt: new Date().toISOString(),
       suspects: this.decisionSuspectsFor(suspects, history),
       disable,
       reason,
       ...(crashSeq === undefined ? {} : { crashSeq }),
-    })
+      // 只有在「确实按声明关人」时才写确定性证据：否则 disable 为空却带一份
+      // 「确定性」标记，读的人会以为系统是因为冲突才停手的。
+      ...(errors.length === 0 || disable.length === 0
+        ? {}
+        : {
+            deterministicEvidence: {
+              findings: errors,
+              targets: [...disable],
+            },
+          }),
+      ...(unresolved.length === 0 ? {} : { unresolved: [...unresolved] }),
+    }
+    try {
+      await this.store.writeDecisionLocked(decision)
+    } catch (err) {
+      this.ctx.logger.warn(`[recency-guard] 决策文件加锁写失败，退回同步原子写：${describeError(err)}`)
+      this.store.writeDecisionSync(decision)
+    }
     // 同步写指针：守护行的表达式只认 profile 目录下的指针，
     // 由它再找到**本分区**的决策文件（分区键表达式算不出来）。
     writePointer(this.profileDir, this.projectKey, this.store.partitionPath)
@@ -1507,6 +1570,9 @@ class Guard {
       },
       registeredExposedAs: [...this.actuallyRegistered],
       recentEvents,
+      // 声明式冲突（T14-03）：面板与命令窗口看同一份数据面字段。
+      conflicts: this.scanConflictsSync(),
+      unresolved: this.store.readDecisionSync()?.unresolved ?? [],
       // revision 的事实基座（v0.12 乐观并发）：全部取自上面已经读过的状态，
       // 只多一次 readDecisionSync —— 决策文件是几十十字节的小 JSON，
       // 而它是「下次启动会不会拦住插件」的真值，不读它就等于用一份
@@ -1748,6 +1814,9 @@ class Guard {
       calibration: projectCalibrationView(this.store.readJournalSync(1000), this.config.confirmRounds),
       lifecycle: this.lifecycleView(),
       configEditorAvailable: this.configEditorAvailable,
+      // 数据面全量（不切片）：截断是渲染策略，不是数据策略。
+      conflicts: this.scanConflictsSync(),
+      unresolved: this.store.readDecisionSync()?.unresolved ?? [],
     })
   }
 

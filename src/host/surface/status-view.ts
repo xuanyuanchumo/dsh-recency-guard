@@ -23,6 +23,7 @@
 import type { GuardState } from '../data/store.ts'
 import type { RecencyEntry } from '../risk/recency.ts'
 import type { CooccurrenceView, DecisionEvidenceView } from '../guard/decision-views.ts'
+import type { ConflictFinding } from '../guard/conflict-metadata.ts'
 
 /**
  * 生命周期视图（由 StageMachine 投影而来）。
@@ -73,6 +74,22 @@ export interface StatusInput {
   calibration: CalibrationView | null
   lifecycle: LifecycleView
   configEditorAvailable: boolean
+  /**
+   * 声明式冲突 finding（T14-03）。
+   *
+   * 为什么数据面必须是**全量**而不是切片：命令窗口要能回答「为什么这是
+   * 确定性证据」，一条 finding 就是一条可复核的声明（含文件与行号）。
+   * 无声明时是空数组 —— 空数组与「没扫」是两件事，调用方必须真的扫过。
+   */
+  conflicts?: readonly ConflictFinding[]
+  /**
+   * 上一次恢复的残余 error finding（读 `decision.json` 的 `unresolved`）。
+   *
+   * 与 `conflicts` 的区别：后者是**当前**仍成立的冲突，前者是**上次隔离后
+   * 仍治不了**的那部分（受保护组件/无候选）。两者都上屏，因为「现在有冲突」
+   * 和「上次想解决但解决不了」需要不同的处置。
+   */
+  unresolved?: readonly ConflictFinding[]
 }
 
 /** 单个插件的贝叶斯读数投影（命令窗口形态）。 */
@@ -155,6 +172,11 @@ export function buildStatusOutput(input: StatusInput): Record<string, unknown> {
     cooccurrence: input.cooccurrence,
     bayes: input.bayes,
     calibration: input.calibration,
+    // 声明式冲突双通道（T14-03）：当前仍成立的 + 上次隔离后治不了的。
+    // 两个字段分开给，不合并成一个「冲突数」—— 合并会把「有冲突」与
+    // 「已经试过但治不了」混成一件事，用户无法判断下一步该做什么。
+    conflicts: input.conflicts ?? [],
+    unresolved: input.unresolved ?? [],
     lifecycle: {
       stage: lifecycle.stage,
       stabilityScore: lifecycle.stabilityScore,

@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { withFileLock } from '@deepseek-ai/dsh-atomic-write'
 import { writeFileAtomicSync } from './atomic-sync.ts'
 
 /**
@@ -224,6 +226,46 @@ export function writePartitionIndex(profileDir: string, index: PartitionIndex): 
     writeFileAtomicSync(path, JSON.stringify(merged, null, 2))
   } catch {
     /* best effort: 索引丢失只是失去分区可读性，不影响守护本身 */
+  }
+}
+
+/**
+ * 分区索引的**跨进程加锁**写（T14-05，常态路径专用）。
+ *
+ * ## 为什么还要一份 async 实现
+ *
+ * `apply()` 是同步的（Cordis 对 apply 的返回不强制等待，改成 async 会
+ * 波及启动时序），所以那条路径只能走上面的同步版：原子提交 + 写前并集，
+ * 实测把丢失从 4/4 降到偶发，但**没有消除**「读最新 → rename」之间的窗口
+ * （TD-4 诚实登记）。
+ *
+ * 常态路径（`boot()` 之后、任何 `await` 可用的地方）多一次**幂等**提交：
+ * 用 `withFileLock` 把「读最新 → 合并 → 原子写」整段串行化。因为合并是
+ * 幂等的（同 key 覆盖、新 key 追加），重复提交不会放大任何事实；
+ * 而并发进程只要都经过这里，就不会再丢条目。
+ *
+ * 失败只降级（不抛）：索引是**可读性**资源，不是守护的正确性资源。
+ */
+export async function writePartitionIndexLocked(profileDir: string, index: PartitionIndex): Promise<void> {
+  try {
+    const dir = join(profileDir, '.recency-guard')
+    await mkdir(dir, { recursive: true })
+    const path = join(dir, PARTITION_INDEX_FILENAME)
+    await withFileLock(
+      path,
+      async () => {
+        const merged = mergePartitionIndexes(readPartitionIndex(profileDir), index)
+        // 这里不用 `writeFileAtomic`（@deepseek-ai/dsh-atomic-write）：
+        // 它在锁内还要再取一次自己的写锁，两层锁在超时路径上会互相等待。
+        // 手写临时文件 + rename 与 atomic-sync 同一形态，语义等价且不重入。
+        const temporary = `${path}.${process.pid}.${Date.now()}.lockwrite.tmp`
+        await writeFile(temporary, JSON.stringify(merged, null, 2), 'utf8')
+        await rename(temporary, path)
+      },
+      { waitMs: 3000 },
+    )
+  } catch {
+    /* best effort：锁超时/权限问题都不该让启动失败 */
   }
 }
 

@@ -213,6 +213,10 @@ async function main() {
     console.log(`   ${testCase.why}`)
 
     let ok = true
+    // 逐用例的失败基线：直接 `check(...)`（不经 `fail()`）的失败也必须保留现场。
+    // 此前只有 `fail()` 会置 ok=false ⇒ 检出判定失败时沙箱仍被删掉，
+    // 最需要取证的场景恰好没有现场（实测复现 T14-08 journal 竞态时踩到）。
+    const failuresBefore = failures
     const fail = (name: string, detail?: unknown) => {
       ok = false
       check(`[${testCase.id}] ${name}`, false, detail)
@@ -298,7 +302,7 @@ async function main() {
     }
 
     // 清理：只在用例通过时删沙箱；失败则保留现场供人取证。
-    if (ok) {
+    if (ok && failures === failuresBefore) {
       try {
         rmSync(sandbox.dir, { recursive: true, force: true })
         check(`[${testCase.id}] 临时沙箱已清理`, !existsSync(sandbox.dir))

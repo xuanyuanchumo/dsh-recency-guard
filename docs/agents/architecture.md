@@ -1,7 +1,10 @@
-# 架构与功能域划分（v0.15.0 重构）
+# 架构与功能域划分（v0.16.0）
 
 > 本文回答一件事：**`src/` 为什么这样分**。
 > 它不是目录说明书，而是「每条边界在防哪种缺陷」的论证。
+> v0.16.0 新增的 host / client 模块都落在既有域内（确定性冲突与贪心隔离进 `guard/`、
+> 锁卫生进 `data/`、可空视图与图谱交互进 `client/`）；发布面收口（`dsh-plugin.json` /
+> README / 文档）不改变代码边界。
 
 ## 1. 规范依据（dsh 插件开发知识库）
 
@@ -19,20 +22,34 @@ src/
 ├── index.ts                     # host bundle 入口：四件套 name/inject/Config/apply
 ├── host/                        # 只在宿主进程运行（可用 node:fs / 进程 / 路由 / IO）
 │   ├── core/                    #   基础原语：生命周期状态机、revision、分区键、自描述、同步原子写
-│   ├── data/                    #   持久化与归档：Store、archive
+│   ├── data/                    #   持久化与归档：Store、archive、锁卫生（lock-hygiene）
 │   ├── guard/                   #   崩溃守护主线：决策、恢复、信号、异常终止、守护行安装
+│   │                            #   + 确定性冲突（conflict-*）、贪心隔离（quarantine-plan）、
+│   │                            #     决策组装（crash-decision）、启动编排（boot-orchestration）、
+│   │                            #     状态对账（state-reconcile）
 │   ├── profile/                 #   profile patch 读写与标量改写
 │   ├── observe/                 #   观测与数学模型：指标、生存分析、控制带、预防性预警、转移矩阵、共现
 │   ├── risk/                    #   风险与归因：新近性、贝叶斯并行读数、误伤校准
 │   ├── capability/              #   能力模型与图谱（产出方）
 │   └── surface/                 #   对外面：工具注册/分派/渲染、路由、状态投影、面板快照
 ├── client/                      # 只在浏览器运行（禁止 node:*，禁止 import host）
-│   ├── panel/                   #   面板：容器、卡片、洞察、投影
-│   ├── graph/                   #   图谱：渲染、模型、分析、小地图、视口
+│   ├── panel/                   #   面板：容器、卡片、洞察、投影、可空视图、错误边界
+│   ├── graph/                   #   图谱：渲染、模型、分析、小地图、视口、交互/布局/调色
 │   ├── api/                     #   客户端取数的唯一出口
 │   └── i18n/                    #   自持字典
 └── shared/                      # 跨运行时契约层（Definition）：只放类型 + 纯常量
 ```
+
+### 2.1 仓库根的两份 manifest（v0.16.0）
+
+| 文件 | 谁消费 | 声明什么 |
+| --- | --- | --- |
+| [`../../package.json`](../../package.json) | npm + dsh 安装器 | `main` / `exports["./client"]` / `dsh.bundle.patch` / `dsh.client` / `engines.dsh` / peer 范围 |
+| [`../../dsh-plugin.json`](../../dsh-plugin.json) | 社区 manifest 生态（draft v0.15） | `facets.host.entry` / `requires.contracts` / `permissions` / `contributes`（工具、面板席位、路由） |
+
+两者**不是**替换关系：`package.json` 是安装契约，`dsh-plugin.json` 是可审计的能力与权限声明。
+版本必须同源（`0.16.0`），且 `dsh-plugin.json` 里每个字段都要能在代码里 grep 到依据——
+写不出依据的字段宁可删掉，也不编。
 
 ## 3. 每条边界在防什么（不是装饰）
 
@@ -76,6 +93,22 @@ host 侧文件只做 re-export。`shared/` 的纪律写在文件头：只放类�
 Loader 从 `package.json` 的 `main` 取入口，`apply` 与 `name/inject/Config` 必须
 在入口模块的顶层导出。把它放进 `host/` 会让 bundle 入口变成 `dist/host/index.js`，
 偏离规范（也违反项目自己的「Loader 四件套之外不导出任何东西」）。
+
+### 3.5 宿主 ↔ 客户端快照类型 —— 防「声明非空、运行时可空」
+
+**真实缺陷（v0.16 真机）**：宿主 `PanelSnapshot` 把 `stabilityScore` / `metrics` /
+`capability` 声明为非空，但跨分区只读视图会发 `null`，且 `Metric<T>.defined === true`
+不等于子字段非空（`intervals.value.cv` 在样本 < 2 时是 null）。客户端照抄宿主类型后，
+一次 `.toFixed(...)` 就把面板整块打进错误边界。
+
+**防线**：客户端不复制契约，而是用
+[`snapshot-view.ts`](../../src/client/panel/snapshot-view.ts) 的 `PanelSnapshotView`
+对**已证明可空**的字段做显式放宽（单一「可空清单」），渲染层诚实降级；
+[`panel-snapshot-nullability.test.ts`](../../tests/contract/panel-snapshot-nullability.test.ts)
+守护这份清单，防止宿主新增可空字段后客户端又回到「类型说非空、运行时炸」。
+
+这条边界的教训与 §3.1 同源：**类型不是运行时事实**，跨层契约必须有测试把「实际可能为 null」
+写下来。
 
 ## 4. 依赖方向（唯一允许的方向）
 
@@ -150,7 +183,17 @@ Q5 目前仍报 FAIL，两条依据逐一核对：
 npx tsc --noEmit                              # 类型
 npm run lint                                  # 未使用导出/参数
 npm run build                                 # 双产物（host + client）
-npm test                                      # 46 个测试文件，含边界契约
+npm test                                      # 62 个测试，含边界与可空契约
 npx tsx tests/contract/client-host-boundary.test.ts   # 单跑边界门
+npx tsx tests/contract/panel-snapshot-nullability.test.ts  # 可空清单门
+npx tsx tests/unit/journal-append-race.test.ts            # journal 真追加
+npx tsx tests/unit/boot-crashseq-race.test.ts             # CAS 清零
 node scripts/mutation.mjs --dry-run           # 变异池是否覆盖新布局（递归）
+```
+
+发布面另有两道可核对项（不属于 `src/`，但同属"结构必须写成检验"的纪律）：
+
+```bash
+node -e "JSON.parse(require('fs').readFileSync('dsh-plugin.json','utf8'))"   # manifest 可解析
+node -e "const a=require('./package.json'),b=require('./dsh-plugin.json'); if(a.version!==b.version) process.exit(1)"  # 版本锚点同源
 ```

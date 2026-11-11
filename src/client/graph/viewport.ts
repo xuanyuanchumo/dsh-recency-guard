@@ -179,6 +179,27 @@ export function clampPan(viewport: Viewport, size: Size, bounds: Rect, margin = 
 }
 
 /**
+ * 重置视图 —— 缩放到 **1:1** 并把内容居中。
+ *
+ * 与 `fitToView` 的区别是「用户想看清原始尺寸，而不是塞满视口」：
+ * fit 在 60 节点大图上会缩到 0.3，卡片文字不可读；reset 明确承诺 100%。
+ * 与 `clampPan` 的分工：本函数只算「内容中心对准视口中心」的理想值，
+ * 调用方仍要过 `clampPan`（内容比视口大时钳制生效，绝不留死锁视野）。
+ */
+export function resetToActualSize(bounds: Rect, size: Size): Viewport {
+  const width = finite(size.width, 0)
+  const height = finite(size.height, 0)
+  if (!(bounds.width > 0) || !(bounds.height > 0) || width <= 0 || height <= 0) {
+    return { scale: 1, tx: width / 2, ty: height / 2 }
+  }
+  return {
+    scale: 1,
+    tx: (width - bounds.width) / 2 - bounds.minX,
+    ty: (height - bounds.height) / 2 - bounds.minY,
+  }
+}
+
+/**
  * 适配视图 —— 把整个图放进视口。
  *
  * @param margin 四周留白（像素）

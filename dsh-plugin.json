@@ -1,0 +1,142 @@
+{
+  "$schema": "https://raw.githubusercontent.com/T-Auto/dsh-std/8a15541117cb3c13ddb8f2468308691b6051d162/packages/manifest/schema/dsh-plugin-0.15.schema.json",
+  "manifestVersion": "0.15",
+  "id": "dsh-recency-guard",
+  "name": "dsh-recency-guard",
+  "version": "0.16.0",
+  "license": "MIT",
+  "facets": {
+    "host": {
+      "entry": "dist/index.js",
+      "apiVersion": "v1alpha1"
+    }
+  },
+  "requires": {
+    "contracts": [
+      {
+        "apiVersion": "tools.dsh/v1alpha1",
+        "kind": "Tool",
+        "optional": true
+      }
+    ]
+  },
+  "permissions": [
+    {
+      "name": "dsh-recency-guard.fs.read",
+      "scope": "filesystem-read",
+      "reason": "Read the profile package.json, node_modules metadata/mtimes, plugin-declared dshCompat / dsh-plugin.json compatibility manifests, the existing cordis.patch.yml and the config-editor snapshot to rank suspects, emit conflict findings and validate guarded rows before writing."
+    },
+    {
+      "name": "dsh-recency-guard.fs.write",
+      "scope": "profile",
+      "reason": "Append guarded rows to the profile cordis.patch.yml, persist guard state under <profile>/.recency-guard (journal/state/decision/backups/archive/rescue records), and, only on explicit --yes, let the offline rescue CLI remove or reinsert bundle entries in the profile package.json."
+    },
+    {
+      "name": "dsh-recency-guard.process.probe",
+      "scope": "process-signal",
+      "reason": "Probe the previous host pid with process.kill(pid, 0) so a SIGKILL or power loss, which never runs exit handlers, is detected as a second crash channel."
+    },
+    {
+      "name": "dsh-recency-guard.http.panel",
+      "scope": "network-local",
+      "reason": "Register the management panel's local HTTP data surface (GET reads, POST actions) on the host webServer under /recency-guard/api."
+    }
+  ],
+  "contributes": {
+    "x-display": [
+      {
+        "icon": "./assets/icon-256.png",
+        "title": "插件守护",
+        "description": "Crash-recovery guard: after a crash, block the most recently updated third-party plugin before the next boot; use plugin-declared compatibility metadata for deterministic conflict findings and a greedy minimal quarantine set; restore stable plugins when the profile boots clean.",
+        "locales": [
+          "locale/en.json",
+          "locale/zh.json"
+        ]
+      }
+    ],
+    "x-tool-namespaces": [
+      {
+        "serverName": "dsh-recency-guard",
+        "transport": "in-process",
+        "source": "host ctx.tools.register via @deepseek-ai/dsh-tools defineTool",
+        "tools": [
+          "recency_guard"
+        ]
+      }
+    ],
+    "x-components": [
+      {
+        "id": "recency-guard",
+        "entry": "dsh-recency-guard",
+        "defaultEnabled": true,
+        "slots": [
+          "main",
+          "sidebar.panellist"
+        ],
+        "presentation": "One management panel in the center slot (main) with a matching sidebar icon (sidebar.panellist); both use the panel id recency-guard."
+      }
+    ],
+    "x-routes": [
+      {
+        "prefix": "/recency-guard/api",
+        "routes": [
+          {
+            "path": "/recency-guard/api/snapshot",
+            "method": "GET",
+            "name": "recency-guard.panel"
+          },
+          {
+            "path": "/recency-guard/api/graph",
+            "method": "GET",
+            "name": "recency-guard.graph"
+          },
+          {
+            "path": "/recency-guard/api/isolation",
+            "method": "GET",
+            "name": "recency-guard.isolation"
+          },
+          {
+            "path": "/recency-guard/api/lifecycle",
+            "method": "GET",
+            "name": "recency-guard.lifecycle"
+          },
+          {
+            "path": "/recency-guard/api/archives",
+            "method": "GET",
+            "name": "recency-guard.archives"
+          },
+          {
+            "path": "/recency-guard/api/action/archive",
+            "method": "POST",
+            "name": "recency-guard.reset"
+          },
+          {
+            "path": "/recency-guard/api/action/reenable",
+            "method": "POST",
+            "name": "recency-guard.reenable"
+          },
+          {
+            "path": "/recency-guard/api/action/restore",
+            "method": "POST",
+            "name": "recency-guard.restore"
+          },
+          {
+            "path": "/recency-guard/api/action/recover",
+            "method": "POST",
+            "name": "recency-guard.recover"
+          }
+        ]
+      }
+    ]
+  },
+  "compat": {
+    "hosts": [
+      "0.2.1-rc.5+",
+      "0.2.2-rc.1+",
+      "0.2.3-rc.1+"
+    ]
+  },
+  "source": {
+    "repository": "https://github.com/xuanyuanchumo/dsh-recency-guard"
+  }
+}

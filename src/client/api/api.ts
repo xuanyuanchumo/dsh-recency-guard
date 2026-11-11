@@ -1,4 +1,4 @@
-import type { PanelSnapshot } from '../../host/surface/snapshot.ts'
+import type { PanelSnapshotView } from '../panel/snapshot-view.ts'
 import type { GraphData } from '../../shared/graph-contract.ts'
 
 /**
@@ -52,7 +52,7 @@ export type FetchResult<T> = FetchSuccess<T> | FetchFailure
  * 导出供契约测试使用：形状校验是「面板不把错误数据当数据渲染」的唯一屏障，
  * 必须能被独立验证。
  */
-export function isSnapshot(value: unknown): value is PanelSnapshot {
+export function isSnapshot(value: unknown): value is PanelSnapshotView {
   if (typeof value !== 'object' || value === null) return false
   const record = value as Record<string, unknown>
   return typeof record.at === 'string' && typeof record.stage === 'string'
@@ -126,7 +126,7 @@ function withPartition(url: string, partition?: string): string {
 }
 
 /** 拉取面板快照（可指定分区；宿主不支持时返回当前分区，由调用方核对）。 */
-export async function fetchSnapshot(partition?: string): Promise<FetchResult<PanelSnapshot>> {
+export async function fetchSnapshot(partition?: string): Promise<FetchResult<PanelSnapshotView>> {
   const result = await fetchJson(withPartition(`${API_PREFIX}/snapshot`, partition))
   if (!result.ok) return result
   if (!isSnapshot(result.data)) return { ok: false, reason: '快照形状不合法' }

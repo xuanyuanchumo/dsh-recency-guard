@@ -107,6 +107,208 @@ export const GRAPH_CSS = `
   white-space: nowrap;
   border: 0;
 }
+
+/* ---------- 面板分组标题（v0.16 信息架构） ---------- */
+/* 分组标题横跨整行：网格是 auto-fit 的，若只占一列会把下一张卡片挤到
+   标题右边 —— 读起来像「标题是卡片的一部分」。 */
+.rg-group-title {
+  grid-column: 1 / -1;
+  margin: 10px 0 0;
+  padding: 0 2px 6px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  font-size: var(--dsw-font-s-15, 15px);
+  font-weight: var(--dsw-font-s-15-font-weight, 600);
+  color: var(--dsw-alias-label-primary);
+}
+.rg-group-title:first-child {
+  margin-top: 0;
+}
+
+/* 降级提示：与普通 notice 区分（虚线边框 = 「这里缺了一块」，不是警告色） */
+.rg-notice-degraded {
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm, 8px);
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* ---------- 错误边界（组件抛错不白屏） ---------- */
+.rg-error-boundary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--dsw-alias-state-error-primary);
+  border-radius: var(--dsw-radius-md, 12px);
+  background: var(--dsw-alias-bg-layer-1);
+}
+.rg-error-summary {
+  max-height: 220px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: var(--dsw-radius-sm, 8px);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-secondary);
+  font-family: var(--dsw-font-mono, ui-monospace, monospace);
+  font-size: var(--dsw-font-xs-13, 13px);
+  /* 长栈行必须可换行：横向溢出会把「复制」按钮推出可视区（窄屏尤其） */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.rg-error-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---------- 图例三组（类型 / 边语义 / 语义色） ---------- */
+/* 组之间用竖线分隔而不是只靠间距：三个维度各自是独立开关，混成一片会让
+   用户以为「关掉一个 = 关掉整组」。 */
+.rg-legend-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.rg-legend-group + .rg-legend-group {
+  padding-left: 8px;
+  border-left: 1px solid var(--dsw-alias-border-l1);
+}
+.rg-legend-line {
+  width: 16px;
+  height: 8px;
+  color: var(--dsw-alias-label-secondary);
+  flex: none;
+}
+.rg-legend-edge {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 关联范围的实际跳数读数（档位是文案，跳数是事实） */
+.rg-graph-depth {
+  font-size: var(--dsw-font-xs-13, 13px);
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+}
+
+/* ---------- 长文本的展开出口 ---------- */
+.rg-graph-longtext {
+  margin-top: 6px;
+  font-size: var(--dsw-font-xs-13, 13px);
+  color: var(--dsw-alias-label-secondary);
+}
+.rg-graph-longtext > summary {
+  cursor: pointer;
+}
+.rg-graph-longtext-full {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 窄屏（<640px 由面板 data-form 表达）：图例与工具栏一律换行，
+   绝不出现横向滚动条 —— 横向溢出会把右侧的按钮移出可达区域。 */
+.rg-panel[data-form='narrow'] .rg-graph-toolbar {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rg-panel[data-form='narrow'] .rg-graph-legend {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.rg-panel[data-form='narrow'] .rg-graph {
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+/* ---------- 图谱 polish（v0.16：真机截图后的视觉收口） ---------- */
+
+/* 适配被可读下界钳制：状态栏如实说明，避免「适配后仍看不全」被当成故障。 */
+.rg-graph-fitnote {
+  font-size: var(--dsw-font-xxxs-11, 11px);
+  color: var(--dsw-alias-state-warn-primary);
+  white-space: nowrap;
+}
+
+/* 放大视图：高度由内联 70vh 提供；给动画一个收敛边界，避免展开时抖动。 */
+.rg-graph-viewport[data-expanded='true'] {
+  min-height: 320px;
+}
+
+/* 搜索候选层改为**文档流内**下拉，而不是绝对定位盖住图例：
+   绝对定位在工具栏换行时会把「类型/边语义/语义色」图例整块遮住，
+   用户点不到开关。流内展开会让工具栏变高，但不遮挡任何控件。 */
+.rg-graph-search {
+  display: flex;
+  flex: 1 1 240px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 180px;
+}
+.rg-graph-search .rg-search-results {
+  position: static;
+  flex-basis: 100%;
+  width: 100%;
+  min-width: 0;
+  max-height: 180px;
+  margin-top: 4px;
+  box-shadow: none;
+}
+
+/* 节点文字底衬（halo）由 SVG 的 paint-order 实现；这里只保证文字不被
+   节点背景色以外的填充干扰（stroke 颜色在组件里显式给主题背景色）。 */
+.rg-graph-node-label,
+.rg-graph-node-detail {
+  paint-order: stroke;
+}
+
+/* ---------- 卡片头部：标题不许被挤成竖排（v0.16 真机回归） ---------- */
+/* 真机：右列卡片标题按单字换行（「数/据/流」）。根因是 flex 行里标题
+   没有 min-width:0 / nowrap，可收缩到 CJK 的 min-content（一个字宽），
+   于是每个字各占一行。修复三件套：标题 nowrap + ellipsis、右侧操作
+   固定宽度、提示文字可收缩但保底。 */
+.rg-card-head {
+  min-width: 0;
+}
+.rg-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* CJK 标题不在字间断行；空间不足交给 ellipsis（title 属性保留全称）。 */
+  word-break: keep-all;
+  overflow-wrap: normal;
+}
+.rg-card-head-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 42%;
+}
+.rg-card-expand,
+.rg-card-chevron {
+  flex: 0 0 auto;
+}
+
+/* 数据流卡：4 个步骤必须完整可读（真机第 4 步被裁掉一半）。
+   卡片 body 的默认限高是给长清单用的；数据流是固定 4 行，按内容伸展
+   （仍留 max-height 兜底，超出时内部滚动是显式的）。 */
+.rg-card-body:has(.rg-dataflow) {
+  height: auto;
+  max-height: 320px;
+}
+
+/* 减少动态效果：节点拖动、布局过渡与图例都不得播放动画。 */
+@media (prefers-reduced-motion: reduce) {
+  .rg-graph-node,
+  .rg-graph-toolbar,
+  .rg-graph-legend,
+  .rg-graph-longtext {
+    transition: none !important;
+    animation: none !important;
+  }
+}
 `
 
 /** 增量样式的元素 id（与主表同样幂等）。 */

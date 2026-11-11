@@ -133,10 +133,39 @@ recency-guard (dsh-recency-guard): Error: cannot get property "configEditor" wit
 formatter 自己再拼一份。v0.7 重构 display 时漏掉摊平，宿主层测试立刻以
 `status.profile === undefined` 报出 —— 注释与实现漂移的典型，别再犯。
 
-## 6. 版本号同步（三锚点）
+## 6. 版本同步纪律（四锚点）
 
-发版前核对：`package.json` ↔ `README.md` ↔ `docs/agents/api.md` 的版本一致。
-能力清单新增 exposed 能力时，三个文档同步更新。
+**四个锚点必须同值**（当前 `0.16.0`）：
+
+| 锚点 | 位置 | 谁读它 |
+| --- | --- | --- |
+| 1 | [`package.json`](../../package.json) 的 `version` | npm / 安装器 / dsh 兼容闸门 |
+| 2 | [`README.md`](../../README.md) 顶部版本行 | 人（用户第一眼看到的版本） |
+| 3 | `docs/agents/` 内的当前版本引用（`api.md` / `design.md` / `architecture.md` 标题等） | 开发者 / 评审 |
+| 4 | [`dsh-plugin.json`](../../dsh-plugin.json) 的 `version` | 社区 manifest 生态 |
+
+### 顺序（反了就会造出 npm 上不存在的版本）
+
+```text
+改四锚点 → build/typecheck/lint/test 全绿 → git tag v<version> → npm publish → GitHub release
+```
+
+- **先 tag 后改锚点**：tag 指向的提交里 `package.json` 还是旧版本，用户按 tag 装到的是旧代码；
+- **先 publish 后改锚点**：npm 上出现一个仓库里查不到的版本号，"源码 / 发布"从此对不上账；
+- **锚点漏一个**：市场 manifest、安装器、README 各说各话 —— 本项目 v0.14.0 起点的
+  `package.json 0.14.0 / 提交信息 v0.15.0 / tag v0.11.4 / npm latest 0.12.1` 就是这个缺陷的实例。
+
+### 发版前核对（可复制）
+
+```bash
+node -e "const a=require('./package.json'),b=require('./dsh-plugin.json'); console.log('pkg',a.version,'manifest',b.version,a.version===b.version?'OK':'MISMATCH')"
+grep -n "v0\.16\.0\|0\.16\.0" README.md dsh-plugin.json docs/agents/api.md docs/agents/design.md docs/agents/architecture.md
+```
+
+判据：四处全部命中 `0.16.0`；历史版本号（如 `v0.11.1`）只允许出现在"历史 / 复盘"语境里。
+
+能力清单新增 exposed 能力时，`capability-specs.ts`、`api.md`、`capabilities.md`、README 能力表
+四处同步更新（漏一处，用户视角就等于没有这个能力）。
 
 ## 6.1 客户端状态纪律（v0.5）
 
@@ -205,6 +234,68 @@ React 合成事件冒泡、指针捕获异常、手势互斥，在纯函数测�
 `dsh --profile <name> <app>`（profile 在 app 名之前），并用
 `--from-default-profile web` 建干净沙箱。**判别是否真的隔离**：日志里出现
 `dsh-anic` / `codegraph` 就说明跑的是 shipped `web` profile，不是你的沙箱。
+
+## 6.4 v0.16 新增纪律（确定性证据 / 贪心隔离 / 可写逃生 / 可空契约）
+
+**确定性冲突证据**
+
+- **finding 必须能回指原文**：每条带 `source{file,line}` + `declaration`；
+  没有声明 / 范围不可判定 / 对手不在场 ⇒ **不产生 finding**（不猜）。
+- **finding 不是计划**：发现冲突 ≠ 已解决。计划器单独算「关谁、关几个、能否治好」；
+  把两者合并会让「发现」被误读成「解决」。
+- **`unresolved` 必须上屏**：受保护组件/官方插件/无候选/配额不足导致治不了的冲突，
+  要进 `status` / 面板快照 / `decision.json` / `recover` 输出；静默 = 假装治好。
+- **禁止用 recency 目标顶替确定性目标**：命中 finding 但计划为空时，不行动，
+  残余进 `unresolved`。
+
+**贪心隔离**
+
+- **依赖联动是硬需求**：关 X 必须连带关依赖它的插件，否则制造新的加载失败。
+  用反向邻接表求闭包（环状依赖有 `visited` 终止），不要字符串改名。
+- **配额按整组判定**：整组放不进 `maxAutoDisable` 就一个都不动；半关比不关更坏。
+- **无声明保持原序**：所有候选都未声明 ⇒ 返回输入顺序（纯 recency 逐位不变），
+  兼容性兜底必须有双向排序夹具。
+- **崩溃路径只做一轮**（同步、无 `await` 余裕），启动后的 `recover()` 才做完整循环；
+  两条路径共用 `verdictPatch` 形状，避免观察/行动两态字段漂移。
+
+**写安全**
+
+- **崩溃路径全同步原子写**（守护行/启动记录/决策），异步写输给崩溃。
+- **常态路径用锁做幂等提交**（`writeDecisionLocked` / `updateDecisionLocked` /
+  `writePartitionIndexLocked`）：已有 `await` 的地方才允许用锁，且合并必须幂等。
+- **锁卫生清理判据**：空内容 / 非正整数 PID / 死 PID，且年龄 > 5s；
+  `pid=0` 是「不完整记录」不是「活进程持有」（POSIX 上 `kill(0,0)` 成功）。
+
+**可写 rescue**
+
+- **默认 dry-run**：不带 `--yes` 绝不写盘；写命令只在显式授权时执行。
+- **两阶段 + 哈希**：`prepared`（beforeHash/afterHash/原 index）→ 原子改 → `applied`；
+  `--resume` 按哈希判定第二步是否生效，现场已变 ⇒ 退出码 3 拒绝，不硬改。
+- **回插按原 index 升序**，一次只改一个位置。
+
+**客户端可空契约**
+
+- 宿主声明非空 ≠ 运行时不发 `null`。客户端只在 `snapshot-view.ts` 的
+  `PanelSnapshotView` 放宽**已证明可空**的字段，禁止照抄宿主类型后 `.toFixed()` 硬算。
+- **禁止假 0**：不可判定显示原因 / null，不补一个看起来正常的数字。
+- 新增可空字段必须同时更新 `panel-snapshot-nullability` 契约测试。
+
+**竞态与对账（T14-08）**
+
+- **journal 只准真追加**：`appendFileSync` / `appendFile`，禁止「整读 → 追加 → 原子写回」
+  —— 旧快照会覆盖崩溃路径刚写的 `crash-detected`（真机约 1/9 复现）。
+  行数上限由 `trimJournalIfNeeded()` 在异步/加锁/幂等时机裁剪；**崩溃路径永不 trim**。
+- **以决策文件为真相补账**：哨兵在场 + `reason==='crash-recovery'` + `disable` 非空时，
+  state 少了被关插件或 `crashSeq<1` ⇒ `state-reconcile` 幂等补回；三个条件缺一不补（不猜）。
+- **清零必须 CAS**：干净启动只在 `s.crashSeq === 启动时读到的值` 时归零；
+  异步 boot 的旧快照不得覆盖崩溃路径刚写的计数。
+- **降级要可复核**：启动编排的 catch 除了 logger，必须落一条 journal `note` 且带
+  `degraded: true`（重启后仍可查、面板可消费）；失败兜底分支要留可选注入点，
+  别靠“把磁盘写坏”来测。
+- **不可观测死分支先转成可观测，再断言**：如 `roundBudget(P)=P+1` + `PlanOptions.roundBudget`
+  注入小预算，让「预算耗尽」成为可断言分支；**不要给死分支补假测试**。
+
+当前基线：`npm test` **68/68**，`npx tsc --noEmit` 0，`npm run lint` 0。
 
 ## 7. 发布与沙箱流程
 

@@ -21,7 +21,26 @@
     "pollingOn": "每 {seconds} 秒轮询",
     "pollingPaused": "轮询已暂停（画面停在暂停时刻）",
     "restore": "恢复非嫌疑插件",
-    "stale": "数据已停留 {minutes} 分钟（轮询已暂停）"
+    "stale": "数据已停留 {minutes} 分钟（轮询已暂停）",
+    "degradedGraph": "图谱不可得：{reason}（不显示 ≠ 没有关系）",
+    "degradedGraphStale": "图谱暂不可得：{reason}（当前显示的是上次成功的数据）",
+    "degradedArchives": "归档不可得：{reason}（不显示 ≠ 归档为空）",
+    "degradedArchivesStale": "归档暂不可得：{reason}（当前显示的是上次成功的数据）"
+  },
+  "groups": {
+    "overview": "概览",
+    "decisions": "决策",
+    "observation": "观测",
+    "capabilities": "能力图谱",
+    "diagnostics": "诊断"
+  },
+  "error": {
+    "title": "面板渲染出错",
+    "hint": "其余数据仍在守护进程中；这一块内容未能渲染。复制下面的摘要可用于报障。",
+    "summary": "错误摘要",
+    "retry": "重试",
+    "copy": "复制错误摘要",
+    "copied": "已复制"
   },
   "sections": {
     "backupPolicy": "备份策略",
@@ -61,6 +80,7 @@
     "fewerTransitions": "收起较早的迁移"
   },
   "metrics": {
+    "title": "量化指标",
     "crashRate": "崩溃率",
     "crashPressure": "崩溃压力（EWMA）",
     "meanRecoveryTime": "平均恢复耗时",
@@ -71,7 +91,9 @@
     "intervals": "崩溃间隔（中位 / CV）",
     "changePoint": "CUSUM 变点",
     "controlBand": "控制带（休哈特）",
-    "undefined": "不可判定"
+    "undefined": "不可判定",
+    "valueUndefined": "指标声明为可判定但值为空（结构不完整）",
+    "unavailableReason": "跨分区只读视图不提供运行时指标（读不到 ≠ 一切为零）"
   },
   "markov": {
     "title": "转移矩阵",
@@ -167,7 +189,9 @@
     "sinks": "只消费",
     "isolated": "孤立",
     "edges": "{count} 条边",
-    "more": "还有 {count} 个"
+    "more": "还有 {count} 个",
+    "less": "收起",
+    "nodeTitle": "{label} · 入 {in} / 出 {out}"
   },
   "decisionEvidence": {
     "empty": "尚无嫌疑名单（未发生过崩溃恢复决策）",
@@ -202,6 +226,7 @@
     "list": "注册 / 生产 / 消费",
     "none": "图谱里没有能力节点",
     "graphMissing": "图谱数据未就绪：生产/消费链路只在图谱里，这里不猜",
+    "unavailable": "跨分区只读视图不提供能力矩阵（不可得 ≠ 0 项）",
     "colName": "能力",
     "colStage": "阶段",
     "colExposed": "暴露",
@@ -221,12 +246,23 @@
   },
   "graph": {
     "title": "能力生产消费图",
-    "hint": "Ctrl/⌘+滚轮缩放 · 拖拽平移 · 拖节点调整布局 · 点击高亮 · 双击居中 · Esc 退出观察",
+    "hint": "Ctrl/⌘+滚轮缩放 · 拖拽平移 · 拖节点调整布局 · 悬停看邻域 · 点击高亮 · 双击居中 · Esc 退出观察",
     "zoomGroup": "缩放",
     "zoomIn": "放大",
     "zoomOut": "缩小",
     "fit": "适配",
-    "reset": "清除观察态",
+    "fitClamped": "已按可读下界适配（{scale}×）",
+    "fitClampedMax": "已按可读上界适配（{scale}×）",
+    "fitAllNote": "已适配全图（内容较多，文字偏小，可点「放大视图」）",
+    "fitAllHint": "首屏优先保证所有节点完整可见；要读小字请用「放大视图」或 ＋。",
+    "fitClampedHint": "整图完整入画会缩到文字不可读；适配后允许滚动/平移查看边缘节点。",
+    "expandView": "放大视图",
+    "collapseView": "还原视图",
+    "expandHint": "把图谱撑到视口 70%；Esc 先退出放大（一次只退一层）",
+    "collapseKeptZoom": "已还原高度（保留当前缩放）",
+    "collapseKeptZoomHint": "还原视图不重置缩放/平移；需要整图重排请点「适配」。",
+    "reset": "重置视图",
+    "resetHint": "缩放回到 100% 并居中（同时清除观察态与图例过滤）",
     "zoomLevel": "缩放",
     "counts": "节点 {nodes} · 边 {edges}",
     "selected": "已选中",
@@ -235,9 +271,14 @@
     "isolated": "孤立节点",
     "legend": "按类型显示或隐藏",
     "legendToggle": "显示或隐藏「{kind}」",
+    "typeLegend": "节点类型",
+    "edgeLegend": "边语义",
+    "edgeLegendToggle": "显示或隐藏「{kind}」边",
+    "toneLegend": "语义色",
+    "toneLegendToggle": "显示或隐藏「{tone}」节点",
     "empty": "图谱为空",
     "unavailable": "图谱数据不可用（宿主未返回图谱）。",
-    "search": "搜索节点（回车定位第一个）",
+    "search": "搜索节点（↑↓ 切换，回车定位）",
     "searchResults": "搜索结果",
     "noResults": "没有匹配的节点",
     "details": "节点详情",
@@ -262,6 +303,13 @@
       "kind": "类型",
       "stage": "阶段"
     },
+    "tone": {
+      "neutral": "中性",
+      "info": "信息",
+      "success": "成功",
+      "warn": "警告",
+      "error": "错误"
+    },
     "onlyConnected": "只看关联",
     "onlyConnectedHint": "只保留与选中节点双向可达的子图（先选中一个节点）",
     "kind": {
@@ -272,6 +320,7 @@
       "gap": "缺口"
     },
     "matchIndex": "第 {index}/{total} 个",
+    "omittedChars": "已省略 {count} 个字符",
     "edgeDetails": "边详情",
     "edgeFrom": "生产方（起点）",
     "edgeTo": "消费方（终点）",
@@ -285,8 +334,11 @@
       "label": "关联范围",
       "hops1": "直接",
       "hops2": "两跳",
+      "hops3": "三跳",
       "closure": "全连通"
     },
+    "hopDepth": "{depth} 跳内",
+    "hopDepthAll": "全连通（不设跳数上限）",
     "filteredEmpty": "当前过滤条件把图滤空了。",
     "filteredEmptyReset": "恢复显示",
     "searchMore": "其余 {count} 个匹配"
@@ -340,6 +392,7 @@
     "delta": "差值",
     "points": "个百分点",
     "undefined": "不可判定",
+    "unavailable": "该视图不含共现验证（不可得 ≠ 命中率 0%）",
     "mayWeightYes": "可以据此加权",
     "mayWeightNo": "不应加权"
   },
@@ -347,6 +400,7 @@
     "threshold": "确认轮数",
     "rate": "误伤率",
     "insufficient": "样本不足，不可判定（不是 0%）",
+    "unavailable": "该视图不含误伤校准段（不可得 ≠ 阈值 0）",
     "unattributedRestores": "证据链缺口",
     "evidenceGap": "证据链缺口",
     "evidenceGapHint": "（记录可能损坏，误伤率偏低）"
@@ -356,6 +410,7 @@
     "hint": "与「嫌疑排名」并列的第二套口径（研究文档 07 §2.3：并行读数，不替换默认值）",
     "posterior": "后验均值",
     "score": "贝叶斯分",
-    "insufficient": "样本稀疏，不可判定"
+    "insufficient": "样本稀疏，不可判定",
+    "unavailable": "该视图不含贝叶斯读数（不可得 ≠ 没有嫌疑）"
   }
 }

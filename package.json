@@ -1,7 +1,7 @@
 {
   "name": "dsh-recency-guard",
-  "version": "0.14.0",
-  "description": "Crash-recovery guard for DeepSeek Harness: records third-party/experimental plugin install & update recency, backs up their config, and after a crash auto-disables the most-recently-updated plugin(s) so the profile boots again, then restores stable config.",
+  "version": "0.16.0",
+  "description": "Crash-recovery guard for DeepSeek Harness: records third-party/experimental plugin install & update recency, backs up their config, and after a crash auto-disables the most-recently-updated plugin(s) so the profile boots again, then restores stable config. Ships a management panel with quantified observability, an interactive capability graph, per-project partition isolation, archive-and-reset, and an offline rescue CLI.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -23,6 +23,9 @@
     "bin",
     "cordis.patch.yml",
     "locale",
+    "assets",
+    "screenshots.json",
+    "dsh-plugin.json",
     "README.md",
     "LICENSE"
   ],
@@ -34,7 +37,9 @@
     "deepseek-harness",
     "crash-recovery",
     "recency",
-    "plugin-manager"
+    "plugin-manager",
+    "plugin-guard",
+    "observability"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",

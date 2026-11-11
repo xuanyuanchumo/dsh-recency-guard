@@ -1,18 +1,23 @@
 import type { ReactElement } from 'react'
 import { useRef } from 'react'
 import { t } from '../i18n/i18n.ts'
-import type { GraphNode } from '../../shared/graph-contract.ts'
+import type { GraphEdge, GraphNode } from '../../shared/graph-contract.ts'
 import {
+  EDGE_KIND_ORDER,
   KIND_ORDER,
+  TONE_ORDER,
+  edgeKindKey,
   kindKey,
   legendColorOf,
   legendShapeOf,
   shapePath,
+  toneKey,
   type ColorMode,
   type LayoutMode,
   type EdgeDetail,
   type LinkRange,
 } from './graph-model.ts'
+import { ellipsize, searchKeyAction } from './graph-interaction.ts'
 // 小地图类型来自 minimap-model（v0.12 拆分，保持 graph-model 在复杂度预算内）。
 import type { MinimapNodeRect, MinimapViewportRect } from './minimap-model.ts'
 
@@ -52,27 +57,42 @@ export interface GraphToolbarProps {
   currentMatchId: string | null
   onToggleResults: () => void
   onLocate: (id: string) => void
-  /** 请求下一个匹配（回车；取模与窗口滑动在图谱侧由 searchSummary 完成）。 */
+  /** 请求下一个匹配（回车 / ↓；取模与窗口滑动在图谱侧由 searchSummary 完成）。 */
   onMatchNext: () => void
+  /** 请求上一个匹配（↑；键盘可达性补齐 —— 只能单向循环时越过头就回不去）。 */
+  onMatchPrev: () => void
   counts: Record<string, number>
   hidden: ReadonlySet<string>
   onToggleKind: (kind: GraphNode['kind']) => void
+  /** 边语义图例（v0.16）：计数取原始图，开关与节点图例正交。 */
+  edgeCounts: Record<string, number>
+  hiddenEdgeKinds: ReadonlySet<string>
+  onToggleEdgeKind: (kind: GraphEdge['kind']) => void
+  /** 语义色图例（v0.16）：回答「危险程度」，与「它是什么」正交。 */
+  toneCounts: Record<string, number>
+  hiddenTones: ReadonlySet<string>
+  onToggleTone: (tone: GraphNode['tone']) => void
   onlyConnected: boolean
   onToggleConnected: () => void
   connectedAvailable: boolean
   /** 「只看关联」的跳数档位（仅在开关打开时显示；见 GraphToolbar 里的档位条）。 */
   linkRange: LinkRange
   onLinkRange: (range: LinkRange) => void
+  /** 当前档位的实际跳数（0 = 闭包）—— 数字读出来，用户不必猜「两跳」是几。 */
+  hopDepth: number
   /** 小地图开关（概览导航）。 */
   minimapVisible: boolean
   onToggleMinimap: () => void
+  /** 放大视图（容器高度撑到视口 70%；Esc 先退这一层）。 */
+  expanded: boolean
+  onToggleExpand: () => void
   /** 全部可见节点（图例的代表形状从实际数据导出，不复制映射 —— 单一真相源）。 */
   allNodes: GraphNode[]
 }
 
 const LAYOUT_MODES: readonly LayoutMode[] = ['layered', 'radial']
 const COLOR_MODES: readonly ColorMode[] = ['tone', 'kind', 'stage']
-const LINK_RANGES: readonly LinkRange[] = ['hops1', 'hops2', 'closure']
+const LINK_RANGES: readonly LinkRange[] = ['hops1', 'hops2', 'hops3', 'closure']
 
 export function GraphToolbar(props: GraphToolbarProps): ReactElement {
   return (
@@ -97,21 +117,23 @@ export function GraphToolbar(props: GraphToolbarProps): ReactElement {
           placeholder={t('graph.search')}
           onChange={(event) => props.onQuery(event.target.value)}
           onKeyDown={(event) => {
-            // 回车循环遍历（v0.11）：多匹配时依次跳转而不是永远停在第一个。
-            // 游标由面板持有（locateMatch），这里只报告「用户又要下一个」。
-            // 守卫用 matchTotal 而不是 matches.length：matches 是**窗口**，
-            // 窗口为 0（显示上限被改成 0，或结果全部被折叠）时全量命中依然存在，
-            // 用窗口长度会把 Enter 悄悄禁用 —— 快捷键失效比少一行列表严重。
-            if (event.key === 'Enter' && props.matchTotal > 0) {
+            // 搜索框键盘语义在 graph-interaction.searchKeyAction（可单测）：
+            // ↑↓ 双向遍历、回车前进、Esc 清空，且输入法组合键不被抢。
+            const action = searchKeyAction(event.key, props.matchTotal > 0)
+            if (action === 'next') {
               event.preventDefault?.()
               props.onMatchNext()
+            } else if (action === 'previous') {
+              event.preventDefault?.()
+              props.onMatchPrev()
+            } else if (action === 'clear') {
+              props.onQuery('')
             }
-            if (event.key === 'Escape') props.onQuery('')
             // 搜索框里的按键不该冒泡到画布（否则输入 `0` 会触发「适配视图」）。
             event.stopPropagation()
           }}
           aria-label={t('graph.search')}
-          aria-keyshortcuts="Enter"
+          aria-keyshortcuts="Enter ArrowDown ArrowUp Escape"
         />
         {props.query.trim() !== '' && (
           <ul className="rg-search-results" role="listbox" aria-label={t('graph.searchResults')}>
@@ -174,12 +196,18 @@ export function GraphToolbar(props: GraphToolbarProps): ReactElement {
           闭包 = 整张图，于是按钮按下后画面毫无变化 —— 它是个摆设。
           档位把「直接相关 / 链路 / 全连通」三种真实问题分开，切换才看得见差别。 */}
       {props.onlyConnected && (
-        <Segmented
-          label={t('graph.linkRange.label')}
-          options={LINK_RANGES.map((range) => ({ value: range, label: t(`graph.linkRange.${range}`) }))}
-          active={props.linkRange}
-          onSelect={(value) => props.onLinkRange(value as LinkRange)}
-        />
+        <>
+          <Segmented
+            label={t('graph.linkRange.label')}
+            options={LINK_RANGES.map((range) => ({ value: range, label: t(`graph.linkRange.${range}`) }))}
+            active={props.linkRange}
+            onSelect={(value) => props.onLinkRange(value as LinkRange)}
+          />
+          {/* 档位是文案，跳数是事实：闭包档没有有限跳数（0），显示成「全连通」而不是假造一个数字。 */}
+          <span className="rg-graph-depth" role="status">
+            {props.hopDepth > 0 ? t('graph.hopDepth', { depth: props.hopDepth }) : t('graph.hopDepthAll')}
+          </span>
+        </>
       )}
 
       <button
@@ -205,34 +233,80 @@ export function GraphToolbar(props: GraphToolbarProps): ReactElement {
 
       <button
         type="button"
+        className={`rg-button rg-button-small${props.expanded ? ' rg-button-active' : ''}`}
+        onClick={props.onToggleExpand}
+        aria-pressed={props.expanded}
+        title={t('graph.expandHint')}
+      >
+        {props.expanded ? t('graph.collapseView') : t('graph.expandView')}
+      </button>
+
+      <button
+        type="button"
         className="rg-button rg-button-small"
         onClick={props.onReset}
         disabled={!props.canReset}
+        title={t('graph.resetHint')}
         aria-label={t('graph.reset')}
       >
         {t('graph.reset')}
       </button>
 
-      {/* 类型图例：既是图例（带计数）也是开关（点击隐藏该类型）。
-          v0.11：图例颜色跟随当前着色口径（此前固定语义色，与「按类型」口径下
-          节点实际颜色不一致）；同时展示形状通道（色盲/灰度打印的第二编码）。 */}
+      {/* 图例 = 三个正交维度：类型（它是什么）/ 边语义（关系是什么）/
+          语义色（有多危险）。每个 chip 同时是开关，计数取**原始图**。 */}
       <span className="rg-graph-legend" role="group" aria-label={t('graph.legend')}>
-        {KIND_ORDER.filter((kind) => (props.counts[kind] ?? 0) > 0).map((kind) => (
-          <button
-            key={kind}
-            type="button"
-            className={`rg-legend-chip${props.hidden.has(kind) ? ' rg-legend-chip-off' : ''}`}
-            onClick={() => props.onToggleKind(kind)}
-            aria-pressed={!props.hidden.has(kind)}
-            title={t('graph.legendToggle', { kind: t(kindKey(kind)) })}
-          >
-            <svg className="rg-legend-shape" viewBox="-8 -8 16 16" aria-hidden>
-              <path d={shapePath(legendShapeOf(kind, props.allNodes), 7, 0)} fill={legendColorOf(kind, props.colorMode)} />
-            </svg>
-            {t(kindKey(kind))}
-            <span className="rg-legend-count">{props.counts[kind] ?? 0}</span>
-          </button>
-        ))}
+        <span className="rg-legend-group" role="group" aria-label={t('graph.typeLegend')}>
+          {KIND_ORDER.filter((kind) => (props.counts[kind] ?? 0) > 0).map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              className={`rg-legend-chip${props.hidden.has(kind) ? ' rg-legend-chip-off' : ''}`}
+              onClick={() => props.onToggleKind(kind)}
+              aria-pressed={!props.hidden.has(kind)}
+              title={t('graph.legendToggle', { kind: t(kindKey(kind)) })}
+            >
+              <svg className="rg-legend-shape" viewBox="-8 -8 16 16" aria-hidden>
+                <path d={shapePath(legendShapeOf(kind, props.allNodes), 7, 0)} fill={legendColorOf(kind, props.colorMode)} />
+              </svg>
+              {t(kindKey(kind))}
+              <span className="rg-legend-count">{props.counts[kind] ?? 0}</span>
+            </button>
+          ))}
+        </span>
+        <span className="rg-legend-group" role="group" aria-label={t('graph.edgeLegend')}>
+          {EDGE_KIND_ORDER.filter((kind) => (props.edgeCounts[kind] ?? 0) > 0).map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              className={`rg-legend-chip rg-legend-edge${props.hiddenEdgeKinds.has(kind) ? ' rg-legend-chip-off' : ''}`}
+              onClick={() => props.onToggleEdgeKind(kind)}
+              aria-pressed={!props.hiddenEdgeKinds.has(kind)}
+              title={t('graph.edgeLegendToggle', { kind: t(edgeKindKey(kind)) })}
+            >
+              <svg className="rg-legend-line" viewBox="0 0 16 8" aria-hidden>
+                <path d="M1 4 H11 M11 1.5 L14 4 L11 6.5" stroke="currentColor" strokeWidth="1.6" fill="none" />
+              </svg>
+              {t(edgeKindKey(kind))}
+              <span className="rg-legend-count">{props.edgeCounts[kind] ?? 0}</span>
+            </button>
+          ))}
+        </span>
+        <span className="rg-legend-group" role="group" aria-label={t('graph.toneLegend')}>
+          {TONE_ORDER.filter((tone) => (props.toneCounts[tone] ?? 0) > 0).map((tone) => (
+            <button
+              key={tone}
+              type="button"
+              className={`rg-legend-chip${props.hiddenTones.has(tone) ? ' rg-legend-chip-off' : ''}`}
+              onClick={() => props.onToggleTone(tone)}
+              aria-pressed={!props.hiddenTones.has(tone)}
+              title={t('graph.toneLegendToggle', { tone: t(toneKey(tone)) })}
+            >
+              <span className={`rg-dot rg-dot-${tone}`} aria-hidden />
+              {t(toneKey(tone))}
+              <span className="rg-legend-count">{props.toneCounts[tone] ?? 0}</span>
+            </button>
+          ))}
+        </span>
       </span>
     </div>
   )
@@ -289,6 +363,10 @@ export function GraphDetails(props: GraphDetailsProps): ReactElement {
     { title: t('graph.neighborsUp'), ids: props.upstream },
     { title: t('graph.neighborsDown'), ids: props.downstream },
   ]
+  // 长文本的第二个出口：侧栏只放摘要，完整内容在可展开块里，并显式给出
+  // 省略计数 —— 渲染层可以截断，但不许「静默」截断（CLAUDE.md 同款纪律）。
+  const labelText = ellipsize(node.label, 40)
+  const detailText = node.detail === undefined ? null : ellipsize(node.detail, 80)
   return (
     <aside className="rg-graph-aside" aria-label={t('graph.details')}>
       <header className="rg-graph-aside-header">
@@ -308,6 +386,13 @@ export function GraphDetails(props: GraphDetailsProps): ReactElement {
         <dt>{t('graph.degreeLabel')}</dt>
         <dd>{t('graph.degreeValue', { in: props.degree.in, out: props.degree.out })}</dd>
       </dl>
+      {labelText.truncated || (detailText?.truncated ?? false) ? (
+        <details className="rg-graph-longtext">
+          <summary>{t('graph.omittedChars', { count: labelText.omitted + (detailText?.omitted ?? 0) })}</summary>
+          <p className="rg-graph-longtext-full">{labelText.full}</p>
+          {detailText !== null && <p className="rg-graph-longtext-full">{detailText.full}</p>}
+        </details>
+      ) : null}
       {groups.map((group) =>
         group.ids.length === 0 ? null : (
           <div className="rg-graph-neighbors" key={group.title}>
@@ -385,20 +470,7 @@ export function EdgeDetails({ detail, onClose }: EdgeDetailsProps): ReactElement
   )
 }
 
-/** 边语义 → i18n 键。 */
-export function edgeKindKey(kind: EdgeDetail['kind']): string {
-  switch (kind) {
-    case 'produces':
-      return 'graph.edgeProduces'
-    case 'consumes':
-      return 'graph.edgeConsumes'
-    case 'transitions':
-      return 'graph.edgeTransitions'
-    case 'ranks':
-    default:
-      return 'graph.edgeRanks'
-  }
-}
+/** 边语义 → i18n 键在 graph-model（与图例、详情共用同一张映射表，避免漂移）。 */
 
 /**
  * 小地图（Overview + 缩略导航）—— 纯展示：所有矩形由 graph-model 的投影算好传来。

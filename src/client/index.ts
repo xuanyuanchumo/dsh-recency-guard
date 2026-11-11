@@ -1,5 +1,5 @@
 import { createElement, type ReactElement } from 'react'
-import { GuardPanel } from './panel/GuardPanel.tsx'
+import { PanelShell } from './panel/PanelShell.tsx'
 import { GuardPanelIcon } from './panel/GuardPanelIcon.ts'
 import { registerDictionaries, t } from './i18n/i18n.ts'
 import { fetchSnapshot, fetchGraph, fetchArchives, postAction } from './api/api.ts'
@@ -163,7 +163,7 @@ export function integratePanel(ctx: unknown): void {
     try {
       const panelRegistration = api.register(
         { name: 'main', key: PANEL_ID, order: 20, label: () => t('panel.title'), locale: NAMESPACE },
-        () => createElement(GuardPanel, { fetchSnapshot, fetchGraph, fetchArchives, postAction }),
+        () => createElement(PanelShell, { fetchSnapshot, fetchGraph, fetchArchives, postAction }),
       )
       if (typeof panelRegistration === 'function') yield panelRegistration
       // 侧栏图标：id 必须与 main 的 key 一致。

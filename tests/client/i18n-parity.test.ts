@@ -126,8 +126,8 @@ function main() {
       for (const match of source.matchAll(/(?<![\w$])t\(\s*'([a-zA-Z0-9_.]+)'/g)) {
         const key = match[1] as string
         usedKeys += 1
-        if (!zh.has(key)) missing.push(`zh:${name}:${key}`)
-        if (!en.has(key)) missing.push(`en:${name}:${key}`)
+        if (!zh.has(key)) missing.push(`zh:${filePath}:${key}`)
+        if (!en.has(key)) missing.push(`en:${filePath}:${key}`)
       }
     }
     check('源码扫描到了足够多的键（防止正则失效后静默全过）', usedKeys > 80, usedKeys)

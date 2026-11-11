@@ -1,9 +1,14 @@
-import { mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises'
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFile, mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
+import { writeFileAtomicSync } from '../core/atomic-sync.ts'
 import type { DecisionSuspect } from '../guard/decision.ts'
+// 声明式冲突 finding 的形状只在 `conflict-metadata.ts` 定义一次：
+// 决策文件、state、status 投影三处若各写一份，迟早漂移出「字段名对不上」。
+import type { ConflictFinding } from '../guard/conflict-metadata.ts'
 import { readCooccurrenceSync, writeCooccurrenceSync, readObservation, readObservationSync, writeObservation } from '../observe/cooccurrence-store.ts'
+import { cleanStaleLocks, isLockTimeout } from './lock-hygiene.ts'
 
 /**
  * Journal / state store for dsh-recency-guard.
@@ -118,6 +123,18 @@ export interface GuardState {
     act: boolean
     label: string
     headSuspect: string | null
+    /**
+     * 声明式冲突证据（T14-03）：本轮判定若是被 finding 命中的，这里存
+     * 「命中哪几类、为什么、关了谁」。
+     *
+     * 为什么存 findBy 而不只存 targets：命令窗口要回答的是「为什么这是
+     * 确定性证据」，只给名字等于把声明原文丢了 —— 那就退回黑盒。
+     * 缺省 = 旧版本 state（未记录），不是「没有冲突」。
+     */
+    deterministic?: {
+      findings: ConflictFinding[]
+      targets: string[]
+    }
   }
   /**
    * 连续「异常终止但未留下哨兵」的轮数（v0.12.1）。
@@ -156,96 +173,33 @@ export interface PrebootDecision {
    * 守护行只认 disable 名单，phase 供 reconcile 与面板对账。
    */
   phase?: 'prepared' | 'quarantined' | 'reconciled'
+  /**
+   * 声明式冲突证据（T14-03）：本决策为什么是确定性的。
+   *
+   * 纯追加字段：守护行的 `disabled` 表达式只读 `disable`，读到这里多出来的
+   * 键不会改变行为；对 reconcile / 面板 / rescue 它是可复核的「凭什么」。
+   * 省略 = 本轮没有命中任何声明式冲突（不是「冲突为空」以外的意思）。
+   */
+  deterministicEvidence?: {
+    findings: ConflictFinding[]
+    targets: string[]
+  }
+  /**
+   * 贪心隔离的残余 error finding（T14-03 ③）。
+   *
+   * 非空 = 守护「治不了这条」（受保护/官方组件导致，或无候选可动）。
+   * 它是数据面事实：status / 工具 / 面板 / rescue 都要能读到，不许静默吞掉。
+   */
+  unresolved?: ConflictFinding[]
 }
 
 export function emptyState(): GuardState {
   return { bootMarker: null, crashSeq: 0, autoDisabled: [], stabilized: false, restored: [] }
 }
 
-/**
- * 陈旧写锁的最小年龄（毫秒）。
- *
- * 比它年轻的锁一律不清理：锁文件由 `writeFile(..., {flag:'wx'})` 创建后
- * 立刻写入 PID，两者之间存在一个**极短的零字节窗口** —— 此时清理会把
- * 正在创建的锁删掉，两个写者就会同时持锁。5 秒的窗口远大于该间隙，
- * 又远小于「崩溃遗留」的时间尺度（实测遗留锁已数小时）。
- */
-const STALE_LOCK_MIN_AGE_MS = 5_000
-
-/** 陈旧锁清理结果（可观测：清了什么、留了什么、为什么）。 */
-export interface StaleLockReport {
-  /** 被清理的锁文件名。 */
-  removed: string[]
-  /** 保留的锁文件名（可能仍被活进程持有，或太新）。 */
-  kept: string[]
-}
-
-/** 进程是否存活（EPERM = 存在但无权探测，按存活处理）。 */
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-/**
- * 清理**失效的写锁**（v0.11.1 紧急修复）。
- *
- * 背景（真机实锤）：宿主崩溃恰好发生在锁文件创建与写入 PID 之间，留下
- * 一个 **0 字节的 `state.json.lock`**。`@deepseek-ai/dsh-atomic-write` 的
- * 接管逻辑只在锁里**有可读 PID 且进程已死**时才删除；记录不完整的锁
- * 会被一直等待，2 秒后超时抛错 —— 而该错误发生在 `boot()` 里，直接成了
- * 宿主 `fatal load failure`（DSH 起不来）。守护设施绝不能把主流程拖死。
- *
- * 清理判据（任一成立且超过年龄阈值）：
- * - 锁内容为空 / 不是正整数 PID（不完整记录，永远无法被接管）；
- * - PID 对应的进程不存在（等价于库的接管语义，提前做掉少等 2 秒）；
- * - 其余保留（可能真被活进程持有 —— 那种情况必须等，不能抢）。
- */
-export function cleanStaleLocks(dir: string, now = Date.now()): StaleLockReport {
-  const report: StaleLockReport = { removed: [], kept: [] }
-  let entries: string[]
-  try {
-    entries = readdirSync(dir)
-  } catch {
-    return report
-  }
-  for (const name of entries) {
-    if (!name.endsWith('.lock')) continue
-    const path = join(dir, name)
-    try {
-      if (now - statSync(path).mtimeMs < STALE_LOCK_MIN_AGE_MS) {
-        report.kept.push(name)
-        continue
-      }
-      let text = ''
-      try {
-        text = readFileSync(path, 'utf8').trim()
-      } catch {
-        report.kept.push(name)
-        continue
-      }
-      const pid = Number(text)
-      const incomplete = text === '' || !Number.isInteger(pid) || pid <= 0
-      if (!incomplete && processAlive(pid)) {
-        report.kept.push(name)
-        continue
-      }
-      rmSync(path, { force: true })
-      report.removed.push(name)
-    } catch {
-      report.kept.push(name)
-    }
-  }
-  return report
-}
-
-/** 判断一个错误是否是写锁超时（用于「清理后重试一次」的定向处理）。 */
-export function isLockTimeout(error: unknown): boolean {
-  return error instanceof Error && error.message.includes('timed out waiting for the writer lock')
-}
+// 再导出：历史 import 站点（tests/unit/store-lock.test.ts / index.ts）保持稳定。
+export { cleanStaleLocks, isLockTimeout } from './lock-hygiene.ts'
+export type { StaleLockReport } from './lock-hygiene.ts'
 
 export class Store {
   /** profile 根目录下的守护目录（分区索引与归档都在这里）。 */
@@ -305,20 +259,57 @@ export class Store {
   /**
    * Append journal events asynchronously.
    *
-   * 复杂度：O(n) 读 + O(n) 写（n = 既有行数 ≤ JOURNAL_MAX_LINES），
-   * 不是真正的 O(1) 追加 —— 原子写要整文件替换，读改写无法避免。
-   * 已知竞态：同一 profile 的两个进程同时 append 会有一条被覆盖。
-   * 当前调用方全在启动/备份路径（单进程），因此未加文件锁；
-   * 若将来在并发路径上追加，必须换成 `withFileLock` 或真 O(1) 追加（appendFile）。
+   * ## 为什么改成真追加（T14-08 真机缺陷修复）
+   *
+   * 旧实现是「整读 → 追加一行 → 原子写回」。这条整读整写与崩溃路径的
+   * `appendSync` 构成**丢证据竞态**，实测复现（missing-dep-required 用例
+   * 约 1/9 概率）：启动期 `recordChanges` 的异步 append 先读到一份**不含
+   * 崩溃事件**的旧快照，随后进程崩溃、退出处理器同步写入 crash-detected，
+   * 而那个挂起的异步写最后落地，把整份 journal 覆盖回旧快照 ——
+   * 崩溃证据（`crash-detected.suspects`）因此消失，而 decision/state 还在，
+   * 表现成「关了插件但说不清为什么」，最需要因果链的时刻恰好没有因果链。
+   *
+   * 修法不是给旧实现加锁，而是**换数据结构**：journal 本来就是 append-only
+   * 日志，用 `appendFile` 追加（O(1)、无整文件替换）⇒ 任何写者都不可能
+   * 用旧快照覆盖别人的新行。行数上限改由 `trimJournalIfNeeded()` 在**安全
+   * 时机**（异步路径、加锁、幂等）执行；崩溃路径永不 trim。
+   *
+   * 残余边界（诚实登记）：trim 的「读最新 → 原子写回」本身仍可能吞掉
+   * 恰好发生在写回窗口里的一次 crash append。但它只在**超过 1000 行**时
+   * 触发（每 1000 条事件一次），而旧实现是**每次 append** 都处于该窗口。
    */
   async append(events: JournalEvent | JournalEvent[]): Promise<void> {
     const list = Array.isArray(events) ? events : [events]
     if (list.length === 0) return
     const stamped: JournalRecord[] = list.map((e) => ({ ...e, t: new Date().toISOString() }))
-    const prev = existsSync(this.journalPath) ? await readFile(this.journalPath, 'utf8') : ''
-    const lines = journalLines(prev)
-    for (const e of stamped) lines.push(JSON.stringify(e))
-    await writeFileAtomic(this.journalPath, serializeJournal(lines), { mode: 0o644 })
+    await mkdir(this.dir, { recursive: true })
+    await appendFile(this.journalPath, stamped.map((e) => `${JSON.stringify(e)}\n`).join(''), { mode: 0o644 })
+    await this.trimJournalIfNeeded()
+  }
+
+  /**
+   * 超过行数上限时裁剪（幂等、加锁、best-effort）。
+   *
+   * 为什么不在崩溃路径做：空白处写着「崩溃路径只有同步工作能完成」，
+   * 而裁剪要读全文件再原子替换。崩溃路径改用纯追加，把上限交给这里。
+   */
+  private async trimJournalIfNeeded(): Promise<void> {
+    try {
+      if (!existsSync(this.journalPath)) return
+      if (journalLines(await readFile(this.journalPath, 'utf8')).length <= JOURNAL_MAX_LINES) return
+      await withFileLock(
+        this.journalPath,
+        async () => {
+          // 锁内重读：锁外那份可能已被别的进程追加过，按最新内容裁剪。
+          const latest = journalLines(await readFile(this.journalPath, 'utf8'))
+          if (latest.length <= JOURNAL_MAX_LINES) return
+          await writeFileAtomic(this.journalPath, serializeJournal(latest), { mode: 0o644 })
+        },
+        { waitMs: 3000 },
+      )
+    } catch {
+      /* best effort：裁剪失败只影响文件大小，不影响证据完整性 */
+    }
   }
 
   /**
@@ -329,15 +320,14 @@ export class Store {
    * process dies before any awaited write completes. The journal must therefore
    * be written synchronously, so the record of "what was installed and when"
    * survives the crash it documents.
+   *
+   * **纯追加**（见 `append` 的缺陷说明）：不读旧内容 ⇒ 不可能覆盖别人的新行。
    */
   appendSync(event: JournalEvent): void {
     try {
       if (!existsSync(this.dir)) mkdirSync(this.dir, { recursive: true })
       const record: JournalRecord = { ...event, t: new Date().toISOString() }
-      const prev = existsSync(this.journalPath) ? readFileSync(this.journalPath, 'utf8') : ''
-      const lines = journalLines(prev)
-      lines.push(JSON.stringify(record))
-      writeFileSync(this.journalPath, serializeJournal(lines), 'utf8')
+      appendFileSync(this.journalPath, `${JSON.stringify(record)}\n`, 'utf8')
     } catch {
       /* best effort: the journal must never break the host's startup */
     }
@@ -424,7 +414,14 @@ export class Store {
   writeStateSync(state: GuardState): void {
     try {
       if (!existsSync(this.dir)) mkdirSync(this.dir, { recursive: true })
-      writeFileSync(this.statePath, JSON.stringify(state, null, 2), 'utf8')
+      // T14-05：崩溃路径仍是同步，但必须**原子**提交。
+      //
+      // 旧实现是 `writeFileSync`：open('w') 先截断再写，并发的读者会读到
+      // 0 字节 state（跨进程实测同族缺陷见 decision.ts 的 507 次采样）。
+      // 崩溃路径读到这里的人正是「下一次启动的恢复判定」—— 读到空 state
+      // 等于把崩溃证据清零，崩溃循环立刻失去升级依据。
+      // 临时文件 + rename 保持同步语义（不加 await），只把窗口消灭掉。
+      writeFileAtomicSync(this.statePath, JSON.stringify(state, null, 2))
     } catch {
       /* best effort */
     }
@@ -531,10 +528,58 @@ export class Store {
   writeDecisionSync(decision: PrebootDecision): void {
     try {
       if (!existsSync(this.dir)) mkdirSync(this.dir, { recursive: true })
-      writeFileSync(this.decisionPath, JSON.stringify(decision, null, 2), 'utf8')
+      // 同 writeStateSync：崩溃路径保持同步语义，但改为原子提交。
+      // 这里是**最不能撕**的一个文件：守护行的 `disabled` 表达式在
+      // import 模块之前读它，读到半个 JSON ⇒ catch ⇒ 放行 ⇒ 崩溃重演。
+      writeFileAtomicSync(this.decisionPath, JSON.stringify(decision, null, 2))
     } catch {
       /* best effort */
     }
+  }
+
+  /**
+   * 决策文件的**加锁**读改写（T14-05，仅限常态路径）。
+   *
+   * 为什么崩溃路径不用它：`withFileLock` 是 async，而 process exit 处理器里
+   * 只有同步工作能完成（await 之后进程已经死了）。两条路径分工如下：
+   * - **崩溃路径** ⇒ `writeDecisionSync`（同步 + 原子 rename，无锁）；
+   * - **常态路径**（restore / 手动 recover / 工具动作）⇒ 本方法。
+   *
+   * 锁的价值在常态路径：多个 dsh 实例（桌面 + web）同时恢复时，
+   * 「读当前决策 → 改 disable 名单 → 写回」会被交错覆盖，后写者用旧快照
+   * 把前者刚关掉的插件放回去。加锁把这段 RMW 串行化，原子 rename 保证
+   * 读者永不见半份文件。
+   */
+  async writeDecisionLocked(decision: PrebootDecision): Promise<void> {
+    await this.updateDecisionLocked(() => decision)
+  }
+
+  /**
+   * 决策文件的**加锁读改写**（T14-05）。
+   *
+   * 与 `writeDecisionLocked` 的分工：后者只写（覆盖），本方法把
+   * 「读当前 → 改 → 原子写」整段放进同一把跨进程锁里。
+   *
+   * 为什么需要独立的 RMW：`recover()` / `restore()` 会读当前决策再改
+   * `disable` 名单。两个 dsh 实例（桌面 + web）同时恢复时，无锁形态下
+   * 后写者用**自己读到的旧快照**覆盖前者刚关掉的插件 ⇒ 隔离被静默撤销，
+   * 下一次启动又把崩溃带回来。锁 + 锁内重读把这条竞态消掉。
+   *
+   * `mutate` 抛错 ⇒ 原样上抛且**不写**（宁可这轮不落盘，也不写半成品）。
+   */
+  async updateDecisionLocked(mutate: (current: PrebootDecision | null) => PrebootDecision): Promise<PrebootDecision> {
+    await mkdir(this.dir, { recursive: true })
+    return withFileLock(
+      this.decisionPath,
+      async () => {
+        // 锁内重读：锁外读到的快照可能已被别的进程改过。
+        const current = this.readDecisionSync()
+        const next = mutate(current)
+        await writeFileAtomic(this.decisionPath, JSON.stringify(next, null, 2), { mode: 0o644 })
+        return next
+      },
+      { waitMs: 3000 },
+    )
   }
 
   /** Read the decision file synchronously. */
