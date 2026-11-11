@@ -88,3 +88,16 @@
 - **并发起 Bash 会触发 dsh-ops 0.5.1 的链接竞争**（`EXECUTOR_UNAVAILABLE`，`effects: none`）。4 个 teammate 并行时高频出现；这不是代码问题，重试即可，别把它当失败证据。
 - **teammate 报「tsc/lint 红」要先核对时序**：他们看到的常常是**别人接线中间态**的报错。让每个人 `grep` 自己的文件范围确认再下结论。
 - **写入范围必须显式声明并互斥**：4 个 teammate 同时改 `src/observability.ts` / `src/snapshot.ts` / `src/index.ts` 会产生中间态假红。旁路事实拆出独立文件（`status-projections.ts` / `preventive.ts`）既是复杂度纪律也是并发纪律。
+
+## 真机与并发（v0.16 实测新增）
+
+- **长驻 bash 后台 job 会拖垮整个 executor**：`EXECUTOR_UNAVAILABLE` 的真正根因不是「队友并发多」，而是**长时间活着的 bash job**（沙箱 web server）占住 dsh-ops 的 exec-tree。实测连杀 4 次长驻 job 后每次立即恢复。要跑常驻服务 → 用计划任务/独立进程，不要用 agent 的后台 job。
+- **变异工具与评估绝不能并发**：变异工具跑每个变异体时**临时改写 `src/**`**，eval-runner 的并行预热同时跑 `npm test` ⇒ 测试读到变异体 ⇒「产品有 bug」的假红（本轮实测 evaluate 因此误判 E3/E8）。已用 `.tmp/mutation.inflight` + `tests/run.ts` 拒绝出结论；**假红比没有红更危险**。
+- **「不可复现 ≠ 不存在」**：verify 曾把 `fault-injection` 的偶发红判成"时序抖动"，evidence 用失败保留现场 + `FI_ONLY` 30 轮复现，实锤两个真实竞态（journal 整读整写覆盖崩溃事件；crashSeq 被启动期清零覆盖）。**先保留现场，再谈概率**。
+- **`defined: true` 不代表子字段非空**：宿主 `Metric` 的 `defined` 只表示「这个读数可判定」，`intervals.cv` 仍可能是 `null`（附 `cvReason`）。客户端 formatter 写死 `cv: number` + `as never` ⇒ 真机整块白屏。**用泛型 `T | null` 让 tsc 兜底，别用 `as never` 关掉类型检查**。
+- **跨运行时类型必须有一张"可空契约"**：宿主会发 `null` 的字段（`partition-snapshot.ts` 的 `key: null`）必须与客户端视图声明一致，并写成契约测试（`panel-snapshot-nullability.test.ts` 静态对码宿主产出）。否则只有用户打开面板时才会炸。
+- **几何/排版缺陷只有真机截图能发现**：单测 + tsc 全绿时，初始视图仍会把节点切出视口、`70vh` 在宿主 slot 里不生效、卡片标题被压成竖排。**首屏完整性不变式**（任何节点不得切出视口）要写成纯函数断言，不能靠"看着还行"。
+- **变异工具必须按"生成偏移"施加变异**：`indexOf` 会把变异打进**更早出现的注释同形文本** ⇒ 假存活。每条工具修复都要有变异体级自证。
+- **「死分支」要先转成可观测再断言**：`quarantine-plan` 的轮数上界原本不可达 ⇒ 任何 off-by-one 变异都等价、杀不死。导出 `roundBudget(P)=P+1` + 可注入 `roundBudget` 后，`cap` / `no-candidate` / `no-error` 三向对照才成为真断言。**别为死分支补假测试**。
+- **兜底不能只写日志**：启动路径三处 catch 原来只有 `ctx.logger.warn`（重启后不可查）⇒ 现在各落一条 journal `note` + 机器可读 `degraded: true`。观测设施必须可复核，"降级了但没人知道"等于没降级。
+- **等价判定不能照抄上一轮**：`store.ts pid<=0` 原证明引用的是 sentinel 的 `pidAlive`，而 store 侧是另一份 `processAlive`；实测 `process.kill(0,0)` 成功 ⇒ 变异版会保留 pid=0 的锁。**等价理由的 proof 必须来自同一实现**。
