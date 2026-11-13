@@ -1,4 +1,4 @@
-# awesome-dsh-plugin 投稿材料（v0.18.0）
+# awesome-dsh-plugin 投稿材料（v0.18.1）
 
 > 依据 <https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md>
 > （2026-11-11 复核该文件当前内容）。
@@ -118,33 +118,33 @@ node -e "const fs=require('fs');const t=fs.readFileSync('docs/market-submission.
 | 项 | 值 |
 | --- | --- |
 | npm 包 | `dsh-recency-guard` |
-| npm `latest` | **0.17.0**（历史事实：2026-11-11 发布；v0.18.0 随本轮发布后刷新） |
+| npm `latest` | **0.17.0**（历史事实：2026-11-11 发布；v0.18.1 随本轮发布后刷新） |
 | latest tarball shasum | `b667bd20b6ea82d294dbc28e4eab1290b07dd963`（历史事实：216.5kB / 12 文件 / unpacked 777.8kB） |
-| 本仓库源码版本 | **0.18.0**（四锚点：`package.json` / README / `docs/agents` / `dsh-plugin.json`） |
-| GitHub | <https://github.com/xuanyuanchumo/dsh-recency-guard>（main；tag `v0.17.0` 已推远端；v0.18.0 tag 随本轮发布） |
-| GitHub Release | <https://github.com/xuanyuanchumo/dsh-recency-guard/releases/tag/v0.17.0>（`isDraft=false`；v0.18.0 随本轮发布） |
+| 本仓库源码版本 | **0.18.1**（四锚点：`package.json` / README / `docs/agents` / `dsh-plugin.json`） |
+| GitHub | <https://github.com/xuanyuanchumo/dsh-recency-guard>（main；tag `v0.17.0` 已推远端；v0.18.1 tag 随本轮发布） |
+| GitHub Release | <https://github.com/xuanyuanchumo/dsh-recency-guard/releases/tag/v0.17.0>（`isDraft=false`；v0.18.1 随本轮发布） |
 | 市场条目 | `data/plugins/xuanyuanchumo__dsh-recency-guard.yml`（已收录） |
 | 更新 PR | <https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/14245>（复用同一分支，HEAD `94ade1e`） |
 | 仓库创建时间 | `2026-11-07T07:44:06Z`（满足 1 天门槛） |
 | topics | `crash-recovery`、`deepseek-harness`、`dsh-plugin`、`plugin-guard` |
 | 许可 | MIT |
 
-> npm 与仓库四锚点**已一致**（v0.18.0，2026-11-13）；tag / Release / 市场更新分支均已闭环。
+> npm 与仓库四锚点**已一致**（v0.18.1，2026-11-13）；tag / Release / 市场更新分支均已闭环。
 > 条目不再保留 `tarball:` —— 已发布 npm，预构建安装免 `allowBuilds` 授权；
 > registry 映射自动采集，不手写 `npm:` 键。
 
-## 4.1 v0.18.0 本轮发布计划
+## 4.1 v0.18.1 本轮发布计划
 
 | 步骤 | 动作 | 证据 |
 |---|---|---|
-| 1 | 版本四锚点统一 0.18.0 | `package.json` / `dsh-plugin.json` / README / `docs/agents` |
+| 1 | 版本四锚点统一 0.18.1 | `package.json` / `dsh-plugin.json` / README / `docs/agents` |
 | 2 | build → typecheck → lint → test 全绿 | 见 §2 测试证据（88/88） |
-| 3 | `git tag v0.18.0` + SSH push | tag 指向 commit（四锚点已对齐） |
+| 3 | `git tag v0.18.1` + SSH push | tag 指向 commit（四锚点已对齐） |
 | 4 | GitHub Release（SSH，`isDraft=false`） | Release 页面 |
-| 5 | `npm publish` | registry `latest = 0.18.0`，tarball shasum |
+| 5 | `npm publish` | registry `latest = 0.18.1`，tarball shasum |
 | 6 | 市场条目更新 PR（复用 #14245 分支或新 PR） | PR 页面 + 描述与代码逐句核对 |
 
-**v0.18.0 对市场条目描述的增量**（若做条目更新）：
+**v0.18.1 对市场条目描述的增量**（若做条目更新）：
 - 新增「级联刹车：崩溃循环升级到顶后自动回滚到崩溃前启动状态」能力描述；
 - 新增「配置未知键 fail-loud」「journal 轮转」等行为说明（与代码一致）。
 
@@ -163,7 +163,7 @@ node -e "const fs=require('fs');const t=fs.readFileSync('docs/market-submission.
 dsh plugin --profile <profile名> add dsh-recency-guard
 
 # 指定版本（当前 latest = 0.17.0）
-dsh plugin --profile <profile名> add dsh-recency-guard@0.18.0
+dsh plugin --profile <profile名> add dsh-recency-guard@0.18.1
 
 # 从本地源码（开发）
 dsh plugin --profile <profile名> add file:/绝对路径/dsh-recency-guard

@@ -1,4 +1,4 @@
-# 对外面 API（dsh-recency-guard v0.18.0）
+# 对外面 API（dsh-recency-guard v0.18.1）
 
 > 本文件里的路由 / 工具签名 / 配置项从 `src/host/surface/routes.ts`、
 > `src/host/surface/tool-registration.ts`、`src/host/capability/capability.ts`
