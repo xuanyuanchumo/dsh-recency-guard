@@ -1,14 +1,14 @@
-# awesome-dsh-plugin 投稿材料（v0.18.1）
+# awesome-dsh-plugin 投稿材料（v0.19.0）
 
 > 依据 <https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md>
-> （2026-11-11 复核该文件当前内容）。
+> （2026-11-13 复核该文件当前内容）。
 >
 > **一个文件就是全部投稿**：该条目上一轮已收录（`data/plugins/xuanyuanchumo__dsh-recency-guard.yml`）。
 > 本轮提交的是**更新自己那一条**的 PR（去掉过期 tarball、刷新描述），内容如下。
 > 两个 README 由脚本从 `data/plugins/*.yml` 生成 —— **绝不手工编辑**，
 > 也不要顺手改任何既有条目（CI 会列出 PR 改到的每个既有条目供追问）。
 >
-> 本文件同时是**如实自查表**：没做的项不勾，发布事实按 2026-11-11 的 registry / GitHub 实际值记录。
+> 本文件同时是**如实自查表**：没做的项不勾，发布事实按 2026-11-13 的 registry / GitHub 实际值记录。
 
 ## 1. 投稿 YAML（PR 唯一文件）
 
@@ -17,8 +17,8 @@ url: https://github.com/xuanyuanchumo/dsh-recency-guard
 name: xuanyuanchumo/dsh-recency-guard
 category: security
 description:
-  en: "Crash-recovery guard for DeepSeek Harness: records plugin install and update recency plus declared compatibility metadata, blocks the offending suspects before the next boot after a crash, and restores stable plugins afterwards. Ships a management panel with an interactive capability graph, early-warning indicators that only observe (they never disable anything), per-project partition isolation, archive-and-reset, and an offline rescue CLI."
-  zh: "DeepSeek Harness 的插件崩溃恢复守护：记录插件的安装更新时序与声明的兼容元数据，崩溃后在下一次启动前拦下问题嫌疑插件，稳定后自动恢复。带可交互能力图谱、只观测不行动的预警指标、按项目分区隔离、归档重置与离线救援 CLI。"
+  en: "Crash-recovery guard for DeepSeek Harness: records plugin install and update recency plus declared compatibility metadata, blocks the offending suspects before the next boot after a crash, and restores stable plugins afterwards. Ships a management panel with an interactive capability graph, a dedicated tool-call card in the command window, early-warning indicators that only observe (they never disable anything), per-project partition isolation, archive-and-reset, and an offline rescue CLI."
+  zh: "DeepSeek Harness 的插件崩溃恢复守护：记录插件的安装更新时序与声明的兼容元数据，崩溃后在下一次启动前拦下问题嫌疑插件，稳定后自动恢复。带可交互能力图谱、命令窗口专用工具卡片、只观测不行动的预警指标、按项目分区隔离、归档重置与离线救援 CLI。"
 icon: https://raw.githubusercontent.com/xuanyuanchumo/dsh-recency-guard/main/assets/icon-256.png
 ```
 

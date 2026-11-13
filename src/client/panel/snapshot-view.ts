@@ -80,4 +80,14 @@ export type PanelSnapshotView = Omit<
    * 拿对方凭证核对必然假冲突）。null 让面板走「不带凭证」分支。
    */
   revision: PanelSnapshot['revision'] | null
+  /**
+   * 产物新鲜度（v0.19）。旧宿主没有该字段 ⇒ 按「缺失」处理（可选）。
+   *
+   * 为什么是可选而不是必填：面板要能加载**旧宿主**的快照（回放路径、
+   * 跨版本读取）—— 把新字段声明成必填会让 `.buildFreshness.stale` 直接崩。
+   * 缺失时面板不显示这一行（而不是显示「正常」——那是假绿）。
+   */
+  diagnostics: PanelSnapshot['diagnostics'] & {
+    buildFreshness?: PanelSnapshot['diagnostics']['buildFreshness'] | null
+  }
 }

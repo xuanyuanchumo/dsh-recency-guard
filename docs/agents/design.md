@@ -1,4 +1,4 @@
-# 架构与设计（dsh-recency-guard v0.18.1）
+# 架构与设计（dsh-recency-guard v0.19.0）
 
 > 版本说明：§0 记 v0.13 的三条设计纪律；§1–§15 是 0.7–0.12.1 的决策链与实测记录，
 > **原文保留**（标题里的历史版本号是事件编号，不是当前版本）。v0.14 / v0.15 的变更以
@@ -67,34 +67,35 @@ Ctrl+滚轮 scale `0.5245→0.6032` 且 scrollTop 不变）。
 
 ```
 src/
-├── index.ts            宿主入口（Loader 四件套：name / inject / Config / apply）
-│   └── Guard           守护流程：启动记录 / 崩溃决策 / 恢复 / 观测面
-├── tool-render.ts      工具输出双形态投影（规范值 ↔ 人读文本，同源）
-├── capability.ts       能力图（邻接表 + 双向可达性分析）
-├── capability-specs.ts 能力清单（投影，非第二真相源）
-├── lifecycle.ts        生命周期状态机 + 风险模型 + 崩溃趋势模型
-├── observability.ts    量化指标（Metric<T>）+ 统计工具（EWMA/CUSUM/分位数）
-├── isolation.ts        项目分区（路径归一 + 哈希键 + 分区索引）
-├── store.ts            分区存储（journal / state / decision / backups）
-├── decision.ts         预启动决策 + 指针文件 + 守护行表达式
-├── sentinel.ts         进程级崩溃哨兵（退出码 0/1 区分干净退出与崩溃）
-├── archive.ts          归档重置（搬走 + 留档；manifest 先读后搬）
-├── snapshot.ts         面板快照投影（一次成型，多视图共享）
-├── graph-data.ts       图谱数据模型 + 分层布局 + 连通分量（并查集）
-├── routes.ts           宿主数据面路由（Node http 风格 handler，路径字面量）
-├── routes-plugin.ts    路由子插件（唯一声明 webServer 硬依赖的地方）
-├── patch-scalar.ts     YAML 标量层（发射 / 读取 / plain-scalar 合法性）
-├── patch-yaml.ts       YAML 文档层（按缩进扫描 → 行结构 + 子集校验）
-├── patch.ts            profile patch 行寻址 + 守护行文本 + 备份（门面，再导出标量层）
-├── guarded-rows.ts    守护行安装（同步）+ 追加的校验/原子/回滚
-├── recency.ts          嫌疑分类与最近更新排序
+├── index.ts                    宿主入口（Loader 四件套：name / inject / Config / apply）
+│   └── Guard                   守护流程：启动记录 / 崩溃决策 / 恢复 / 观测面
+├── host/
+│   ├── capability/             能力模型（邻接表 + 双向可达性分析）与清单（投影，非第二真相源）
+│   ├── core/                   纯逻辑：配置严格校验 / 路径安全 / 隔离 / 指标 / 生命周期 / 自描述
+│   │   └── build-freshness.ts  产物新鲜度（v0.19：指纹 + mtime 漂移，三态判定）
+│   ├── data/                   分区存储（journal 轮转 / state / decision / backups / 归档）
+│   ├── guard/                  崩溃检测 / 决策 / 隔离计划 / 恢复 / 守护行 / 冲突证据
+│   ├── observe/                量化指标 / 控制带 / 贝叶斯 / 马尔可夫 / 共现 / 预防性
+│   ├── profile/                profile patch 行（标量层 / 文档层 / 门面）
+│   ├── risk/                   嫌疑排序 / 贝叶斯风险 / 误伤校准
+│   ├── surface/                面板快照 / 路由 / 工具注册与投影 / 状态投影
+│   └── self-describe.ts        插件自描述（版本 + 反馈链接，诚实降级）
+├── shared/
+│   └── graph-contract.ts       跨运行时契约（阶段词汇 / 图节点 / 布局常量；谁都不依赖）
 └── client/
-    ├── index.ts        席位注册（main + sidebar.panellist）
-    ├── GuardPanel.tsx  管理面板（KPI 条 + 可折叠卡片 + 图谱 + 归档）
-    ├── GuardGraph.tsx  可交互图谱（曲线边/拖拽/搜索/详情侧栏/双击居中）
-    ├── viewport.ts     视口原语（纯函数）+ 曲线边/平行边/搜索/居中
-    ├── api.ts          数据面客户端（形状校验，诚实失败）
-    └── i18n.ts         自持字典（zh/en，递归 Dict，回退链可见）
+    ├── entry.ts                客户端入口（工厂无副作用；apply 里注册样式 + 面板 + 卡片）
+    ├── index.ts                席位注册（main + sidebar.panellist）
+    ├── panel/                  管理面板（KPI + 可折叠卡片 + 图谱 + 归档）
+    │   ├── GuardPanel.tsx      取数 / 轮询 / 动作 / 布局（四件事，仅此四件）
+    │   ├── poll-adaptive.ts    自适应轮询（内容退避 + 失败退避 + 页面可见性）
+    │   └── epoch-guard.ts      在途世代守卫（v0.19：切换分区后旧响应落地即丢弃）
+    ├── graph/                  可交互图谱（曲线边 / 拖拽 / 搜索 / 详情侧栏 / 小地图）
+    ├── toolview/               命令窗口卡片（v0.19）
+    │   ├── ToolViewIntegration.ts  `tool.call.toolview` keyed slot 注册（幂等守卫 + getter 计数）
+    │   ├── GuardToolCard.tsx       终端卡渲染 + CSS 唯一真源
+    │   └── toolview-model.ts       零 React 依赖的防御式抽取层
+    ├── api/                    数据面客户端（形状校验，诚实失败）
+    └── i18n/                   自持字典（zh/en，递归 Dict，回退链可见）
 ```
 
 ## 2. 核心数据流（崩溃恢复主线）
@@ -1080,3 +1081,90 @@ crash-detected…）与**状态机迁移**（stage 轨迹）。但两者都不�
   是调用方的显示策略，投影层保持全量；
 - **与迁移列表互补**：迁移回答「状态到哪了」，步骤回答「每次执行做了什么」——
   两层事实分开展示，用户不会把「阶段从 A 到 B」误读为「动作完成了」。
+
+---
+
+## 21. v0.19.0：命令窗口显示的根修复与三条诚实边界（cycle-17）
+
+### 21.1 问题的根因（不是「显示不好看」，是「根本没被消费」）
+
+宿主侧的 `ctx.tools.register` 支持三条投影钩子：`presentCall`（待执行卡片）、
+`presentResult`（完成卡片）、`output.presentationMeta`（持久化的展示模型）。
+本插件 v0.18 之前把它们构造得很完整 —— 有标题、有事实分区、有省略计数、
+有截断指标（`tool-presentation.ts`）。
+
+**但内置 Web Client 不消费 `presentCall` / `presentResult`。**
+这两条钩子只服务于「有能力的 UI」（如 dsh-ops 自己的 TUI 面板）。
+落到内置 Web Client 时，工具调用退化为 **generic 行** —— 用户在命令窗口
+看到的是「一串参数 JSON + 一坨原始文本」。
+
+这是**静默失效**：不报错、不降级、面板照常出数，只有命令窗口那一行是错的。
+`dsh-anic` 在 cycle-107 实测踩到同一个坑（其
+`src/client/integrations/ToolViewIntegration.ts:4-11` 记录了根因），
+本插件沿用其修法。
+
+### 21.2 设计：client 半部注册 `tool.call.toolview` keyed slot
+
+唯一能被内置 Client 消费的扩展点是 `tool.call.toolview`：
+宿主会话面板挂载时按**工具名**（key）查表，命中就用我们注册的组件渲染该行。
+
+新增三个文件（`src/client/toolview/`）：
+
+| 文件 | 职责 | 为什么独立 |
+| --- | --- | --- |
+| `ToolViewIntegration.ts` | 席位注册 + 幂等守卫 + 遥测 | 副作用面（注册） |
+| `GuardToolCard.tsx` | 卡片渲染 + CSS 唯一真源 | 展示面（React） |
+| `toolview-model.ts` | **零 React 依赖**的防御式抽取层 | 纯逻辑（可测） |
+
+**三条纪律**（每条都对应一类真实缺陷）：
+
+1. **注册必须在 `ctx.slots.inject('tool.call.toolview', cb)` 里** ——
+   席位由宿主 ToolCallTree 声明，只在会话面板挂载时存在；提前 `register`
+   会撞「向未声明 slot 注册」，整个 entry 失败（面板全灭）。
+2. **幂等守卫用 `slots.entries()` 反查** —— 防热重载 / 双挂载。
+   键已占用即跳过，不报错（键位替换是宿主契约，不是冲突）。
+3. **注册计数必须是 getter** —— `inject` 回调是宿主**延迟**调用的
+   （ToolCallTree 挂载时），`apply()` 返回瞬间注册数还是 0；
+   静态快照 `{ count: 0 }` 会永远停在 0，与 DOM 实际渲染的卡片数脱钩
+   （anic 实测：5 张卡片 vs count=0）。
+
+### 21.3 诚实边界：卡片只转述 host 侧的事实
+
+卡片**不重新解释**数据：
+
+- `facts` / `sections` / `omitted` 只从 host 侧 `presentationMeta` 取，
+  **不从正文里猜结构**；
+- 分区默认折叠与否由 **host 侧**决定（`sections[].collapsed`）——
+  卡片不重新决定，那会形成第二真相源（两边各写一套折叠策略，必然漂移）；
+- 拿不到 `exitCode` / `durationMs` 就显示「未提供」，**绝不臆造 0**
+  （`exit 0` 与「没有退出码」在命令窗口里长得几乎一样，但含义相反）。
+
+### 21.4 三条新增的诚实边界（v0.19）
+
+| 边界 | 现象 | 修法 |
+| --- | --- | --- |
+| **ANSI 负载残留** | 逐码点剥 ESC 会把 `[31m` 留成**可见字面量**（实测 `safe\u001b[31mRED` → `safe[31mRED`）—— 不是「安全了」，是「安全地留下了垃圾」 | `stripAnsiSequences()` **序列级**剥除（CSI / OSC / DCS / 两字符转义 / 孤立 ESC / 裸 CR），作为 `sanitizeText` 的**第一步** |
+| **产物可能是旧的** | `link:` / `file:` 安装下改了 `src/**` 但忘了重建 ⇒ 宿主跑的是上一版产物，而插件照常加载、工具照常注册、面板照常出数 —— **只有行为是旧的，且不报错** | `build-freshness.ts`：构建指纹（sha256 组合）+ mtime 漂移判定，**三态**上屏（一致 / 已过期 / **无法判定**）。版本取自 `package.json`（不是从产物里正则捞 —— 产物里到处是 `0.9.0`，正则会捞到第一个匹配的 = 假事实） |
+| **跨项目串扰** | 切换查看的分区时，**旧分区还在路上的响应**落地 ⇒ 画面显示旧分区事实。在一个专门做隔离的插件里，用户会据此对**别的项目**的插件做出关闭/恢复决策 | `epoch-guard.ts` 世代守卫：请求发起时记世代号，落地时比对，不匹配即丢弃。与既有的 `partitionMismatch` **不是同一道防线**（那个比对「请求 vs 响应自称」，这个比对「是否已过期」） |
+
+### 21.5 为什么不用 AbortController 代替世代守卫
+
+AbortController 能取消**传输**，未必能阻止已 resolve 的 promise 的 `then` 执行 ——
+「取消」与「不落地」是两件事。世代守卫管的是后者，且它对**不可取消的注入实现**
+（测试桩、旧宿主）同样有效。两者可叠加：AbortController 省带宽，世代守卫保正确性。
+本仓选世代守卫，因为它是**纯函数**、可测、且不依赖 fetch 实现。
+
+### 21.6 沙箱真机判据（cycle-17 实测）
+
+| 判据 | 观测 | 结论 |
+| --- | --- | --- |
+| 插件加载 | 沙箱 `sb-rg-c17` 启动日志**无** `skipping profile bundle` | ✅ 未被兼容闸门跳过 |
+| 面板注册 | `window.__RECENCY_GUARD__.registered === true`、`skipped === null`、`error === null` | ✅ 面板已注册 |
+| **命令窗口卡片注册** | `window.__RECENCY_GUARD_TOOLVIEW__.count === 1`、`error === null` | ✅ keyed slot 命中 |
+| 卡片样式 | `#rg-toolview-css` 在 DOM 内、含 5 类结构、只用 `--dsw-alias-*`、无裸 `var()` | ✅ 语义令牌合规 |
+| 面板内容 | 5 个分组 / 17 张卡 / 22 节点 124 边 / 图谱 18 个工具控件 / 小地图 / 3 组图例 | ✅ 完整渲染 |
+| **产物新鲜度上屏** | 诊断卡显示「产物新鲜度：产物与源码一致」 | ✅ 新字段生效 |
+| 退避上屏 | 状态条「每 15 秒轮询 · 数据稳定，已放慢刷新」 | ✅ 自适应退避生效 |
+| 图谱交互 | 点节点 ⇒ 详情侧栏打开（类型/引用/度数/影响面上游 0 · 下游 17 / 7 个消费方 / 居中定位） | ✅ 可交互 |
+| 面板健康 | 无错误边界（`.rg-error-boundary`）、无降级提示（`.rg-notice-degraded`） | ✅ 无降级 |
+| 崩溃检测 | 沙箱首个进程被强杀 ⇒ journal `crash-detected`（哨兵缺席通道）+ `abnormalExitSeq=1` + 刹车判据「观察中 1/2 轮，不动手」 | ✅ 双通道 + 概率证据不误伤 |

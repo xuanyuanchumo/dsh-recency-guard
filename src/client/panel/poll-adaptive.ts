@@ -210,6 +210,85 @@ export interface PollOutcome {
   changed: boolean
   /** 截至本次加载，连续未变的轮数。 */
   sameRounds: number
+  /**
+   * 本次加载是否**失败**（v0.19）。
+   *
+   * 为什么要有这个字段：内容退避只处理「成功但没变」。失败时若也走
+   * 内容退避，会立刻回到 5s ⇒ **每 5s 打一次死掉的宿主**，永不停歇。
+   * 组件据此改走 `nextFailureDelay` 的指数退避。
+   */
+  failed?: boolean
+}
+
+/* ---------- 网络失败退避（新增：宿主挂掉时不打它） ---------- */
+
+/**
+ * 网络失败的退避阶梯（毫秒）。
+ *
+ * ## 为什么内容退避不够
+ *
+ * `nextPollDelay` 处理的是「**成功但内容没变**」—— 那时拉取本身是健康的。
+ * 但宿主挂掉 / 网络断开时，请求**失败**，而失败分支当前返回
+ * `changed: true` ⇒ 下一轮立刻回到 5s ⇒ **每 5s 打一次死掉的宿主**，
+ * 永不停歇。那是观测设施变成压力源。
+ *
+ * ## 阶梯为什么是 5/10/20/40（而不是 5/10/15）
+ *
+ * - 首两次失败（5s / 10s）：多数是瞬时抖动，快速重试成本低、恢复快；
+ * - 之后（20s / 40s）：宿主真挂了的可能性显著上升，指数退避省资源；
+ * - **封顶 60s**：再慢就超过「用户以为面板坏了」的阈值 —— 观测设施
+ *   不能因为谨慎而变得不可用。
+ */
+export const FAILURE_BACKOFF_STEPS = [5000, 10000, 20000, 40000, 60000] as const
+
+/**
+ * 连续失败后的下一次延迟（毫秒）。
+ *
+ * @param consecutiveFailures 连续失败次数（0 = 上次成功）。
+ */
+export function nextFailureDelay(consecutiveFailures: number): number {
+  const last = FAILURE_BACKOFF_STEPS.length - 1
+  // NaN：计数不可知 ⇒ 用首档（尽快再试一次；不可知不等于「很糟」）。
+  if (typeof consecutiveFailures !== 'number' || Number.isNaN(consecutiveFailures)) {
+    return FAILURE_BACKOFF_STEPS[0]
+  }
+  // +Infinity：失败次数**无穷** ⇒ 最坏情况 ⇒ 用最保守（最长）的档位。
+  //
+  // 为什么不能走 `Number.isFinite` 的早退分支：那一支会返回**首档**（5s），
+  // 而「失败无穷多次」恰恰是最该退避到底的情形 —— 让它最快重试是**反的**。
+  if (consecutiveFailures === Number.POSITIVE_INFINITY) {
+    return FAILURE_BACKOFF_STEPS[last]
+  }
+  if (consecutiveFailures <= 0) return FAILURE_BACKOFF_STEPS[0]
+  const index = Math.min(last, Math.floor(consecutiveFailures) - 1)
+  return FAILURE_BACKOFF_STEPS[index < 0 ? 0 : index]
+}
+
+/* ---------- 页面可见性（新增：看不见时不必轮询） ---------- */
+
+/**
+ * 页面当前是否可见。
+ *
+ * ## 为什么
+ *
+ * 面板挂在后台标签页时，用户看不见任何刷新 —— 但请求照发。这既白烧宿主
+ * 资源，又可能在用户切回来时正好落在一个半更新状态。
+ *
+ * ## 为什么不在隐藏时**停止**轮询
+ *
+ * 停止 ⇒ 切回标签页时要等一个完整周期才有数据（最坏 15s），而用户
+ * 恰恰是**在切回来的那一刻**最想看到新数据。
+ *
+ * 因此采取「**暂停拉取，但保留定时器**」：隐藏时只把定时器推迟到
+ * `visibilitychange` 触发，恢复可见时**立即**补一次拉取。
+ * 定时器不销毁 ⇒ 不存在「恢复后忘了重新排程」的状态机漏洞。
+ */
+export function pageVisible(): boolean {
+  const doc = (globalThis as { document?: { visibilityState?: string } }).document
+  if (!doc) return true
+  // 无 visibilityState 的宿主（老浏览器 / SSR / 测试环境）⇒ 视为可见。
+  if (typeof doc.visibilityState !== 'string') return true
+  return doc.visibilityState !== 'hidden'
 }
 
 /*

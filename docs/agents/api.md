@@ -1,8 +1,20 @@
-# 对外面 API（dsh-recency-guard v0.18.1）
+# 对外面 API（dsh-recency-guard v0.19.0）
 
 > 本文件里的路由 / 工具签名 / 配置项从 `src/host/surface/routes.ts`、
 > `src/host/surface/tool-registration.ts`、`src/host/capability/capability.ts`
 > 与 `src/index.ts` 实抄；契约变更必须在这里留一行。
+
+## 0.0j v0.19 契约变更一句话清单
+
+| 变更 | 影响 | 兼容性 |
+| --- | --- | --- |
+| **`tool.call.toolview` 席位注册（命令窗口显示根修复）** | client 半部新增 `src/client/toolview/`：`ToolViewIntegration.ts` 经 `ctx.slots.inject('tool.call.toolview', …)` 注册 **keyed** slot，`key = 'recency_guard'`（与 host 侧 `TOOL_SURFACE.name` 同源）；`GuardToolCard.tsx` 渲染终端卡；`toolview-model.ts` 是零 React 依赖的防御式抽取层 | **纯新增**（宿主侧 `presentCall`/`presentResult`/`presentationMeta` 一字未改，仍服务有能力的 UI）。**根因**：内置 Web Client **不消费** `presentCall`/`presentResult` ⇒ 此前 `recency_guard` 调用在命令窗口退化为 generic 行（参数 JSON + 原始文本）。幂等守卫 `slots.entries()` 反查；注册计数用 **getter**（inject 回调是宿主延迟调用的，静态快照会永远停在 0） |
+| **ANSI 序列级剥离** | `tool-text.ts` 新增导出 `stripAnsiSequences(input): { text, removed }`；`sanitizeText` 的**第一步**改为剥 ANSI 序列（CSI / OSC / DCS / 两字符转义 / 孤立 ESC / 裸 CR） | **纯修复**（此前逐码点剥 ESC 会把 `[31m` 留成**可见字面量** —— 实测 `safe\u001b[31mRED` → `safe[31mRED`）。正常包名 / 版本号 / 时间戳逐字节不变（`ansi-strip.test.ts` 钉住） |
+| **`PanelSnapshot.diagnostics.buildFreshness`** | 新增 `{ stale: boolean\|null, revision: string\|null, builtAt, newestSourceAt, driftMs, builtVersion, reason }` | **纯追加**（旧宿主无该字段 ⇒ 客户端按「缺失」处理，不显示这一行，而不是显示「正常」）。**三态严格区分**：`true` = 确认过期；`false` = 确认不旧；`null` = **无法判定**（发布态无 `src/` 可比）—— 绝不把「无法判定」报成「正常」 |
+| **面板轮询失败退避** | 快照拉取失败时改走指数退避 `FAILURE_BACKOFF_STEPS = [5s,10s,20s,40s,60s]`（`nextFailureDelay(n)`）；成功即清零 | **客户端行为**（此前失败即回 5s ⇒ **每 5s 打一次死掉的宿主**）。新增 `PollOutcome.failed?: boolean` 字段 |
+| **面板隐藏页暂停** | 页面 `visibilityState === 'hidden'` 时推迟拉取；`visibilitychange` 转回可见时**立即补拉一次** | **客户端行为**。定时器不销毁 ⇒ 不存在「恢复后忘了重新排程」的状态机漏洞 |
+| **在途世代守卫** | 切换查看的分区时推进世代号；**旧分区还在路上的响应落地即被丢弃** | **客户端行为**。与既有的 `partitionMismatch` 不是同一道防线：那个比对「请求的分区 vs 响应自称的分区」，这个比对「响应是否已过期」—— 两者都旧但旧得不一样 |
+| **`toolview` 遥测** | `window.__RECENCY_GUARD_TOOLVIEW__ = { count, skipped, error, registered }`（`count` 是 **getter**） | **纯新增**（诊断面，不影响运行时契约） |
 
 ## 0.0i v0.18 契约变更一句话清单
 

@@ -256,6 +256,27 @@ export interface PanelSnapshot {
     repositoryUrl: string | null
     /** 问题反馈直达链接（GitHub Issues；未登记时 null）。 */
     issuesUrl: string | null
+    /**
+     * 产物新鲜度（v0.19）：**「我跑的到底是哪份代码」的白盒事实**。
+     *
+     * 为什么必须上屏：`link:`/`file:` 安装下改了 `src/**` 但忘了重建时，
+     * 插件照常加载、工具照常注册、面板照常出数 —— **只有行为是旧的**，
+     * 而且不报任何错。用户会以为「改了没生效」，开发者会以为「代码有问题」，
+     * 而真相是产物是旧的。这个字段把真相摆在面板上。
+     *
+     * 三态严格区分：`stale: true` = 确认过期；`false` = 确认不旧；
+     * `null` = **无法判定**（发布态无 src/ 可比）—— 绝不把「无法判定」
+     * 报成「正常」。
+     */
+    buildFreshness: {
+      stale: boolean | null
+      revision: string | null
+      builtAt: string | null
+      newestSourceAt: string | null
+      driftMs: number | null
+      builtVersion: string | null
+      reason: string | null
+    }
   }
 }
 
@@ -382,6 +403,16 @@ export interface SnapshotInput {
     hostVersion: string | null
     repositoryUrl: string | null
     issuesUrl: string | null
+    /** 产物新鲜度输入（宿主侧算好；快照只投影）。 */
+    buildFreshness: {
+      stale: boolean | null
+      revision: string | null
+      builtAt: string | null
+      newestSourceAt: string | null
+      driftMs: number | null
+      builtVersion: string | null
+      reason: string | null
+    }
   }
   /**
    * revision 派生所需的写状态事实（v0.12）。
@@ -523,6 +554,7 @@ export function buildPanelSnapshot(input: SnapshotInput, now = Date.now()): Pane
       hostVersion: input.diagnostics.hostVersion,
       repositoryUrl: input.diagnostics.repositoryUrl,
       issuesUrl: input.diagnostics.issuesUrl,
+      buildFreshness: { ...input.diagnostics.buildFreshness },
       platform: process.platform,
       nodeVersion: process.version,
       dataPlane: true,

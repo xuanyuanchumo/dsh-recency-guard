@@ -23,6 +23,7 @@
  * 有宿主服务就用，没有就诚实降级，这比「声明完美依赖」更符合插件契约。
  */
 import { integratePanel, openPanel } from './index.ts'
+import { integrateToolView } from './toolview/ToolViewIntegration.ts'
 import { installStyles } from './styles.ts'
 
 export const name = 'dsh-recency-guard-client'
@@ -44,6 +45,14 @@ export const inject = ['slots', 'locale']
 export function apply(ctx: unknown): void {
   installStyles(ctx)
   integratePanel(ctx)
+  // 命令窗口显示修复：注册 `tool.call.toolview` keyed slot。
+  //
+  // 为什么必须在这里注册：宿主侧的 `presentCall`/`presentResult` **不会**被
+  // 内置 Web Client 消费 —— 没有这张卡片，工具调用在命令窗口里退化成
+  // generic 行（参数 JSON + 原始文本）。这是「命令窗口显示问题」的根修复。
+  //
+  // 缺席即跳过：slots 服务不在时 integrateToolView 返回 null，不抛异常。
+  integrateToolView(ctx)
   // 供宿主工具驱动面板导航（agent 联动）。
   // openPanel 的 ctx.layout 读取必须整段 try/catch：cordis ctx 是代理，访问
   // **未提供的服务属性本身就会抛**（不是返回 undefined）—— 0.5.0 沙箱实测，

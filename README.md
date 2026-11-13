@@ -1,13 +1,13 @@
 # dsh-recency-guard
 
-**v0.18.1** · [GitHub](https://github.com/xuanyuanchumo/dsh-recency-guard) · [问题反馈](https://github.com/xuanyuanchumo/dsh-recency-guard/issues) · MIT
+**v0.19.0** · [GitHub](https://github.com/xuanyuanchumo/dsh-recency-guard) · [问题反馈](https://github.com/xuanyuanchumo/dsh-recency-guard/issues) · MIT
 
 > DeepSeek Harness 的**插件崩溃恢复守护**：记录第三方 / 实验性插件的安装与更新时序并备份配置；
 > 崩溃后的**下一次启动之前**，把最近更新的嫌疑插件挡在门外；稳定启动后，再把非首要嫌疑放回来。
 >
-> 版本基线（2026-11-13，北京时间）：**0.18.1**。版本四锚点（`package.json` / 本 README /
+> 版本基线（2026-11-13，北京时间）：**0.19.0**。版本四锚点（`package.json` / 本 README /
 > `docs/agents/` / [`dsh-plugin.json`](dsh-plugin.json)）一致。
-> 测试分四层，当前 **87/87 全绿**（Core 43 / Host 10 / Client 25 / Contract 9）。
+> 测试分四层，当前 **95/95 全绿**（Core 46 / Host 10 / Client 29 / Contract 10）。
 
 ---
 
@@ -51,10 +51,10 @@ dsh plugin --profile <profile名> add dsh-recency-guard
 锁定版本：
 
 ```bash
-dsh plugin --profile <profile名> add dsh-recency-guard@0.18.1
+dsh plugin --profile <profile名> add dsh-recency-guard@0.19.0
 ```
 
-> 版本对应：本 README 描述 **0.18.1**；npm `latest` 已发布为 **0.18.1**
+> 版本对应：本 README 描述 **0.19.0**；npm `latest` 已发布为 **0.19.0**
 > （2026-11-11，shasum `b667bd20b6ea82d294dbc28e4eab1290b07dd963`），可直接安装。
 > 版本纪律见 [`docs/agents/conventions.md`](docs/agents/conventions.md) §6。
 
@@ -62,7 +62,7 @@ dsh plugin --profile <profile名> add dsh-recency-guard@0.18.1
 
 投稿材料已按 [awesome-dsh-plugin contributing.md](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md)
 备好（[`docs/market-submission.md`](docs/market-submission.md)）：一个条目文件、`category: security`。
-**当前状态：条目已收录并合并（PR #14245，merged 2026-11-11）；v0.18.1 描述更新已提交
+**当前状态：条目已收录并合并（PR #14245，merged 2026-11-11）；v0.19.0 描述更新已提交
 [PR #14917](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/14917)（级联回滚 / 影响面分析 / 执行操作记录）。**
 可在 dsh 的 **Plugins → Discover** 或 dsh-market 中搜索 `recency-guard` 安装。
 
@@ -140,6 +140,11 @@ dsh plugin --profile <profile名> add link:/绝对路径/dsh-recency-guard
 | 量化指标与数学模型 | 指标卡 / 控制带 / 转移矩阵 | [`observability.ts`](src/host/observe/observability.ts)、[`markov.ts`](src/host/observe/markov.ts)、[`control-band.ts`](src/host/observe/control-band.ts) | [`observability-math.test.ts`](tests/unit/observability-math.test.ts)、[`hazard-threshold.test.ts`](tests/unit/hazard-threshold.test.ts) |
 | **预防性预警（只预警不行动）** | 面板/`status` 的启动频率控制带与配置变更 CUSUM；不可判定显示原因 | [`preventive.ts`](src/host/observe/preventive.ts)、[`preventive-view.ts`](src/host/surface/preventive-view.ts) | [`observability-math.test.ts`](tests/unit/observability-math.test.ts)、[`preventive-card.test.ts`](tests/client/preventive-card.test.ts) |
 | **自适应刷新** | 稳定时 5s→10s→15s 退避，变化立即回 5s；暂停即真停 | [`poll-adaptive.ts`](src/client/panel/poll-adaptive.ts)、[`GuardPanel.tsx`](src/client/panel/GuardPanel.tsx) | [`poll-adaptive.test.ts`](tests/client/poll-adaptive.test.ts) |
+| **命令窗口卡片（v0.19）** | 内置 Web Client 消费的自有终端卡（标题/状态/事实/明细折叠/省略计数） | [`ToolViewIntegration.ts`](src/client/toolview/ToolViewIntegration.ts)、[`GuardToolCard.tsx`](src/client/toolview/GuardToolCard.tsx)、[`toolview-model.ts`](src/client/toolview/toolview-model.ts) | [`toolview-model.test.ts`](tests/client/toolview-model.test.ts)、[`toolview-contract.test.ts`](tests/contract/toolview-contract.test.ts) |
+| **ANSI 序列级剥离（v0.19）** | 文本层不再残留 `[31m` 这类可见负载（逐码点剥除的遗留缺陷） | [`tool-text.ts`](src/host/surface/tool-text.ts) | [`ansi-strip.test.ts`](tests/unit/ansi-strip.test.ts) |
+| **产物新鲜度上屏（v0.19）** | 诊断卡显示「产物与源码一致 / 已过期（请重建）/ 无法判定」+ 构建指纹 | [`build-freshness.ts`](src/host/core/build-freshness.ts) | [`build-freshness.test.ts`](tests/unit/build-freshness.test.ts) |
+| **失败退避 + 隐藏页暂停（v0.19）** | 宿主不可达时 5→10→20→40→60s 退避；标签页隐藏时不打宿主，恢复可见立即补拉 | [`poll-adaptive.ts`](src/client/panel/poll-adaptive.ts)、[`GuardPanel.tsx`](src/client/panel/GuardPanel.tsx) | [`poll-failure-backoff.test.ts`](tests/client/poll-failure-backoff.test.ts) |
+| **在途世代守卫（v0.19）** | 切换分区后，旧分区还在路上的响应落地即被丢弃（不串扰别的项目） | [`epoch-guard.ts`](src/client/panel/epoch-guard.ts)、[`GuardPanel.tsx`](src/client/panel/GuardPanel.tsx) | [`epoch-guard.test.ts`](tests/client/epoch-guard.test.ts) |
 | 管理面板 | 中央面板 + 侧栏图标 | [`GuardPanel.tsx`](src/client/panel/GuardPanel.tsx)、[`snapshot-view.ts`](src/client/panel/snapshot-view.ts)、[`PanelShell.tsx`](src/client/panel/PanelShell.tsx) | [`panel-v014.test.ts`](tests/client/panel-v014.test.ts)、[`panel-scroll.test.ts`](tests/client/panel-scroll.test.ts)、[`panel-null-snapshot.test.ts`](tests/client/panel-null-snapshot.test.ts) |
 | 可交互能力图谱 | 节点 / 边 / 缺口 / 小地图 | [`GuardGraph.tsx`](src/client/graph/GuardGraph.tsx)、[`graph-interaction.ts`](src/client/graph/graph-interaction.ts) | [`graph-model.test.ts`](tests/client/graph-model.test.ts)、[`graph-focus.test.ts`](tests/client/graph-focus.test.ts)、[`graph-keyboard.test.ts`](tests/client/graph-keyboard.test.ts) |
 | 项目隔离 | 隔离卡 + `?partition=<key>` | [`isolation.ts`](src/host/core/isolation.ts) | [`isolation-journey.test.ts`](tests/host/isolation-journey.test.ts)、[`isolation-parallel.test.ts`](tests/host/isolation-parallel.test.ts) |
@@ -196,8 +201,14 @@ dsh plugin --profile <profile名> add link:/绝对路径/dsh-recency-guard
 
 ## 工具：`recency_guard`
 
-`execute` 返回**规范 JSON**（业务数据摊平在顶层），人读文本由 `output.render` 投影，
-命令窗口另接 `presentCall` / `presentResult` / `presentationMeta` 三条卡片通道。
+`execute` 返回**规范 JSON**（业务数据摊平在顶层），人读文本由 `output.render` 投影。
+
+**命令窗口卡片（v0.19 新增）**：宿主侧的 `presentCall` / `presentResult` /
+`presentationMeta` **不会被内置 Web Client 消费** —— 它们只服务于有能力的 UI。
+因此本插件在 **client 半部**注册 `tool.call.toolview` keyed slot（key = `recency_guard`），
+由内置客户端按工具名查表渲染自有卡片：有标题、有状态徽标、有事实分区、有明细折叠、
+有省略计数。实测（沙箱 sb-rg-c17 真机）：`window.__RECENCY_GUARD_TOOLVIEW__.count === 1`，
+面板与卡片同屏共存，无错误边界、无降级提示。
 
 | action | 参数 | 行为 |
 | --- | --- | --- |
@@ -391,11 +402,11 @@ npm install
 npm run build           # esbuild 双产物：dist/index.js（宿主）+ dist/client.js（客户端）
 npx tsc --noEmit        # 类型
 npm run lint            # 类型 + 未使用符号
-npm test                # 分层运行器：Core 42 / Host 10 / Client 24 / Contract 8 = 84
+npm test                # 分层运行器：Core 46 / Host 10 / Client 29 / Contract 10 = 95
 npm run extract-runtime # Host 层测试前置（runtime/ 缺失时先解出）
 ```
 
-- 当前基线：`npm test` **84/84 通过**、`npx tsc --noEmit` 0 错误（2026-11-11 实测）。
+- 当前基线：`npm test` **95/95 通过**、`npx tsc --noEmit` 0 错误（2026-11-13 实测）。
 - 验证顺序固定：**build → typecheck → lint → test**，全部零错误才算完成。
 - 文档体系与写码纪律见 [`docs/agents/`](docs/agents/README.md)；
   发布 / 升级 / 热重载见 [`docs/agents/update-guide.md`](docs/agents/update-guide.md)。
@@ -406,6 +417,7 @@ npm run extract-runtime # Host 层测试前置（runtime/ 缺失时先解出）
 
 | 版本 | 一句话 |
 | --- | --- |
+| **0.19.0**（2026-11-13） | **命令窗口显示根修复**：client 半部注册 `tool.call.toolview` keyed slot（内置 Web Client 不消费 `presentCall`/`presentResult`，此前工具调用退化成 generic 行），自带标题/状态/事实/明细折叠的终端卡；**ANSI 序列级剥离**（逐码点剥除会把 `[31m` 留成可见负载）；**产物新鲜度上屏**（「我跑的到底是哪份代码」：一致/已过期/无法判定三态 + 构建指纹）；**失败退避**（宿主不可达时 5→10→20→40→60s，不打它）+ **隐藏页暂停**（标签页隐藏不轮询，恢复立即补拉）；**在途世代守卫**（切换分区后旧分区在途响应落地即丢弃，杜绝跨项目串扰）；测试 87→95 |
 | **0.18.1**（2026-11-13） | 执行操作记录可视化：recover 补步骤留痕（此前是唯一无留痕的核心执行动作）+ 面板新增「执行操作记录」区块（步骤名/状态徽标/耗时/摘要/时刻，三态：成功/失败/执行中）；其余能力同 0.18.0 |
 | **0.18.0**（2026-11-13） | 研究落地补完与崩溃循环兜底：配置未知键 fail-loud（学习 dsh-ops）、journal 裁剪改**轮转**（读改写窗口结构性消灭 + 零依赖对拍）、路径指纹 64 位 + 双读迁移（TD-7 根治）、生存分析/失配检测/恢复残余上屏（三个观测孤岛接入消费）、图谱**影响面**接入详情侧栏（impactedBy/reachableFrom 首个 UI 消费者）；**级联刹车**：崩溃循环升级到顶后自动回滚到崩溃前启动状态（仅保留头号嫌疑），不再「越关越空」；**执行操作记录可视化**：recover 补步骤留痕 + 面板新增执行记录区块（三态：成功/失败/执行中）；技术债状态见 [`docs/agents/tech-debt.md`](docs/agents/tech-debt.md) |
 | **0.17.0**（2026-11-11） | 技术栈清理与研究闭环：预防性预警（RQ3）接入生产且**只预警不行动**、面板自适应刷新、状态文件 schema 版本（未知版本保留现场）、路径逃逸修复（`pathSafeName` 单一实现 + 指纹）、变异 72 突变体 / 0 未归因 + 无直接测试 14→2 + rescue/宿主宽度跨实现对拍；技术债状态见 [`docs/agents/tech-debt.md`](docs/agents/tech-debt.md) |

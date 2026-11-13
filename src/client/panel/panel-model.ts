@@ -615,6 +615,45 @@ export function diagnosticsRows(snapshot: PanelSnapshotView): DiagnosticsRow[] {
   if (d.repositoryUrl !== null) {
     rows.push({ key: 'repository', label: t('diagnostics.repository'), value: shortRepoUrl(d.repositoryUrl), href: d.repositoryUrl })
   }
+  // 产物新鲜度（v0.19）：三态严格区分 ——
+  // 确认过期 / 确认不旧 / **无法判定**。把「无法判定」显示成「正常」是假绿。
+  const freshness = d.buildFreshness
+  if (freshness !== undefined) {
+    if (freshness.stale === true) {
+      const driftMin =
+        typeof freshness.driftMs === 'number' && Number.isFinite(freshness.driftMs)
+          ? Math.round(freshness.driftMs / 60000)
+          : null
+      rows.push({
+        key: 'buildFreshness',
+        label: t('diagnostics.buildFreshness'),
+        value: driftMin === null ? t('diagnostics.buildStale') : t('diagnostics.buildStaleMinutes', { n: driftMin }),
+        href: null,
+      })
+    } else if (freshness.stale === false) {
+      rows.push({
+        key: 'buildFreshness',
+        label: t('diagnostics.buildFreshness'),
+        value: t('diagnostics.buildFresh'),
+        href: null,
+      })
+    } else {
+      rows.push({
+        key: 'buildFreshness',
+        label: t('diagnostics.buildFreshness'),
+        value: freshness.reason !== null ? freshness.reason : t('diagnostics.buildUnknown'),
+        href: null,
+      })
+    }
+    if (freshness.revision !== null) {
+      rows.push({
+        key: 'buildRevision',
+        label: t('diagnostics.buildRevision'),
+        value: freshness.revision,
+        href: null,
+      })
+    }
+  }
   return rows
 }
 

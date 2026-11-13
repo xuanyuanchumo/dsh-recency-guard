@@ -33,6 +33,20 @@ export interface PartitionSnapshotInput {
     repositoryUrl: string | null
     issuesUrl: string | null
   }
+  /**
+   * 产物新鲜度（v0.19）：宿主进程加载的产物事实。
+   *
+   * 与分区**无关**（不是分区状态）—— 跨分区视图如实提供同一个值。
+   */
+  buildFreshness: {
+    stale: boolean | null
+    revision: string | null
+    builtAt: string | null
+    newestSourceAt: string | null
+    driftMs: number | null
+    builtVersion: string | null
+    reason: string | null
+  }
 }
 
 /** 跨分区只读快照（形状与 PanelSnapshot 同名子集 + readonly 标记）。 */
@@ -110,6 +124,9 @@ export async function buildPartitionSnapshot(
       snapshotMs: null,
       repositoryUrl: input.selfPackage.repositoryUrl,
       issuesUrl: input.selfPackage.issuesUrl,
+      // 产物新鲜度（v0.19）：跨分区视图看的是**当前进程**加载的产物，
+      // 与分区无关 —— 事实可如实提供（不是分区状态）。
+      buildFreshness: input.buildFreshness,
     },
     readonly: true,
     workspace: target.workspace,

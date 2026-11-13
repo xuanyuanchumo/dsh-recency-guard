@@ -24,7 +24,8 @@ import {
 } from './PanelCards.tsx'
 import { DataFlowBody, DiagnosticsBody, GraphStructureBar, MarkovBody } from './InsightCards.tsx'
 import { PanelErrorBoundary } from './PanelErrorBoundary.tsx'
-import { POLL_BASE_MS, nextPollDelay, pollContentFingerprint, type PollOutcome } from './poll-adaptive.ts'
+import { POLL_BASE_MS, nextFailureDelay, nextPollDelay, pageVisible, pollContentFingerprint, type PollOutcome } from './poll-adaptive.ts'
+import { createEpochGuard } from './epoch-guard.ts'
 import { degradedRoutes, panelForm, partitionView, shortenPath, type DegradedRoute, type PanelForm } from './panel-model.ts'
 import { VIEWPORT_HEIGHT_NARROW, VIEWPORT_HEIGHT_WIDE } from '../graph/graph-model.ts'
 import type { PanelSnapshotView } from './snapshot-view.ts'
@@ -135,9 +136,25 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
   const fingerprintRef = useRef<string | null>(null)
   /** 连续未变轮数（ref 而不是 state：轮询循环读取它时不能等一次渲染）。 */
   const sameRoundsRef = useRef(0)
+  /**
+   * 连续失败次数（v0.19）—— 指数退避的计数。
+   *
+   * 用 ref 而不是 state：轮询循环读它时不等一次渲染；且失败计数不该
+   * 触发额外渲染（失败态由 `failure` 状态单独表达）。
+   */
+  const failureCountRef = useRef(0)
+  /**
+   * 在途请求的世代守卫（v0.19）。
+   *
+   * 用途：切换查看的分区时，让**上一分区还在路上的响应**落地即被丢弃。
+   * 详见 `epoch-guard.ts` 的根因说明。
+   */
+  const epochGuardRef = useRef(createEpochGuard())
 
   const load = useCallback(
     async (partitionKey: string | null): Promise<PollOutcome> => {
+      // 发起时记下世代号：响应落地时要拿它比对（见 epoch-guard.ts 的根因说明）。
+      const epoch = epochGuardRef.current.begin()
       const [snapshotResult, graphResult, archivesResult] = await Promise.all([
         props.fetchSnapshot(partitionKey ?? undefined),
         props.fetchGraph(partitionKey ?? undefined),
@@ -148,6 +165,20 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
           : Promise.resolve({ ok: false as const, reason: 'archives-absent' }),
       ])
       if (!mounted.current) return { changed: true, sameRounds: 0 }
+      /**
+       * **在途过期判定**（v0.19）。
+       *
+       * 用户切换查看的分区时，上一分区的请求可能还在路上；它落地时
+       * 会把画面换成**旧分区**的事实。在一个专门做隔离的插件里，
+       * 那是会误导用户对**别的项目**做关闭/恢复决策的缺陷。
+       *
+       * 与 `partitionMismatch` 不是同一道防线：那个比对「请求的分区 vs
+       * 响应自称的分区」（宿主忽略了参数的情况），这个比对「响应是不是
+       * 已经过期」（用户已经切走了的情况）—— 两者都旧但**旧得不一样**。
+       */
+      if (!epochGuardRef.current.isCurrent(epoch)) {
+        return { changed: true, sameRounds: 0 }
+      }
       if (snapshotResult.ok) {
         setSnapshot(snapshotResult.data)
         setFailure(null)
@@ -180,11 +211,18 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
        * 正常轮询（返回 changed=true 让下一轮回到 5s），同时保留上一次成功
        * 的指纹作为比较基准 —— 失败后恢复成功、内容与失败前相同，仍然算
        * 「未变」，退避不会因为一次网络抖动被清零。
+       *
+       * 但**连续失败**要单独计数（`failureCountRef`）：失败时立刻回到 5s
+       * 会变成「每 5s 打一次死掉的宿主」—— 观测设施不能变成压力源。
+       * 连续失败走 `nextFailureDelay` 的指数退避（5→10→20→40→60s）。
        */
       if (!snapshotResult.ok) {
         sameRoundsRef.current = 0
-        return { changed: true, sameRounds: 0 }
+        failureCountRef.current += 1
+        return { changed: true, sameRounds: 0, failed: true }
       }
+      // 成功即清零失败计数：恢复后要立刻回到正常节奏，而不是等退避阶梯走完。
+      failureCountRef.current = 0
       // 指纹覆盖**两条独立路由**：snapshot + graph。只哈希 snapshot 时，
 // 「插件已安装、图谱多了一个节点」会被判成稳定，最长等 15s 才刷新。
       const fingerprint = pollContentFingerprint(
@@ -220,11 +258,23 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
 
     const afterLoad = (outcome: PollOutcome): void => {
       if (cancelled) return
-      const delay = nextPollDelay({
-        sameRounds: outcome.sameRounds,
-        changed: outcome.changed,
-        baseMs: POLL_BASE,
-      })
+      /**
+       * 延迟的**两条通路**（v0.19）：
+       *
+       * - 失败 ⇒ 指数退避（5→10→20→40→60s）：宿主挂掉时不打它。
+       * - 成功 ⇒ 内容退避（稳定 5→10→15s，变化回 5s）。
+       *
+       * 失败优先于内容退避：失败时「内容变没变」没有意义 ——
+       * 我们根本不知道内容是什么。
+       */
+      const delay =
+        outcome.failed === true
+          ? nextFailureDelay(failureCountRef.current)
+          : nextPollDelay({
+              sameRounds: outcome.sameRounds,
+              changed: outcome.changed,
+              baseMs: POLL_BASE,
+            })
       setPollDelay(delay)
       setStableRounds(outcome.sameRounds)
       if (!polling) return
@@ -241,9 +291,33 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
     // 首帧总是立刻拉一次（暂停态也拉：画面停在暂停时刻，而不是空白）。
     void run()
 
+    /**
+     * 页面可见性（v0.19）：隐藏时**推迟**拉取，恢复可见时**立即补一次**。
+     *
+     * 为什么不在隐藏时彻底停掉：用户切回标签页的那一刻最想看到新数据，
+     * 而停掉意味着要等一个完整周期（最坏 15s）。推迟 + 立即补拉 = 用户
+     * 回来即见最新，且隐藏期间不打宿主。
+     *
+     * 为什么监听挂在 effect 里而不是组件顶层：卸载时必须移除监听，
+     * 否则热重载会累积监听器（每次挂载多一个 ⇒ 一次可见性变化触发 N 次拉取）。
+     */
+    const onVisibilityChange = (): void => {
+      if (cancelled) return
+      if (!pageVisible()) return
+      // 立刻补一次：先把当前定时器清掉，避免补拉后又叠一个。
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
+      }
+      void run()
+    }
+    const doc = (globalThis as { document?: Document }).document
+    doc?.addEventListener?.('visibilitychange', onVisibilityChange)
+
     return () => {
       cancelled = true
       if (timer !== null) clearTimeout(timer)
+      doc?.removeEventListener?.('visibilitychange', onVisibilityChange)
       mounted.current = false
     }
   }, [load, polling, requestedKey])
@@ -304,6 +378,19 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
     [props.postAction, load, requestedKey, snapshot?.revision],
   )
 
+  /**
+   * 切换「正在查看的分区」。
+   *
+   * 为什么必须走这一个出口：每次切换都要**推进世代号**，让在途的旧分区
+   * 响应落地即被丢弃。三处 `setRequestedKey` 若各写各的，早晚会漏一处
+   * —— 漏掉的那处就是串扰入口（详见 epoch-guard.ts）。
+   */
+  const selectPartition = useCallback((key: string | null): void => {
+    epochGuardRef.current.advance()
+    setRequestedKey(key)
+  }, [])
+
+  /** 折叠/展开一张卡片（折叠态持久化到 localStorage）。 */
   const toggleCollapse = useCallback((card: string): void => {
     setCollapsed((current) => {
       const next = new Set(current)
@@ -432,7 +519,7 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
             requested: partitionMismatch.requested.slice(0, 8),
             actual: partitionMismatch.actual.slice(0, 8),
           })}{' '}
-          <button type="button" className="rg-link" onClick={() => setRequestedKey(null)}>
+          <button type="button" className="rg-link" onClick={() => selectPartition(null)}>
             {t('partitions.backToCurrent')}
           </button>
         </p>
@@ -440,7 +527,7 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
       {partitionState !== null && partitionState.inspectingOther && partitionMismatch === null && (
         <p className="rg-notice" role="status">
           {t('partitions.inspectingNotice', { label: partitionState.selected?.label ?? '' })}{' '}
-          <button type="button" className="rg-link" onClick={() => setRequestedKey(null)}>
+          <button type="button" className="rg-link" onClick={() => selectPartition(null)}>
             {t('partitions.backToCurrent')}
           </button>
         </p>
@@ -615,7 +702,7 @@ export function GuardPanel(props: GuardPanelProps): ReactElement {
               <PartitionsBody
                 snapshot={snapshot}
                 selectedKey={requestedKey ?? snapshot.projectKey}
-                onSelect={(key) => setRequestedKey(key === snapshot.projectKey ? null : key)}
+                onSelect={(key) => selectPartition(key === snapshot.projectKey ? null : key)}
               />
             </Card>
             <Card

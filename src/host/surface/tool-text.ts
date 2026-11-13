@@ -119,6 +119,85 @@ export interface Sanitized {
 }
 
 /**
+ * ANSI 转义序列的**序列级**剥离。
+ *
+ * ## 为什么必须是序列级（而不是只剥 ESC 字符）
+ *
+ * 逐码点的控制字符剥离（`sanitizeText` 的第 1 步）会把 `ESC` 本身删掉，
+ * 却把**参数负载**留在原地：`\u001b[31m` → `[31m`。实测：
+ *
+ * ```
+ * input : "safe\u001b[31mRED\u001b[0m"
+ * output: "safe\\[31mRED\\[0m"     ← 用户看到 "[31mRED[0m"
+ * ```
+ *
+ * 那不是「安全了」，是「安全地留下了垃圾」：终端里本来靠 ESC 生效的颜色
+ * 变成了**可见的字面量**，用户看到 `safe[31mRED[0m`，比原来的彩色更糟
+ * （语义丢失 + 噪声可见）。
+ *
+ * 为什么这类输入会到我们手上：插件名 / 错误详情 / 备注来自**第三方包生态**，
+ * 而第三方工具常在非 TTY 环境也写 ANSI（vitest、jest、部分 CLI），
+ * 于是「本该是控制指令的字节」混进了日志文本。
+ *
+ * ## 覆盖的序列族
+ *
+ * | 族 | 形态 | 语义 |
+ * |---|---|---|
+ * | CSI | `ESC [ 参数 中间符 最终字节` | 颜色、光标移动、清屏（最常见） |
+ * | OSC | `ESC ] … (BEL 或 ESC \)` | 窗口标题、超链接 |
+ * | DCS | `ESC P … ESC \` | 设备控制字符串 |
+ * | 单字符 | `ESC ( B` 等 | 字符集选择 |
+ *
+ * 顺序：**先剥序列**，再剥零散控制字符。前者必须是第一�� ——
+ * 序列被逐码点拆开后，剩下的负载已经无法识别为序列了。
+ */
+
+
+/** CSI：`ESC [` + 参数 + 中间符 + 最终字节（@-~）。 */
+/** ESC 的字符码（用码点构造，避免源码里出现裸控制字符）。 */
+const ESC = String.fromCharCode(0x1b)
+/** BEL 的字符码（OSC 的常见终止符）。 */
+const BEL = String.fromCharCode(0x07)
+
+/** CSI：`ESC [` + 参数 + 中间符 + 最终字节（@-~）。 */
+const CSI_RE = new RegExp(`${ESC}\\[[0-9;?]*[ -/]*[@-~]`, 'g')
+/** OSC：`ESC ]` … 到 BEL 或 `ESC \` 结束。 */
+const OSC_RE = new RegExp(`${ESC}\\].*?(?:${BEL}|${ESC}\\\\)`, 'gs')
+/** DCS / PM / APC：`ESC P|X|_` … 到 `ESC \` 结束。 */
+const DCS_RE = new RegExp(`${ESC}[PX|_].*?${ESC}\\\\`, 'gs')
+/** 两字符转义：`ESC` + 一个字节（如 `ESC ( B`）。 */
+const TWO_CHAR_RE = new RegExp(`${ESC}[ -/][0-~]`, 'g')
+/** 孤立的 ESC（没有合法后续）。 */
+const BARE_ESC_RE = new RegExp(ESC, 'g')
+
+/**
+ * 剥离 ANSI 转义序列（返回剥除计数）。
+ *
+ * **幂等**：剥过一次没有 ESC 了，第二次自然什么都不改。
+ */
+export function stripAnsiSequences(input: string): { text: string; removed: number } {
+  let removed = 0
+  let text = input
+  const count = (pattern: RegExp): void => {
+    const matches = text.match(pattern)
+    if (matches && matches.length > 0) removed += matches.length
+    text = text.replace(pattern, '')
+  }
+  count(OSC_RE)
+  count(DCS_RE)
+  count(CSI_RE)
+  count(TWO_CHAR_RE)
+  // 孤立的 ESC（没有合法后续）本身也是控制字符：一并去掉。
+  const bare = text.match(BARE_ESC_RE)
+  if (bare && bare.length > 0) {
+    removed += bare.length
+    text = text.replace(BARE_ESC_RE, '')
+  }
+  // CR 单独出现（无 LF）会覆盖行首（终端回车语义）⇒ 折成换行保留视觉分行。
+  text = text.replace(/\r(?!\n)/g, '\n')
+  return { text, removed }
+}
+/**
  * 中和来自包生态的不可信文本（插件名 / 原因 / 错误详情 / 备注）。
  *
  * 为什么这样做（而不是仅靠前端转义）：
@@ -129,13 +208,15 @@ export interface Sanitized {
  *   「修显示问题反而把正常输出改脏」的回归。
  *
  * 处理顺序（顺序本身有语义）：
- * 1. 先剥 C0/C1 控制字符与 DEL —— 终端里它们能改颜色/移动光标，是比
+ * 1. **先剥 ANSI 转义序列**（序列级）—— 逐码点剥会把 `[31m` 这样的参数负载
+ *    留成可见字面量（实测 `safe\u001b[31mRED` → `safe[31mRED`）。
+ * 2. 再剥 C0/C1 控制字符与 DEL —— 终端里它们能改颜色/移动光标，是比
  *    Markdown 更直接的显示破坏（实测 bundle 名可携带 `\u001b[31m`）。
- * 2. 再剥 Unicode 双向控制符 —— 它们能重排显示顺序，让「看起来的名字」
+ * 3. 再剥 Unicode 双向控制符 —— 它们能重排显示顺序，让「看起来的名字」
  *    与真实名字不同（同形异义欺骗），属于安全而不只是显示问题。
- * 3. 把换行/制表折成空格：明细行契约是「一行一件事」，内嵌换行会让
+ * 4. 把换行/制表折成空格：明细行契约是「一行一件事」，内嵌换行会让
  *    下游按行解析（缩进、表格、`lines` 计数）全部错位。
- * 4. 最后做**行内** Markdown 中和：`[`/`]` 先于 `(`/`)` 被转义 ⇒ 链接语法
+ * 5. 最后做**行内** Markdown 中和：`[`/`]` 先于 `(`/`)` 被转义 ⇒ 链接语法
  *    无法成立，因此括号**不需要**转义（转义它们会把 `(seq=1)` 这类正常
  *    输出改脏，属于过度中和）。
  *
@@ -149,9 +230,12 @@ export interface Sanitized {
  */
 export function sanitizeText(input: unknown): Sanitized {
   const raw = typeof input === 'string' ? input : input === undefined || input === null ? '' : String(input)
-  let removed = 0
+  // 第一步：序列级剥离 ANSI。逐码点剥会把参数负载留成可见字面量
+  // （实测 `safe\u001b[31mRED` → `safe[31mRED`）。
+  const stripped = stripAnsiSequences(raw)
+  let removed = stripped.removed
   let text = ''
-  for (const ch of raw) {
+  for (const ch of stripped.text) {
     const cp = ch.codePointAt(0) ?? 0
     const isControl = cp < 0x20 || cp === 0x7f || (cp >= 0x80 && cp <= 0x9f)
     const isBidi =

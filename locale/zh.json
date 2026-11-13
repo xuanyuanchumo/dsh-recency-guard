@@ -155,7 +155,13 @@
     "repository": "代码仓库",
     "issues": "问题反馈",
     "issuesHint": "崩溃误关/恢复异常？带上「分区键 + 时刻 + 插件名」去提 Issue",
-    "unknown": "未知"
+    "unknown": "未知",
+    "buildFreshness": "产物新鲜度",
+    "buildStale": "产物已过期，请重新构建",
+    "buildStaleMinutes": "产物已过期（源码比产物新 {n} 分钟），请重新构建",
+    "buildFresh": "产物与源码一致",
+    "buildUnknown": "无法判定产物新鲜度",
+    "buildRevision": "构建指纹"
   },
   "trend": {
     "worsening": "恶化中",
@@ -467,5 +473,12 @@
     "score": "贝叶斯分",
     "insufficient": "样本稀疏，不可判定",
     "unavailable": "该视图不含贝叶斯读数（不可得 ≠ 没有嫌疑）"
+  },
+  "toolview": {
+    "ok": "完成",
+    "preparing": "准备中…",
+    "omitted": "折叠 {n} 条",
+    "sectionOmitted": "其余 {n} 条未展开（完整事实见工具输出）",
+    "noMeta": "未提供耗时/退出码"
   }
 }

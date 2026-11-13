@@ -127,6 +127,28 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
     stage: 'monitoring',
     exposed: false,
   },
+  {
+    /**
+     * v0.19：产物新鲜度。
+     *
+     * 为什么是一条独立能力：它回答的是「**我跑的到底是哪份代码**」——
+     * 一条与守护判定无关、但决定「用户看到的行为对不对」的事实。
+     * `link:`/`file:` 安装下改了 `src/**` 但忘了重建时，它照常工作、
+     * 照常出数，只是行为是旧的 —— 没有这条事实，那种状态**不可见**。
+     *
+     * 三态是这条能力的核心：`true` = 确认过期；`false` = 确认不旧；
+     * `null` = **无法判定**（发布态无 `src/` 可比）。
+     */
+    id: 'guard.observe.freshness',
+    title: '产物新鲜度',
+    summary: '构建指纹与源码/产物漂移（一致 / 已过期 / 无法判定）',
+    produces: 'metric',
+    carrier: 'remote',
+    consumes: [],
+    consumedBy: ['guard.present.panel'],
+    stage: 'monitoring',
+    exposed: false,
+  },
 
   // ---------- 决策面 ----------
   {
@@ -318,6 +340,8 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
       'guard.observe.state',
       'guard.observe.lifecycle',
       'guard.observe.journal',
+      // 产物新鲜度在诊断卡上屏（v0.19）：「我跑的到底是哪份代码」。
+      'guard.observe.freshness',
       'guard.decide.suspects',
       'guard.decide.risk',
       'guard.recover.restore',
@@ -331,6 +355,34 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
     exposed: true,
     exposedAs: 'recency-guard.panel',
     hostServices: ['webServer', 'profileContext'],
+  },
+  {
+    /**
+     * v0.19：命令窗口卡片。
+     *
+     * 为什么单列一条能力（而不是并进 `guard.present.panel`）：
+     * 它的**消费方与生产方都不同** —— 消费的是 host 侧的
+     * `presentationMeta`（工具输出投影），生产的是**命令窗口**这个渲染面，
+     * 而管理面板消费的是 HTTP 快照。两者走的是完全不同的通道：
+     * 面板走 `/recency-guard/api/*`，卡片走 `tool.call.toolview` keyed slot。
+     *
+     * 关键事实：**内置 Web Client 不消费 `presentCall`/`presentResult`** ——
+     * 那两条钩子只服务于有能力的 UI。因此没有这条能力，工具调用在命令窗口
+     * 退化成 generic 行（且不报错）。这条能力登记的就是那个修复面。
+     */
+    id: 'guard.present.toolview',
+    title: '命令窗口卡片',
+    summary: '工具调用在命令窗口里的标题、状态、事实与明细折叠',
+    produces: 'graph',
+    carrier: 'remote',
+    consumes: ['guard.tool.status'],
+    consumedBy: [],
+    stage: 'monitoring',
+    exposed: true,
+    // 对外名称 = keyed slot 的 key（宿主按工具名查表）。
+    exposedAs: 'recency_guard',
+    // 卡片注册的席位名（路由之外的第三种注册面）。
+    exposedAlsoAs: ['tool.call.toolview'],
   },
   {
     id: 'guard.present.graph',
@@ -360,7 +412,9 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
     produces: 'metric',
     carrier: 'tool',
     consumes: ['guard.observe.metrics', 'guard.observe.state', 'guard.decide.suspects'],
-    consumedBy: [],
+    // v0.19：命令窗口卡片消费本工具的展示投影（presentationMeta 的 facts/sections）。
+    // 卡片不重新解析正文 —— 它转述的就是这里产出的规范值。
+    consumedBy: ['guard.present.toolview'],
     stage: 'monitoring',
     exposed: true,
     exposedAs: 'recency_guard',

@@ -155,7 +155,13 @@
     "repository": "Repository",
     "issues": "Report an issue",
     "issuesHint": "Wrong plugin disabled / recovery misbehaving? Open an issue with the partition key + time + plugin name",
-    "unknown": "unknown"
+    "unknown": "unknown",
+    "buildFreshness": "Build freshness",
+    "buildStale": "Artifact is stale — rebuild",
+    "buildStaleMinutes": "Artifact is stale (source is {n} min newer) — rebuild",
+    "buildFresh": "Artifact matches source",
+    "buildUnknown": "Build freshness undetermined",
+    "buildRevision": "Build revision"
   },
   "trend": {
     "worsening": "worsening",
@@ -467,5 +473,12 @@
     "score": "Bayes score",
     "insufficient": "Sparse samples - undefined",
     "unavailable": "This view has no Bayesian reading (unavailable ≠ no suspect)"
+  },
+  "toolview": {
+    "ok": "done",
+    "preparing": "preparing…",
+    "omitted": "{n} collapsed",
+    "sectionOmitted": "{n} more not shown (full facts in tool output)",
+    "noMeta": "no duration/exit code provided"
   }
 }

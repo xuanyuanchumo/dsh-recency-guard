@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 // schemastery 是**可选** peer：静态 import 会在缺失时让整个插件 require 崩，
 // 因此改由下方 `loadSchemastery()` 惰性解析 + 纯对象降级（v0.13 安装不崩修复）。
 import { readSelfPackage, readHostVersion, safeJson, safeVersion } from './host/core/self-describe.ts'
+import { computeBuildFreshness, type BuildFreshness } from './host/core/build-freshness.ts'
 import { rejectUnknownConfigKeys } from './host/core/config-strict.ts'
 // The runtime version is a detail, not a hard dependency: the import is
 // resolved lazily so a missing optional peer can never stop the plugin from
@@ -230,6 +231,15 @@ interface ConfigEditorLike {
  * 因此用 `ctx.inject(['configEditor'], cb)` 挂子 fiber：它缺席只影响备份。
  */
 export const inject = ['tools', 'pluginManager', 'profileContext']
+
+/**
+ * 产物新鲜度缓存的 TTL（毫秒）。
+ *
+ * 为什么是 60s：新鲜度检测会递归扫 `src/` 取最新 mtime —— 那是启动路径上
+ * 最贵的动作，而快照 5~15s 轮询一次。不缓存 = 每轮一次全树扫描。
+ * 60s 足以覆盖「改了代码忘了重建」的反馈窗口，又不让用户等太久。
+ */
+const FRESHNESS_TTL_MS = 60_000
 
 export function apply(ctx: Context, config: Config) {
   // v0.18 T16-01：入口先做**键集合 fail-loud**（学习 dsh-ops §2.5）。
@@ -499,6 +509,44 @@ class Guard {
   /** 插件自描述包（版本 + 反馈链接，R12/R18）：读不到时字段为 null，诚实降级。 */
   private readonly selfPackage = readSelfPackage()
 
+  /**
+   * 产物新鲜度缓存（v0.19）。
+   *
+   * 为什么必须缓存：`buildFreshness()` 会**递归扫 `src/`** 取最新 mtime ——
+   * 那是启动路径上最贵的动作（CLAUDE.md 已有「mtime 扫描绝不进定时器」的纪律）。
+   * 而快照是 5~15s 轮询一次的 ⇒ 不缓存就是每轮一次全树扫描。
+   *
+   * TTL 取 60s：足以覆盖「改了代码忘了重建」的反馈窗口，
+   * 又不会让用户改完代码后等太久才看到「产物已过期」。
+   */
+  private freshnessCache: { at: number; value: BuildFreshness } | null = null
+
+  /**
+   * 产物新鲜度（带缓存）。
+   *
+   * 读不到 / 无法判定都**不抛异常**：诊断信息不得拖垮守护流程。
+   */
+  private buildFreshness(): BuildFreshness {
+    const now = Date.now()
+    const cached = this.freshnessCache
+    if (cached !== null && now - cached.at < FRESHNESS_TTL_MS) return cached.value
+    let value: BuildFreshness
+    try {
+      value = computeBuildFreshness()
+    } catch (error) {
+      value = {
+        stale: null,
+        revision: null,
+        builtAt: null,
+        newestSourceAt: null,
+        driftMs: null,
+        builtVersion: null,
+        reason: error instanceof Error ? error.message : String(error),
+      }
+    }
+    this.freshnessCache = { at: now, value }
+    return value
+  }
 
   /**
    * 配置编辑服务 —— **可选**。
@@ -1681,6 +1729,9 @@ class Guard {
         hostVersion: readHostVersion(),
         repositoryUrl: this.selfPackage.repositoryUrl,
         issuesUrl: this.selfPackage.issuesUrl,
+        // 产物新鲜度（v0.19）：「我跑的到底是哪份代码」的白盒事实。
+        // 缺了它，「改了没生效」会被误判成代码问题，而真相是产物是旧的。
+        buildFreshness: this.buildFreshness(),
       },
     })
   }
@@ -1711,6 +1762,7 @@ class Guard {
           repositoryUrl: this.selfPackage.repositoryUrl,
           issuesUrl: this.selfPackage.issuesUrl,
         },
+        buildFreshness: this.buildFreshness(),
       },
       key,
     )
