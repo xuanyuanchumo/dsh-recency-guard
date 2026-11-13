@@ -43,6 +43,7 @@ export type PanelSnapshotView = Omit<
   | 'bayes'
   | 'cooccurrence'
   | 'preventive'
+  | 'steps'
   | 'revision'
 > & {
   /** 稳定性评分 ∈ [0,1]；跨分区视图 / 无样本时为 null。 */
@@ -68,6 +69,12 @@ export type PanelSnapshotView = Omit<
    * 采集面 —— 因此按「缺失/可空」处理；有值时形状完全跟随宿主（不复制第二套）。
    */
   preventive?: PanelSnapshot['preventive'] | null
+  /**
+   * v0.18 T16-14：执行操作记录（步骤记录）。旧宿主没有该字段、跨分区
+   * 只读视图不提供当前进程的步骤轨迹 —— 因此按「缺失/可空」处理；
+   * 有值时形状完全跟随宿主（StepSpan 投影，不复制第二套）。
+   */
+  steps?: PanelSnapshot['steps'] | null
   /**
    * 乐观并发凭证；跨分区只读视图恒 null（动作只作用于当前分区，
    * 拿对方凭证核对必然假冲突）。null 让面板走「不带凭证」分支。

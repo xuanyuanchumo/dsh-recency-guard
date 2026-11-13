@@ -787,3 +787,59 @@ export function agoLabel(iso: string, now = Date.now()): string {
   if (hours < 24) return t('time.hoursAgo', { count: hours })
   return t('time.daysAgo', { count: Math.round(hours / 24) })
 }
+
+/* ---------- v0.18 T16-14：执行操作记录投影 ---------- */
+
+/** 步骤记录的可渲染行（纯投影：面板不直接读 StepSpan 内部结构）。 */
+export interface StepRowView {
+  /** 步骤名（loader / boot / crash-decision / recover / restore / rollback / …）。 */
+  name: string
+  /** 开始时刻（ISO）。 */
+  startedAt: string
+  /** 结束时刻（未结束的步骤为 null —— 诚实表达「还在执行中」）。 */
+  endedAt: string | null
+  /** 耗时文本（未结束为 null；已结束为「Nms」或更人读的形态）。 */
+  durationText: string | null
+  /** 成败徽标文案（未结束为 null）。 */
+  statusText: 'ok' | 'failed' | 'running' | null
+  /** 人读摘要（reason 字段，失败时带原因）。 */
+  summary: string
+}
+
+/**
+ * 步骤记录投影（v0.18 T16-14，用户要求「插件的执行一定要有操作记录」）。
+ *
+ * ## 为什么单独成纯函数
+ *
+ * 步骤记录是执行轨迹的**展示层投影**：内部字段（name/startedAt/endedAt/
+ * ok/reason）是状态机的事实，面板需要的是「这一行怎么读」。纯函数可以
+ * 逐字节断言（空快照 / 未结束步骤 / 失败步骤三种形态各有测试）。
+ *
+ * ## 三态诚实表达
+ *
+ * - 已结束且成功：statusText='ok' + 耗时
+ * - 已结束且失败：statusText='failed' + 原因摘要
+ * - 未结束（还在执行中）：statusText='running'、endedAt=null、耗时=null
+ *   —— **不编造耗时与结果**（「还在跑」与「跑完了」是两回事）。
+ *
+ * ## 旧宿主兼容
+ *
+ * 快照缺 steps（旧宿主/跨分区视图）⇒ 返回空数组，不构造假记录。
+ */
+export function stepRows(snapshot: PanelSnapshotView): StepRowView[] {
+  const steps = snapshot.steps
+  if (steps === null || steps === undefined) return []
+  return steps.map((step) => {
+    const finished = step.endedAt !== undefined
+    const durationText = finished && step.durationMs !== undefined ? `${step.durationMs}ms` : null
+    const statusText: StepRowView['statusText'] = !finished ? 'running' : step.ok === true ? 'ok' : 'failed'
+    return {
+      name: step.name,
+      startedAt: step.startedAt,
+      endedAt: finished ? step.endedAt ?? null : null,
+      durationText,
+      statusText,
+      summary: step.reason ?? t('steps.noSummary'),
+    }
+  })
+}

@@ -101,6 +101,7 @@ export type LifecycleStepName =
   | 'startup-record' // 同步启动记录（哨兵 + 安装/更新事实）
   | 'boot' // 异步启动流程（状态迁移 + 变更记录 + 自动恢复）
   | 'crash-decision' // 崩溃时的同步决策发布
+  | 'recover' // 恢复执行（隔离/回滚的执行动作，v0.18 T16-14 补留痕）
   | 'restore' // 稳定后的配置恢复
   | 'rollback' // 级联刹车回滚（升级到顶后的自动兜底，v0.18 T16-12）
   | 'archive' // 归档搬走 + 留档

@@ -1236,6 +1236,24 @@ class Guard {
    * @returns `{quarantine, unresolved, steps, note}`；`unresolved` 必须上屏。
    */
   async recover(crashSeq: number): Promise<RecoveryRun> {
+    // v0.18 T16-14：执行动作必须有操作记录。此前 recover 是**唯一**
+    // 没有步骤留痕的核心执行动作（restore/rollback/boot/loader 都有），
+    // 用户要求「插件的执行一定要有操作记录（可视化）」——漏一条，
+    // 面板与日志就少了一次可复核的执行事实。beginStep 在动作**开始前**，
+    // 结束时无论成败都 endStep（成功带结果、失败带原因）。
+    this.beginStep('recover')
+    try {
+      const run = await this.recoverInner(crashSeq)
+      this.endStep('recover', true, run.note)
+      return run
+    } catch (error) {
+      this.endStep('recover', false, describeError(error))
+      throw error
+    }
+  }
+
+  /** recover 的实现体（原方法体，步骤留痕拆到外层包装）。 */
+  private async recoverInner(crashSeq: number): Promise<RecoveryRun> {
     const ranked = await this.decisionRankedSuspects()
     const cap = Math.max(1, this.config.maxAutoDisable)
     const findings = this.scanConflictsSync()
@@ -1612,6 +1630,9 @@ class Guard {
       projectKey: this.projectKey,
       stage: this.machine.stage,
       transitions: this.machine.transitions,
+      // v0.18 T16-14：执行动作的操作记录上屏（用户要求「插件的执行一定要有
+      // 操作记录（可视化）」）。步骤记录只截尾展示，全量在状态机内。
+      steps: this.machine.steps.slice(-12),
       stabilityScore: this.machine.stabilityScore(),
       observations: this.observations(),
       riskInputs: this.riskInputs(),

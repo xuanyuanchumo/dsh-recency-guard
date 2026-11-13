@@ -82,6 +82,15 @@
     "moreTransitions": "还有 {count} 次更早的迁移未显示",
     "fewerTransitions": "收起较早的迁移"
   },
+  "steps": {
+    "title": "执行操作记录",
+    "hint": "插件每次执行动作的留痕（开始/结束/耗时/成败）——与阶段迁移互补：迁移是状态轨迹，这里是执行轨迹",
+    "noSteps": "尚无执行步骤记录（插件尚未执行动作）",
+    "noSummary": "无摘要",
+    "ok": "成功",
+    "failed": "失败",
+    "running": "执行中"
+  },
   "metrics": {
     "title": "量化指标",
     "crashRate": "崩溃率",

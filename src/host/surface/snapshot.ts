@@ -1,6 +1,6 @@
 import type { CapabilityGraph } from '../capability/capability.ts'
 import { buildCapabilityGraph, capabilitiesByStage, verifyCapabilityContract } from '../capability/capability-specs.ts'
-import type { GuardStage, StageTransition } from '../core/lifecycle.ts'
+import type { GuardStage, StageTransition, StepSpan } from '../core/lifecycle.ts'
 import { ALL_STAGES } from '../core/lifecycle.ts'
 import { computeMetrics, rankHazards, type MetricsSnapshot, type Observation, type RankedRisk } from '../observe/observability.ts'
 import { deriveEventFlow, type FlowEvent } from '../observe/observations.ts'
@@ -78,6 +78,13 @@ export interface PanelSnapshot {
   stageLabel: string
   /** 迁移历史（按时间顺序）。 */
   transitions: StageTransition[]
+  /**
+   * 最近执行的步骤记录（v0.18 T16-14）。
+   *
+   * 截尾展示：完整记录在 state 机内，面板只显示最近 N 条（与 transitions
+   * 同口径的截尾纪律 —— 数据层给全量、渲染层显式省略）。
+   */
+  steps: StepSpan[]
   /** 稳定性评分 ∈ [0,1]。 */
   stabilityScore: number
   /** 量化指标。 */
@@ -258,6 +265,18 @@ export interface SnapshotInput {
   projectKey: string
   stage: GuardStage
   transitions: readonly StageTransition[]
+  /**
+   * 最近执行的步骤记录（v0.18 T16-14，用户要求「执行一定要有操作记录」）。
+   *
+   * 步骤回答「这次启动/恢复做了哪些动作、耗时、成败」——与 transitions
+   * （阶段迁移）是两层事实：transitions 是**状态**轨迹，steps 是**执行**
+   * 轨迹。面板把两者分开展示，用户才能区分「阶段从 A 到 B」与
+   * 「recover 执行了、耗时多少、成功与否」。
+   *
+   * **可选**：旧调用方/测试夹具按 v0.17 的 SnapshotInput 形状构造，
+   * 缺省时快照给出空数组（「没有执行记录」的诚实表达，不构造假记录）。
+   */
+  steps?: readonly StepSpan[]
   stabilityScore: number
   observations: Observation[]
   riskInputs: Array<{
@@ -437,6 +456,11 @@ export function buildPanelSnapshot(input: SnapshotInput, now = Date.now()): Pane
     stage: input.stage,
     stageLabel: STAGE_LABELS[input.stage],
     transitions: [...input.transitions],
+    // v0.18 T16-14：执行操作记录随快照上屏。切片在调用方（index.ts 传
+    // machine.steps.slice(-12)），这里只做不可变拷贝 —— 快照是只读投影，
+    // 消费方（面板）拿到的必须是快照时刻的冻结事实，不共享可变数组。
+    // 旧调用方/夹具缺省 ⇒ 空数组（「没有执行记录」的诚实表达）。
+    steps: [...(input.steps ?? [])],
     stabilityScore: input.stabilityScore,
     metrics,
     risks,

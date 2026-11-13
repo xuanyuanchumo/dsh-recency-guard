@@ -16,6 +16,7 @@ import {
   stabilityView,
   stageLabelOf,
   stageRail,
+  stepRows,
   type DecisionEntry,
   type PartitionOption,
 } from './panel-model.ts'
@@ -317,6 +318,28 @@ export function LifecycleBody({ snapshot }: { snapshot: PanelSnapshotView }): Re
         <dt>{t('state.restored')}</dt>
         <dd>{snapshot.restored.length}</dd>
       </dl>
+      {/* 执行操作记录（v0.18 T16-14）：用户要求「插件的执行一定要有操作
+          记录（可视化）」。与上面的阶段迁移互补：迁移回答「状态到哪了」，
+          这里回答「每次执行做了什么、耗时、成败」。空快照（旧宿主/跨分区）
+          显示诚实空态，不构造假记录。 */}
+      {(snapshot.steps?.length ?? 0) > 0 && (
+        <div className="rg-steps" aria-label={t('steps.title')}>
+          <p className="rg-steps-title" title={t('steps.hint')}>{t('steps.title')}</p>
+          <ol className="rg-steps-list">
+            {stepRows(snapshot).map((row) => (
+              <li key={`${row.startedAt}-${row.name}`} className={`rg-step-row rg-step-${row.statusText ?? 'running'}`}>
+                <span className="rg-step-name">{row.name}</span>
+                <span className={`rg-badge rg-badge-${row.statusText === 'failed' ? 'error' : row.statusText === 'ok' ? 'success' : 'warn'}`}>
+                  {row.statusText === 'ok' ? t('steps.ok') : row.statusText === 'failed' ? t('steps.failed') : t('steps.running')}
+                </span>
+                {row.durationText !== null && <span className="rg-step-duration">{row.durationText}</span>}
+                <span className="rg-step-summary" title={row.summary}>{row.summary}</span>
+                <time className="rg-step-time">{formatClock(row.startedAt)}</time>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
       {snapshot.transitions.length === 0 ? (
         <p className="rg-empty">{t('state.noTransitions')}</p>
       ) : (

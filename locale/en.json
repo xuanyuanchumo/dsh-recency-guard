@@ -82,6 +82,15 @@
     "moreTransitions": "{count} earlier transitions hidden",
     "fewerTransitions": "Show fewer transitions"
   },
+  "steps": {
+    "title": "Execution log",
+    "hint": "Operation records of each plugin action (start/end/duration/result) — complements stage transitions: transitions are the state trajectory, these are the execution trajectory",
+    "noSteps": "No step records yet (the plugin has not executed any action)",
+    "noSummary": "no summary",
+    "ok": "ok",
+    "failed": "failed",
+    "running": "running"
+  },
   "metrics": {
     "title": "Metrics",
     "crashRate": "Crash rate",

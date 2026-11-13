@@ -15,6 +15,7 @@ export {
   diagnosticsRows,
   markovView,
   metricRows,
+  stepRows,
   survivalMismatchReason,
   type DataFlowStage,
   type DecisionEvidenceRow,
