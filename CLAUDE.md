@@ -116,3 +116,16 @@
 - **零依赖脚本的双实现必须有跨实现对拍**：`bin/rescue.mjs` 不能用宿主模块（崩溃时 node_modules 可能坏），只能自带一份宽度实现 —— 那就必须有 `width-parity.test.ts` 用同一语料对拍两份。**没有对拍的重复实现 = 定时漂移**（rescue 那份确实漏了组合字符/ZWJ 修复）。
 - **真机验收不可替代（连续两轮验证）**：预警卡裁切、轮询间隔在页脚最底部（用户看不到）、图谱切边 —— 单测 + tsc 全绿时全都存在。**首屏可见性**与**内容完整可见**（`scrollHeight === clientHeight`）都要写成判据。
 - **变异/评估不并发（守卫真的挡住了一次）**：`.tmp/mutation.inflight` 让 evidence 主动拒绝出结论、只报「上次全量是 mutation 前的」。这是治理设施产生价值的具体证据，不是纸面纪律。
+
+## 崩溃循环兜底与发布链（v0.18 实测新增）
+
+- **npm granular token 禁止 unpublish（403）**：v0.18.0 带着「不含最后一批功能的 dist」发布后无法撤销，只能再发 0.18.1 兜底。教训是**发布前确认 dist 已含全部本轮功能**（先 build 再逐功能核对 tarball），而不是事后补救——覆盖发布被拒 + 撤销被拒，两条路都堵死。
+- **刹车判据必须单源**：哨兵通道（crashSeq）与异常终止通道（abnormalSeq）各写一套「到顶怎么办」，用户拿到的行为取决于崩溃碰巧走哪条通道。`escalationExhausted` 一个纯函数，两条通道只传不同计数。
+- **刹车豁免确定性证据**：唯一嫌疑/声明命中第 1 轮即行动（精准隔离），回滚只防「误伤累积」，不防「证据确凿」——豁免写进判定分支，不是靠调用方记得。
+- **测试钉住行为变更时要写明「旧断言钉的是缺陷」**：封顶语义从「停在关 N 个」改为「刹车回滚」，旧测试断言的是缺陷行为本身——更新断言 + 注释里写行为变更依据，否则后人会把回滚当回归。
+- **vault_run 的白名单 shell 对位置参数做 glob 展开**：tag 名 `v0.18.0` 报 "no matches found"。需要调 REST API 时用 node fetch 脚本（token 走环境变量注入），不依赖本地 shell 的解析行为。
+- **门禁/归档的表格格式是解析契约**：任务表**状态列必须最后一列**（`lib/tasks.mjs` 按末列判完成）；测试报告必须有 `| 通过 | N |` 形式的汇总行（缺格式 = 没有证据 = FAIL，不是 0 个失败）。写交付文档先对齐解析器，别等门禁红了再改格式。
+- **零依赖脚本（.mjs）不能带 TS 注解**：`scripts/gh-release.mjs` 写了 `file: string` ⇒ SyntaxError。scripts/ 下的纯 JS 保持纯 JS，类型检查交给调用方约定。
+- **「执行一定要有操作记录」是用户可感知的要求，不是内部纪律**：`recover()` 是唯一没有 beginStep/endStep 的核心执行动作，漏一条，面板与日志就少一次可复核的执行事实。新执行动作落地清单必须含「步骤留痕 + 面板投影」两项。
+- **PowerShell `ConvertTo-Json` 管道输出带 BOM**：改沙箱 profile 的 package.json 后宿主 JSON.parse 直接崩（"Unexpected token"）。改 JSON 配置一律用编辑工具或显式 UTF-8 无 BOM 写入，不用 PowerShell 管道重定向。
+- **tag force-update 后按 tag PATCH Release 会 404**：Release 与旧 tag commit 的关联失效。先 `gh api .../releases/tags/<tag>` 拿 id，再按 id PATCH。

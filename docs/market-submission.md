@@ -124,7 +124,7 @@ node -e "const fs=require('fs');const t=fs.readFileSync('docs/market-submission.
 | GitHub | <https://github.com/xuanyuanchumo/dsh-recency-guard>（main；tag `v0.17.0` 已推远端；v0.18.1 tag 随本轮发布） |
 | GitHub Release | <https://github.com/xuanyuanchumo/dsh-recency-guard/releases/tag/v0.17.0>（`isDraft=false`；v0.18.1 随本轮发布） |
 | 市场条目 | `data/plugins/xuanyuanchumo__dsh-recency-guard.yml`（已收录） |
-| 更新 PR | <https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/14245>（复用同一分支，HEAD `94ade1e`） |
+| 更新 PR | [PR #14245](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/14245)（已合并，merged 2026-11-11）；**v0.18.1 描述更新：[PR #14917](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/14917)**（分支 `update-recency-guard-v0.18.1`，HEAD `eb81773`） |
 | 仓库创建时间 | `2026-11-07T07:44:06Z`（满足 1 天门槛） |
 | topics | `crash-recovery`、`deepseek-harness`、`dsh-plugin`、`plugin-guard` |
 | 许可 | MIT |
@@ -142,7 +142,7 @@ node -e "const fs=require('fs');const t=fs.readFileSync('docs/market-submission.
 | 3 | `git tag v0.18.1` + SSH push | tag 指向 commit（四锚点已对齐） |
 | 4 | GitHub Release（SSH，`isDraft=false`） | Release 页面 |
 | 5 | `npm publish` | registry `latest = 0.18.1`，tarball shasum |
-| 6 | 市场条目更新 PR（复用 #14245 分支或新 PR） | PR 页面 + 描述与代码逐句核对 |
+| 6 | 市场条目更新 PR | ✅ [PR #14917](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/14917) 已提交（描述与代码逐句核对） |
 
 **v0.18.1 对市场条目描述的增量**（若做条目更新）：
 - 新增「级联刹车：崩溃循环升级到顶后自动回滚到崩溃前启动状态」能力描述；

@@ -62,8 +62,9 @@ dsh plugin --profile <profile名> add dsh-recency-guard@0.18.1
 
 投稿材料已按 [awesome-dsh-plugin contributing.md](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md)
 备好（[`docs/market-submission.md`](docs/market-submission.md)）：一个条目文件、`category: security`。
-**当前状态：条目已收录（PR #14245）；0.17.0 描述更新已推到同一 PR 分支（v0.18.1 将随合并后下一 PR 更新）（HEAD `94ade1e`），
-等待复核/合并。** 收录后可在 dsh 的 **Plugins → Discover** 或 dsh-market 中搜索 `recency-guard` 安装。
+**当前状态：条目已收录并合并（PR #14245，merged 2026-11-11）；v0.18.1 描述更新已提交
+[PR #14917](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/14917)（级联回滚 / 影响面分析 / 执行操作记录）。**
+可在 dsh 的 **Plugins → Discover** 或 dsh-market 中搜索 `recency-guard` 安装。
 
 ### 手动 / 本地源码（开发）
 
