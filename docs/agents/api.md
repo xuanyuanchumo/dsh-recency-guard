@@ -15,6 +15,7 @@
 | **`PanelSnapshot.unresolved` 上屏** | 生命周期卡新增「恢复残余」块：上次隔离后无法自动解决的 error finding（kind + plugins + message），`role="alert"`；空数组/旧宿主缺席不渲染 | **纯追加**（宿主字段 v0.14 已存在，本轮接入消费） |
 | **图谱详情侧栏新增 `impact` 行** | 聚焦节点显示影响面（上游/下游全子图计数）——`impactedBy`/`reachableFrom` 首个 UI 消费者；props 可选，旧调用方不传不渲染 | **纯追加**；分析口径与相邻列表同为 visibleEdges |
 | **级联刹车 + 崩溃前回滚（T16-12）** | 崩溃循环升级到顶（`crashSeq ≥ confirmRounds + maxAutoDisable`）⇒ 不再新增禁用，决策收敛为「仅头号嫌疑」，`state.rollbackArmed=true`，**下一轮启动自动回滚**：启用除头号外的全部被关插件（恢复崩溃前启动状态），头号嫌疑保持关闭；`journal` 新增 `rollback` kind，`state.lastRecoveryVerdict` 增加 `rollback` 标志，决策 `phase` 增加 `rollback` | **行为变化**：封顶后从「永远停在关 N 个」变为「自动回滚兜底」；回滚失败者如实留在名单（不谎报） |
+| **执行操作记录可视化（T16-14）** | `PanelSnapshot.steps`（StepSpan 投影，可选，旧调用方缺省为空数组）；`recover()` 补步骤留痕（此前是唯一无留痕的核心执行动作）；面板生命周期卡新增「执行操作记录」区块（步骤名/状态徽标/耗时/摘要/时刻，三态：成功/失败/执行中） | **纯追加**；`SnapshotInput.steps` 可选 ⇒ 旧调用方与测试夹具行为不变 |
 
 
 ## 0.0h v0.17 契约变更一句话清单

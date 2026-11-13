@@ -1048,3 +1048,35 @@ boot 是异步的，其 `updateState` 可能在崩溃之后才拿到执行权；
 - 回滚失败者留在 `autoDisabled`，下轮启动重试，绝不「假装回滚成功」；
 - journal 新增 `rollback` kind（跨层词汇表四处同步：store / observations /
   FLOW_BY_KIND / LifecycleStepName）。
+
+---
+
+## 20. v0.18.0：执行操作记录（cycle-16 T16-14，用户要求「插件的执行一定要有操作记录」）
+
+### 20.1 问题
+
+插件有两类执行留痕：**journal 事件**（install/disable/enable/restore/
+crash-detected…）与**状态机迁移**（stage 轨迹）。但两者都不回答
+「这次执行动作本身做了什么、耗时多少、成败如何」：
+
+- `recover()` 是核心执行动作（贪心隔离 / 回滚），**此前没有任何步骤留痕**
+  —— 唯一没有 beginStep/endStep 包裹的核心动作；
+- `lifecycle.steps`（StepSpan：name/startedAt/endedAt/durationMs/ok/reason）
+  只进 `status` 工具输出，**面板不可见**。
+
+### 20.2 设计
+
+**留痕**：`recover()` 拆为外层包装（beginStep/endStep + 失败带原因）与
+`recoverInner()`（原实现体）。动作开始前 beginStep、结束（无论成败）endStep
+—— 与 restore/rollback/boot/loader 同形态，**没有「做完了但没记录」的通道**。
+
+**上屏**：`PanelSnapshot` 增加 `steps: StepSpan[]`（`SnapshotInput.steps`
+可选，旧调用方/测试夹具缺省为空数组 ⇒ 快照给出空数组，不构造假记录）。
+面板生命周期卡新增「执行操作记录」区块，由纯函数 `stepRows` 投影：
+
+- **三态诚实表达**：成功（ok + 耗时）、失败（failed + 原因摘要）、
+  执行中（running、无耗时、无结果）——「还在跑」与「跑完了」是两回事；
+- **数据层不截断**：投影消费调用方传入的完整数组；截尾（slice(-12)）
+  是调用方的显示策略，投影层保持全量；
+- **与迁移列表互补**：迁移回答「状态到哪了」，步骤回答「每次执行做了什么」——
+  两层事实分开展示，用户不会把「阶段从 A 到 B」误读为「动作完成了」。
