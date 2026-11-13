@@ -391,7 +391,131 @@ npx tsx tests/unit/pure-projections.test.ts          # schemaVersion 纯解析/�
 - **自适应轮询**：5s→10s→15s 封顶、变化回 5s、夹紧 [3s,30s]；指纹剔除 `at` /
   `diagnostics.snapshotMs`；组件必须用递归 `setTimeout`（不是 `setInterval`）。
 
-### 8.7 全量基线
+### 8.7 v0.19 新增判据（命令窗口 / ANSI / 新鲜度 / 退避 / 串扰）
 
-`npm test` = **84/84**（Core 42 / Host 10 / Client 24 / Contract 8）；
+#### 8.7.1 命令窗口卡片（TD-8）
+
+**根因核验（改动前必须先做）**：
+
+```bash
+grep -rn "tool.call" src/ | wc -l        # 改动前必须是 0
+grep -c "tool.call.toolview" dist/client.js   # 改动后必须 > 0
+```
+
+**契约层**（`tests/contract/toolview-contract.test.ts`）钉住 8 条：
+
+- client 半部注册 `tool.call.toolview` 席位；
+- key ≡ host 侧 `TOOL_SURFACE.name`（`recency_guard`）；
+- 注册经由 `ctx.slots.inject`（**不是**裸 `register` —— 裸注册会撞
+  「向未声明 slot 注册」，整个 entry 失败 ⇒ 面板全灭）；
+- 幂等守卫存在（`slots.entries()` 反查）；
+- **注册计数是 getter**（`get count()`）—— inject 回调是宿主延迟调用的，
+  静态快照会永远停在 0；
+- client 入口真的调用了 `integrateToolView`；
+- CSS 单一样式真源（集成侧不得另持一份）；
+- 抽取层零 React 依赖 + 是 `.ts` 文件（结构上不可能含 JSX）。
+
+**真机判据**（沙箱 GUI，浏览器上下文执行）：
+
+```js
+({
+  toolviewCount: window.__RECENCY_GUARD_TOOLVIEW__?.count,   // 必须是 1
+  toolviewError: window.__RECENCY_GUARD_TOOLVIEW__?.error,   // 必须是 null
+  toolviewSkipped: window.__RECENCY_GUARD_TOOLVIEW__?.skipped, // 必须是 null
+  cssInDom: !!document.getElementById('rg-toolview-css'),    // 必须是 true
+  panelRegistered: window.__RECENCY_GUARD__?.registered,      // 必须是 true
+})
+```
+
+> **证据强度诚实标注**：上述判据证明「席位已注册 + 卡片样式已入 DOM + 抽取层
+> 53 条断言全绿」，但**不等于**「卡片在命令窗口真的渲染过一次」——
+> 那需要一次真实的工具调用（沙箱需配 provider）。本轮的最大证据缺口就在这里，
+> 下一轮第一候选补齐。
+
+#### 8.7.2 ANSI 序列级剥离（TD-9）
+
+```bash
+npx tsx tests/unit/ansi-strip.test.ts    # 24 条全绿
+```
+
+关键判据（**负载不残留**是核心）：
+
+- `stripAnsiSequences('safe\u001b[31mRED\u001b[0m').text === 'safeRED'`
+  —— **不是** `'safe[31mRED'`（逐码点剥除的缺陷形态）；
+- OSC 必须有终止符（BEL 或 `ESC \`）—— 没有终止符时不能「匹配到 ESC] 就停」
+  （那正是缺陷本身）；
+- 两字符转义按 ECMA-48 是**三字节**（`ESC ( B` 全是序列，`B` 不是可见文本）；
+- 正常包名 / 版本号 / 中文**逐字节不变**（`@scope/pkg`、`0.0.0-dev`）；
+- 幂等：剥过一次再剥，文本不变且 `removed === 0`。
+
+#### 8.7.3 产物新鲜度（TD-10）
+
+```bash
+npx tsx tests/unit/build-freshness.test.ts    # 19 条全绿
+curl -s http://127.0.0.1:<port>/recency-guard/api/snapshot | grep -o '"buildFreshness":{[^}]*}'
+```
+
+判据：
+
+- **三态严格区分**：`true` = 确认过期；`false` = 确认不旧；`null` = **无法判定**
+  （发布态无 `src/` 可比）—— 绝不把「无法判定」显示成「正常」（那是假绿）；
+- 版本取自 `package.json`（**不从产物正则捞** —— 产物里到处是 `0.9.0`，
+  正则捞到第一个匹配 = 假事实）；
+- 缺产物 ⇒ 指纹 `null`（**不伪造**）；
+- 根定位**与 cwd 无关**（默认起点是模块自身位置 —— 插件的 cwd 是用户工作区）；
+- 同毫秒的改动不算过期（严格大于）；
+- 面板诊断卡显示该行（真机：`产物新鲜度：产物与源码一致`）。
+
+#### 8.7.4 轮询失败退避 + 隐藏页暂停
+
+```bash
+npx tsx tests/client/poll-failure-backoff.test.ts    # 17 条全绿
+```
+
+- 阶梯 `5/10/20/40/60s`，封顶 60s；
+- **`+Infinity` ⇒ 封顶档**（不是首档！失败无穷多次恰恰最该退避到底）；
+- `NaN` ⇒ 首档（不可知 ≠ 很糟）；
+- 所有延迟恒为**有限正数**（直接喂 `setTimeout`，NaN 会让轮询永久停摆）；
+- 隐藏页不拉取；`visibilitychange` 转回可见时**立即补拉**（定时器不销毁）。
+
+#### 8.7.5 跨分区在途串扰（TD-11）
+
+```bash
+npx tsx tests/client/epoch-guard.test.ts    # 15 条全绿
+```
+
+- **双向竞态顺序**都要过：旧响应**先到**与**后到**，画面最终都必须是最新选择；
+- 过期响应**不落地**（`applyIfCurrent` 返回 false 且不调用落地函数）；
+- 三处分区切换点统一走 `selectPartition()`（漏一处就是串扰入口）。
+
+#### 8.7.6 归档重置（插件自身的动作）
+
+```bash
+curl -s -X POST -H "Content-Type: application/json" -d '{"reason":"验证"}' \
+  http://127.0.0.1:<port>/recency-guard/api/action/archive
+curl -s http://127.0.0.1:<port>/recency-guard/api/archives
+curl -s http://127.0.0.1:<port>/recency-guard/api/snapshot
+```
+
+判据：
+
+- archive 返回 `ok:true` + `count > 0` + **manifest 摘要非零**
+  （`journalEvents > 0`）—— 「先读 manifest 再搬走」；
+  （老坑：归档清单在搬走**之后**读 ⇒ 摘要永远报 0）；
+- 重置后 `stage=idle`、`autoDisabled=[]`、`restored=[]` ⇒ **不继承旧结论**；
+- `/archives` 能列出该归档。
+
+#### 8.7.7 桌面主力热重载（不重启宿主）
+
+```bash
+# 插件管理器：关闭 ⇒ 路由 404；开启 ⇒ 200 且版本变新
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:55312/recency-guard/api/snapshot
+```
+
+判据：切换后 `diagnostics.pluginVersion` 为新版本；`capability.total` 增加；
+`buildFreshness.stale === false`。
+
+### 8.8 全量基线
+
+`npm test` = **95/95**（Core 46 / Host 10 / Client 29 / Contract 10）；
 `npx tsc --noEmit` 0；`npm run lint` 0；`npm run build` 双产物成功。

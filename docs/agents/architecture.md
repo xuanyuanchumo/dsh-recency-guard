@@ -1,4 +1,4 @@
-# 架构与功能域划分（v0.18.0）
+# 架构与功能域划分（v0.19.0）
 
 > 本文回答一件事：**`src/` 为什么这样分**。
 > 它不是目录说明书，而是「每条边界在防哪种缺陷」的论证。
@@ -22,6 +22,7 @@ src/
 ├── index.ts                     # host bundle 入口：四件套 name/inject/Config/apply
 ├── host/                        # 只在宿主进程运行（可用 node:fs / 进程 / 路由 / IO）
 │   ├── core/                    #   基础原语：生命周期状态机、revision、分区键、自描述、同步原子写、路径安全投影
+│   │                            #     + 产物新鲜度（build-freshness，v0.19）
 │   ├── data/                    #   持久化与归档：Store、archive、锁卫生（lock-hygiene）、
 │   │                            #     journal 文本层（journal-io）、schema 版本判据（schema-version）
 │   ├── guard/                   #   崩溃守护主线：决策、恢复、信号、异常终止、守护行安装
@@ -35,7 +36,10 @@ src/
 │   └── surface/                 #   对外面：工具注册/分派/渲染、路由、状态投影、面板快照、预防性投影
 ├── client/                      # 只在浏览器运行（禁止 node:*，禁止 import host）
 │   ├── panel/                   #   面板：容器、卡片、洞察、投影、可空视图、错误边界、自适应轮询
+│   │                            #     + 在途世代守卫（epoch-guard，v0.19）
 │   ├── graph/                   #   图谱：渲染、模型、分析、小地图、视口、交互/布局/调色
+│   ├── toolview/                #   命令窗口终端卡（v0.19）：tool.call.toolview 席位注册
+│   │                            #     + 卡片渲染 + 零 React 依赖的抽取层
 │   ├── api/                     #   客户端取数的唯一出口
 │   └── i18n/                    #   自持字典
 └── shared/                      # 跨运行时契约层（Definition）：只放类型 + 纯常量
@@ -110,6 +114,33 @@ Loader 从 `package.json` 的 `main` 取入口，`apply` 与 `name/inject/Config
 
 这条边界的教训与 §3.1 同源：**类型不是运行时事实**，跨层契约必须有测试把「实际可能为 null」
 写下来。
+
+### 3.6 `client/toolview/` —— 防「能力实现了但没人消费」
+
+**真实缺陷（v0.19 用户报告「命令窗口显示问题」的根因）**：宿主侧把
+`presentCall` / `presentResult` / `presentationMeta` 构造得很完整，
+`tests/contract/capability.test.ts` 也有「注册处必须接线」的源码门 ——
+**接线是接上了，只是接到了没人消费的那一头**。
+
+官方契约：**内置 Web Client 不消费 `presentCall` / `presentResult`**
+（它们只服务于有能力的 UI，如 dsh-ops 自己的 TUI 面板）。落到内置 Client 时，
+工具调用退化成 generic 行（参数 JSON + 一坨原始文本），**且不报错、不降级**。
+
+**因此新增一个 client 域**：`tool.call.toolview` keyed slot（key = 工具名）。
+宿主会话面板挂载时按工具名查表，命中就用我们注册的组件渲染该行。
+
+这个域的三条边界：
+
+| 边界 | 防什么 | 约束 |
+| --- | --- | --- |
+| 抽取层零 React | 抽取逻辑要能对着**敌对输入**（null / 数组 / 缺字段 / NaN）做单测 | `toolview-model.ts` 不得 import react（契约测试钉住） |
+| 卡片只转述 host 侧事实 | 卡片自己解析正文 ⇒ 结构漂移（两边各写一套） | `facts` / `sections` / `omitted` 只从 `presentationMeta` 取；折叠态也不重新决定 |
+| 注册计数用 getter | `inject` 回调是宿主**延迟**调用的（ToolCallTree 挂载时），静态快照会永远停在 0（anic 实测：5 卡片 vs count=0） | `get count()` 而非 `{ count }` |
+
+**元教训**：契约测试能证明「我调了这个钩子」，但证明不了「宿主会消费它」。
+凡是「宿主侧投影」类能力，验收必须有一条**消费侧**断言 ——
+本轮落成 `tests/contract/toolview-contract.test.ts` + 真机判据
+`__RECENCY_GUARD_TOOLVIEW__.count === 1`。
 
 ## 4. 依赖方向（唯一允许的方向）
 

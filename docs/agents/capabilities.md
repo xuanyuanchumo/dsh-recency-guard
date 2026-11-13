@@ -1,4 +1,4 @@
-# 能力清单与双向比对口径（v0.18.0）
+# 能力清单与双向比对口径（v0.19.0）
 
 > 本文回答三个问题：**这个插件对外承诺了哪些能力**、**每条能力在注册面/生产面/消费面的落点**、
 > **"清单没漏、注册没虚"这件事由谁证明**。
@@ -37,7 +37,16 @@ v0.16 新增的 `conflict-declarations.ts` / `conflict-findings.ts` / `conflict-
   `PanelSnapshot` / `status` / 面板）；`preventive` 自身仍不是能力 id —— 能力清单按**对外名称/action/路由**
   比对，数据字段的新增不改变能力条数。
 
-因此 `CAPABILITY_SPECS.length` 仍为 **22**（未新增 id），注册面仍是
+### 1.2 v0.19 新增的两条能力（cycle-17）
+
+本轮**新增了 2 条能力 id**（此前连续几轮都是「只拆实现、不加 id」）：
+
+| id | 为什么不是「实现拆分」 |
+| --- | --- |
+| `guard.present.toolview` | 它有**独立的对外名称**（`recency_guard` 作 keyed slot 的 key）与**独立的消费方**（命令窗口的终端卡）。面板消费 HTTP 快照，卡片消费 host 侧的 `presentationMeta` —— 两条完全不同的通道，各算一条能力 |
+| `guard.observe.freshness` | 它回答的是「**我跑的到底是哪份代码**」—— 与守护判定无关，但决定「用户看到的行为对不对」。没有它，`link:`/`file:` 安装下改了源码没重建那种状态**不可见** |
+
+因此 `CAPABILITY_SPECS.length` 为 **24**，注册面仍是
 9 路由 + 1 工具名（8 action）+ 2 面板席位 —— 双向比对口径不变，契约测试
 `tests/contract/capability.test.ts` 仍以「注册 ⊃ 清单 / 清单 ⊃ 注册」两侧核对。
 **只有当对外名称 / action / 路由 / `hostServices` 变化时，才需要新增或改能力 id。**
@@ -88,7 +97,7 @@ v0.16 新增的 `conflict-declarations.ts` / `conflict-findings.ts` / `conflict-
 
 两者 id 必须一致，侧栏据此把图标与中央面板对应起来；不一致的症状是"点了图标没反应"。
 
-## 3. 22 条能力：生产 → 消费
+## 3. 24 条能力：生产 → 消费
 
 字段方向（写反过一次，已在 `capability.ts` 用命名钉死）：
 
@@ -103,6 +112,7 @@ v0.16 新增的 `conflict-declarations.ts` / `conflict-findings.ts` / `conflict-
 | `guard.observe.lifecycle` | state | 面板 / 图谱 | `recency-guard.lifecycle` | [`lifecycle.ts`](../../src/host/core/lifecycle.ts) | [`lifecycle-steps.test.ts`](../../tests/unit/lifecycle-steps.test.ts) |
 | `guard.observe.config` | backup | 证据链 / backups | — | [`store.ts`](../../src/host/data/store.ts) | [`versioned-backup.test.ts`](../../tests/unit/versioned-backup.test.ts) |
 | `guard.observe.metrics` | metric | 面板 / 图谱 / status / 生命周期 | — | [`observability.ts`](../../src/host/observe/observability.ts)、[`preventive.ts`](../../src/host/observe/preventive.ts)、[`preventive-view.ts`](../../src/host/surface/preventive-view.ts) | [`observability-math.test.ts`](../../tests/unit/observability-math.test.ts)、[`preventive-wiring.test.ts`](../../tests/unit/preventive-wiring.test.ts) |
+| `guard.observe.freshness` | metric | 面板（诊断卡「产物新鲜度」行） | — | [`build-freshness.ts`](../../src/host/core/build-freshness.ts)（构建指纹 + mtime 漂移，三态判定）、[`snapshot.ts`](../../src/host/surface/snapshot.ts)（投影） | [`build-freshness.test.ts`](../../tests/unit/build-freshness.test.ts) |
 | `guard.decide.suspects` | decision | 恢复 / 手动恢复 / 图谱 / 面板 / status / 风险 / revision | — | [`recency.ts`](../../src/host/risk/recency.ts)、[`conflict-declarations.ts`](../../src/host/guard/conflict-declarations.ts)、[`conflict-findings.ts`](../../src/host/guard/conflict-findings.ts)、[`crash-decision.ts`](../../src/host/guard/crash-decision.ts) | [`decision-evidence.test.ts`](../../tests/unit/decision-evidence.test.ts)、[`conflict-findings.test.ts`](../../tests/unit/conflict-findings.test.ts)、[`deterministic-evidence.test.ts`](../../tests/unit/deterministic-evidence.test.ts) |
 | `guard.decide.risk` | metric | 面板 / 图谱 | — | [`risk-bayes.ts`](../../src/host/risk/risk-bayes.ts)、[`risk-calibration.ts`](../../src/host/risk/risk-calibration.ts) | [`risk-bayes.test.ts`](../../tests/unit/risk-bayes.test.ts) |
 | `guard.recover.apply` | decision | 证据链 | — | [`crash-decision.ts`](../../src/host/guard/crash-decision.ts)、[`quarantine-plan.ts`](../../src/host/guard/quarantine-plan.ts)、[`decision.ts`](../../src/host/guard/decision.ts)、[`guarded-rows.ts`](../../src/host/guard/guarded-rows.ts) | [`quarantine-plan.test.ts`](../../tests/unit/quarantine-plan.test.ts)、[`crash-decision.test.ts`](../../tests/unit/crash-decision.test.ts)、[`patch-safety.test.ts`](../../tests/unit/patch-safety.test.ts) |
@@ -115,12 +125,13 @@ v0.16 新增的 `conflict-declarations.ts` / `conflict-findings.ts` / `conflict-
 | `guard.govern.isolation` | state | 面板 / 指标 | `recency-guard.isolation` | [`isolation.ts`](../../src/host/core/isolation.ts) | [`isolation-journey.test.ts`](../../tests/host/isolation-journey.test.ts) |
 | `guard.govern.revision` | state | 面板 / restore / reenable / recover / reset | —（随快照下发） | [`change-guard.ts`](../../src/host/core/change-guard.ts)、[`store.ts`](../../src/host/data/store.ts)（加锁读） | [`change-guard.test.ts`](../../tests/unit/change-guard.test.ts)、[`decision-concurrency.test.ts`](../../tests/unit/decision-concurrency.test.ts) |
 | `guard.present.panel` | graph | — | `recency-guard.panel` | [`GuardPanel.tsx`](../../src/client/panel/GuardPanel.tsx)、[`snapshot-view.ts`](../../src/client/panel/snapshot-view.ts)、[`poll-adaptive.ts`](../../src/client/panel/poll-adaptive.ts)、[`PanelShell.tsx`](../../src/client/panel/PanelShell.tsx) | [`panel-v014.test.ts`](../../tests/client/panel-v014.test.ts)、[`panel-null-snapshot.test.ts`](../../tests/client/panel-null-snapshot.test.ts)、[`poll-adaptive.test.ts`](../../tests/client/poll-adaptive.test.ts) |
+| `guard.present.toolview` | graph | `guard.tool.status` | `recency_guard`（keyed slot `tool.call.toolview`） | [`ToolViewIntegration.ts`](../../src/client/toolview/ToolViewIntegration.ts)（席位注册 + 幂等守卫 + getter 计数）、[`GuardToolCard.tsx`](../../src/client/toolview/GuardToolCard.tsx)（终端卡 + CSS 唯一真源）、[`toolview-model.ts`](../../src/client/toolview/toolview-model.ts)（零 React 依赖的防御式抽取层） | [`toolview-model.test.ts`](../../tests/client/toolview-model.test.ts)、[`toolview-contract.test.ts`](../../tests/contract/toolview-contract.test.ts) |
 | `guard.present.graph` | graph | — | `recency-guard.graph` | [`GuardGraph.tsx`](../../src/client/graph/GuardGraph.tsx)、[`graph-interaction.ts`](../../src/client/graph/graph-interaction.ts)、[`graph-layout.ts`](../../src/client/graph/graph-layout.ts)、[`graph-palette.ts`](../../src/client/graph/graph-palette.ts) | [`graph-model.test.ts`](../../tests/client/graph-model.test.ts)、[`graph-keyboard.test.ts`](../../tests/client/graph-keyboard.test.ts)、[`graph-hover.test.ts`](../../tests/client/graph-hover.test.ts)、[`graph-drag.test.ts`](../../tests/client/graph-drag.test.ts) |
 | `guard.tool.status` | metric | — | `recency_guard` | [`status-view.ts`](../../src/host/surface/status-view.ts)、[`tool-render.ts`](../../src/host/surface/tool-render.ts) | [`tool.test.ts`](../../tests/host/tool.test.ts)、[`unresolved-surfacing.test.ts`](../../tests/unit/unresolved-surfacing.test.ts) |
 | `guard.tool.history` | journal | — | `recency_guard` | [`tool-dispatch.ts`](../../src/host/surface/tool-dispatch.ts) | [`tool.test.ts`](../../tests/host/tool.test.ts) |
 | `guard.tool.backups` | backup | — | `recency_guard` | [`tool-dispatch.ts`](../../src/host/surface/tool-dispatch.ts) | [`versioned-backup.test.ts`](../../tests/unit/versioned-backup.test.ts) |
 
-统计口径：截至本文件落盘，**22 条能力**（以 `CAPABILITY_SPECS.length` 为准，新增能力必须同步本表），
+统计口径：截至本文件落盘，**24 条能力**（以 `CAPABILITY_SPECS.length` 为准，新增能力必须同步本表），
 其中 12 条对外暴露；**9 条路由 + 1 个工具名（8 个 action）+ 2 个面板席位** 构成注册面。
 
 ## 4. 双向比对的四类判据
