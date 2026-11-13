@@ -118,8 +118,13 @@ check('找不到根目录 ⇒ 有原因', typeof bogus.reason === 'string' && bo
 
 // ---------- 找不到根目录（真实路径） ----------
 
-check('findPluginRoot 找到本插件根', findPluginRoot(process.cwd()) !== null)
+// 默认起点是**本模块的位置**（不是 cwd）：插件的 cwd 是用户工作区，
+// 与插件安装位置无关。真实部署里（桌面 profile，插件在别处）用 cwd 必然失败。
+check('findPluginRoot 默认从本模块位置向上找（与 cwd 无关）', findPluginRoot() !== null)
 check('findPluginRoot 对无关目录返回 null', findPluginRoot(join(tmpdir(), 'rg-nope-xyz')) === null)
+// 显式传入 cwd（即插件目录本身）也必须能找到 —— 那是本仓的工作区，
+// 恰好也是包根，但不能因此把「默认起点」写成 cwd。
+check('findPluginRoot(显式 cwd=本仓) 也能找到包根', findPluginRoot(process.cwd()) !== null)
 
 // ---------- 清理 ----------
 

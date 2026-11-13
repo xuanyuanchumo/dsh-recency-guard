@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /**
  * 产物新鲜度 —— **「我跑的到底是哪份代码」的白盒事实**。
@@ -147,10 +148,24 @@ function versionFromManifest(root: string): string | null {
  * 隐含「本文件在包根下一层」—— 源码形态 `src/core/x.ts` 与产物形态
  * `dist/index.js` 的层级不同，写死任一个都会让另一边静默降级。
  * 判据：向上找到的 `package.json` 的 `name` 与本包一致。
+ *
+ * ## 为什么默认起点是**本模块的位置**而不是 `process.cwd()`
+ *
+ * 插件的 `process.cwd()` 是**用户的工作区**（宿主启动时的 cwd），
+ * 绝不是插件自己的安装目录。用 cwd 去找插件根，在真实部署里必然失败：
+ * 实测桌面 profile（`link:` 安装，插件在 `D:\Projects\...`，cwd 在别处）
+ * ⇒ 报「未找到插件根目录」。
+ *
+ * 正确起点是**本模块自己的位置**（`import.meta.url`）：
+ * 源码形态 `src/host/core/build-freshness.ts` 向上三层到包根；
+ * 产物形态 `dist/index.js`（内联了本模块）向上两层到包根。
+ * 两种形态都能找到，且**与 cwd 无关**。
  */
-export function findPluginRoot(startDir: string): string | null {
-  let dir = resolve(startDir)
-  for (let depth = 0; depth < 8; depth += 1) {
+export function findPluginRoot(startDir?: string): string | null {
+  // 本模块的位置：源码形态是文件，产物形态是 dist/index.js。
+  let dir = startDir ?? dirname(fileURLToPath(import.meta.url))
+  dir = resolve(dir)
+  for (let depth = 0; depth < 10; depth += 1) {
     const candidate = join(dir, 'package.json')
     try {
       const parsed = JSON.parse(readFileSync(candidate, 'utf8')) as { name?: string }
@@ -171,7 +186,7 @@ export function findPluginRoot(startDir: string): string | null {
  * @param pluginRoot 插件根目录（默认从本文件位置向上找）。
  */
 export function computeBuildFreshness(pluginRoot?: string): BuildFreshness {
-  const root = pluginRoot ?? findPluginRoot(process.cwd())
+  const root = pluginRoot ?? findPluginRoot()
   if (root === null) {
     return {
       stale: null,
