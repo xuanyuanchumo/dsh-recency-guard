@@ -1,13 +1,13 @@
 # dsh-recency-guard
 
-**v0.17.0** · [GitHub](https://github.com/xuanyuanchumo/dsh-recency-guard) · [问题反馈](https://github.com/xuanyuanchumo/dsh-recency-guard/issues) · MIT
+**v0.18.0** · [GitHub](https://github.com/xuanyuanchumo/dsh-recency-guard) · [问题反馈](https://github.com/xuanyuanchumo/dsh-recency-guard/issues) · MIT
 
 > DeepSeek Harness 的**插件崩溃恢复守护**：记录第三方 / 实验性插件的安装与更新时序并备份配置；
 > 崩溃后的**下一次启动之前**，把最近更新的嫌疑插件挡在门外；稳定启动后，再把非首要嫌疑放回来。
 >
-> 版本基线（2026-11-11，北京时间）：**0.17.0**。版本四锚点（`package.json` / 本 README /
+> 版本基线（2026-11-13，北京时间）：**0.18.0**。版本四锚点（`package.json` / 本 README /
 > `docs/agents/` / [`dsh-plugin.json`](dsh-plugin.json)）一致。
-> 测试分四层，当前 **84/84 全绿**（Core 42 / Host 10 / Client 24 / Contract 8）。
+> 测试分四层，当前 **87/87 全绿**（Core 43 / Host 10 / Client 25 / Contract 9）。
 
 ---
 
@@ -51,10 +51,10 @@ dsh plugin --profile <profile名> add dsh-recency-guard
 锁定版本：
 
 ```bash
-dsh plugin --profile <profile名> add dsh-recency-guard@0.17.0
+dsh plugin --profile <profile名> add dsh-recency-guard@0.18.0
 ```
 
-> 版本对应：本 README 描述 **0.17.0**；npm `latest` 已发布为 **0.17.0**
+> 版本对应：本 README 描述 **0.18.0**；npm `latest` 已发布为 **0.18.0**
 > （2026-11-11，shasum `b667bd20b6ea82d294dbc28e4eab1290b07dd963`），可直接安装。
 > 版本纪律见 [`docs/agents/conventions.md`](docs/agents/conventions.md) §6。
 
@@ -62,7 +62,7 @@ dsh plugin --profile <profile名> add dsh-recency-guard@0.17.0
 
 投稿材料已按 [awesome-dsh-plugin contributing.md](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md)
 备好（[`docs/market-submission.md`](docs/market-submission.md)）：一个条目文件、`category: security`。
-**当前状态：条目已收录（PR #14245）；0.17.0 描述更新已推到同一 PR 分支（HEAD `94ade1e`），
+**当前状态：条目已收录（PR #14245）；0.17.0 描述更新已推到同一 PR 分支（v0.18.0 将随合并后下一 PR 更新）（HEAD `94ade1e`），
 等待复核/合并。** 收录后可在 dsh 的 **Plugins → Discover** 或 dsh-market 中搜索 `recency-guard` 安装。
 
 ### 手动 / 本地源码（开发）
@@ -405,6 +405,7 @@ npm run extract-runtime # Host 层测试前置（runtime/ 缺失时先解出）
 
 | 版本 | 一句话 |
 | --- | --- |
+| **0.18.0**（2026-11-13） | 研究落地补完与崩溃循环兜底：配置未知键 fail-loud（学习 dsh-ops）、journal 裁剪改**轮转**（读改写窗口结构性消灭 + 零依赖对拍）、路径指纹 64 位 + 双读迁移（TD-7 根治）、生存分析/失配检测/恢复残余上屏（三个观测孤岛接入消费）、图谱**影响面**接入详情侧栏（impactedBy/reachableFrom 首个 UI 消费者）；**级联刹车**：崩溃循环升级到顶后自动回滚到崩溃前启动状态（仅保留头号嫌疑），不再「越关越空」；技术债状态见 [`docs/agents/tech-debt.md`](docs/agents/tech-debt.md) |
 | **0.17.0**（2026-11-11） | 技术栈清理与研究闭环：预防性预警（RQ3）接入生产且**只预警不行动**、面板自适应刷新、状态文件 schema 版本（未知版本保留现场）、路径逃逸修复（`pathSafeName` 单一实现 + 指纹）、变异 72 突变体 / 0 未归因 + 无直接测试 14→2 + rescue/宿主宽度跨实现对拍；技术债状态见 [`docs/agents/tech-debt.md`](docs/agents/tech-debt.md) |
 | **0.16.0**（2026-11-11） | 确定性冲突证据（4 类 finding + 出处）、贪心最小隔离与依赖联动、可写两阶段 rescue、常态路径锁卫生、PanelSnapshotView 可空契约；新增社区 manifest [`dsh-plugin.json`](dsh-plugin.json)，README 面向用户重构，版本四锚点统一 |
 | 0.15.0 | 架构重构：`host/` + `client/` + `shared/` 分层，client→host 越界与值依赖环写成契约测试 |

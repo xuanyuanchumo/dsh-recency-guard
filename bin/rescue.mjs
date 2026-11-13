@@ -145,11 +145,40 @@ function readJsonSafe(file) {
   }
 }
 
-/** journal 读取（容忍崩溃截断的尾行，与 store.ts 同一容错语义）。 */
+/** journal 读取（容忍崩溃截断的尾行，与 store.ts 同一容错语义）。
+ *
+ * v0.18 TD-5：journal 超限会轮转成 journal.<epoch>.jsonl（epoch 升序），
+ * 完整时间线 = 轮转文件（旧→新）+ 活动文件。rescue 是零依赖脚本，
+ * 不能 import 宿主模块 —— 这份合并逻辑与 journal-io.ts 的
+ * readMergedJournalSync 是「有意保留的双实现」，由 width-parity 同款
+ * 纪律的 journal 合并对拍测试防漂移。
+ */
 function readJournal(partitionDir, limit) {
-  const file = join(partitionDir, 'journal.jsonl')
-  if (!existsSync(file)) return []
-  const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean)
+  let names = []
+  try {
+    names = readdirSync(partitionDir)
+  } catch {
+    return []
+  }
+  const rotated = names
+    .filter((n) => /^journal\.\d+\.jsonl$/.test(n))
+    .sort((a, b) => {
+      const ea = Number(a.slice('journal.'.length, -'.jsonl'.length))
+      const eb = Number(b.slice('journal.'.length, -'.jsonl'.length))
+      return ea - eb
+    })
+    .map((n) => join(partitionDir, n))
+  const active = join(partitionDir, 'journal.jsonl')
+  const files = [...rotated, ...(existsSync(active) ? [active] : [])]
+  if (files.length === 0) return []
+  const lines = []
+  for (const file of files) {
+    try {
+      lines.push(...readFileSync(file, 'utf8').split('\n').filter(Boolean))
+    } catch {
+      /* 一段缺失好过全空 */
+    }
+  }
   const take = Math.max(0, Math.min(limit, lines.length))
   const out = []
   for (const line of lines.slice(lines.length - take)) {
@@ -201,6 +230,11 @@ function isZeroWidth(codePoint) {
     codePoint === 0x00ad
   )
 }
+
+/** 导出仅供**对拍测试**使用（tests/contract/journal-merge-parity.test.ts）：
+ * 零依赖纪律要求 rescue 自带合并实现，对拍是防漂移的唯一手段。
+ * CLI 自身不经过这些导出。 */
+export { readJournal as rescueReadJournalForParity }
 
 export function codePointWidth(cp) {
   if (isZeroWidth(cp)) return 0

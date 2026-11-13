@@ -392,7 +392,74 @@ export function metricRows(snapshot: PanelSnapshotView): MetricRow[] {
       typeof value.label === 'string' && value.label !== '' ? value.label : t('metrics.undefined'),
     null,
   )
+  // v0.18 T16-04：生存分析上屏（此前是孤岛 —— MetricsSnapshot 一直带着它，
+  // 面板从未渲染）。行值 = 指数/Weibull 双模型均值；**失配检测标志**
+  // （研究 02 §15）进 reason 字段：模型自己报告「我可能错了」必须可见，
+  // 否则用户把边界伪值/误配读数当成正常结论。
+  // 失配检测说明消费 survivalMismatchReason —— 但 push 的 reason 只在
+  // 不可判定时出现，而失配恰恰发生在「有读数」时。因此把失配并进行值：
+  // 有失配时值尾追加标记，让「模型自己报告我可能错了」与读数同屏。
+  const mismatch = survivalMismatchReason(metrics.survival)
+  push(
+    'survival',
+    t('metrics.survival'),
+    metrics.survival,
+    (value: {
+      exponentialMeanMs: number
+      weibullMeanMs: number
+      weibullShape: number
+      weibullShapeAtBound: boolean
+      hazardDirection: string
+      hazardDirectionReliable: boolean
+      cvObserved: number | null
+    }) => {
+      const shape = value.weibullShapeAtBound
+        ? `k ${t('metrics.shapeAtBound')}`
+        : `k ${isFiniteNumber(value.weibullShape) ? value.weibullShape.toFixed(2) : t('metrics.undefined')}`
+      const base = `${secondsText(value.exponentialMeanMs, 1)} / ${secondsText(value.weibullMeanMs, 1)} · ${shape}`
+      return mismatch === null ? base : `${base} ⚠`
+    },
+    null,
+  )
+  push(
+    'intervalTrend',
+    t('metrics.intervalTrend'),
+    metrics.intervalTrend,
+    (value: { ratio: number; direction: string }) => {
+      const ratio = isFiniteNumber(value.ratio) ? value.ratio.toFixed(2) : t('metrics.undefined')
+      const directionKey = value.direction === 'denser' ? 'metrics.directionDenser' : value.direction === 'sparser' ? 'metrics.directionSparser' : 'metrics.directionSteady'
+      return `×${ratio} · ${t(directionKey)}`
+    },
+    null,
+  )
   return rows
+}
+
+/**
+ * 生存行的失配检测说明（研究 02 §15 的白盒披露）。
+ *
+ * 单独抽成纯函数：三个失配标志（CV 偏离 / 方向不可靠 / 形状撞界）的
+ * 优先级与人话解释在行内写会挤爆 formatter，这里按「最严重优先」返回
+ * 第一条命中的说明；全部健康返回 null。metricRows 的 reason 消费它。
+ */
+export function survivalMismatchReason(survival: {
+  defined: boolean
+  reason?: string
+  value: {
+    weibullShapeAtBound: boolean
+    hazardDirectionReliable: boolean
+    cvObserved: number | null
+  } | null
+}): string | null {
+  if (!survival.defined || survival.value === null) return survival.reason ?? null
+  const v = survival.value
+  // 形状撞界：k 是边界伪值，Weibull 均值不可信（最严重的失配）。
+  if (v.weibullShapeAtBound) return t('metrics.mismatchAtBound')
+  // CV 偏离 1：指数假设被数据拒绝（λ̂/均值失真）。
+  if (isFiniteNumber(v.cvObserved) && Math.abs(v.cvObserved - 1) > 0.5) return t('metrics.mismatchCv', { cv: v.cvObserved.toFixed(2) })
+  // 方向不可靠：样本 < 9，方向只是提示不是结论。
+  if (!v.hazardDirectionReliable) return t('metrics.mismatchDirection')
+  return null
 }
 
 /* ---------- 马尔可夫转移矩阵 ---------- */

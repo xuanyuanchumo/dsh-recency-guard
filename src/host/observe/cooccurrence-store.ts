@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
-import { pathSafeName } from '../core/path-safe.ts'
+import { candidateNames, pathSafeName } from '../core/path-safe.ts'
 
 /** 一条共现样本（形状与 `cooccurrence.ts` 的同名接口一致，避免循环依赖只用结构类型）。 */
 export interface StoredCooccurrenceSample {
@@ -107,9 +107,20 @@ export interface ObservedEntry {
   enabled: boolean
 }
 
-/** 观测快照文件相对于分区目录的路径。 */
+/** 观测快照文件相对于分区目录的路径（写路径：64 位指纹新名）。 */
 export function observationPath(partitionDir: string, name: string): string {
   return join(partitionDir, `observation-${pathSafeName(name)}.json`)
+}
+
+/**
+ * 观测快照**读取候选路径**（新名 → 8 位指纹旧名）。
+ *
+ * TD-7 迁移：v0.18 把指纹从 32 bit 升到 64 bit ⇒ v0.17 写出的文件名变了。
+ * 读端双路径让存量观测快照不会「凭空消失」；写端只写新名，
+ * 下一次覆盖写即完成迁移。
+ */
+export function observationCandidatePaths(partitionDir: string, name: string): string[] {
+  return candidateNames(name).map((n) => join(partitionDir, `observation-${n}.json`))
 }
 
 /**
@@ -132,23 +143,27 @@ export function toObservationMap(parsed: unknown): Map<string, ObservedEntry> {
   return out
 }
 
-/** 同步读观测快照（崩溃路径不能 await）。 */
+/** 同步读观测快照（崩溃路径不能 await）。双候选：新 64 位指纹名 → 旧 8 位名。 */
 export function readObservationSync(partitionDir: string, name: string): Map<string, ObservedEntry> {
   try {
-    const file = observationPath(partitionDir, name)
-    if (!existsSync(file)) return new Map()
-    return toObservationMap(JSON.parse(readFileSync(file, 'utf8')))
+    for (const file of observationCandidatePaths(partitionDir, name)) {
+      if (!existsSync(file)) continue
+      return toObservationMap(JSON.parse(readFileSync(file, 'utf8')))
+    }
+    return new Map()
   } catch {
     return new Map()
   }
 }
 
-/** 异步读观测快照。 */
+/** 异步读观测快照。双候选：新 64 位指纹名 → 旧 8 位名。 */
 export async function readObservation(partitionDir: string, name: string): Promise<Map<string, ObservedEntry>> {
   try {
-    const file = observationPath(partitionDir, name)
-    if (!existsSync(file)) return new Map()
-    return toObservationMap(JSON.parse(await readFile(file, 'utf8')))
+    for (const file of observationCandidatePaths(partitionDir, name)) {
+      if (!existsSync(file)) continue
+      return toObservationMap(JSON.parse(await readFile(file, 'utf8')))
+    }
+    return new Map()
   } catch {
     return new Map()
   }

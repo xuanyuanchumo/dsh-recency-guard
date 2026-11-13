@@ -1,8 +1,21 @@
-# 对外面 API（dsh-recency-guard v0.17.0）
+# 对外面 API（dsh-recency-guard v0.18.0）
 
 > 本文件里的路由 / 工具签名 / 配置项从 `src/host/surface/routes.ts`、
 > `src/host/surface/tool-registration.ts`、`src/host/capability/capability.ts`
 > 与 `src/index.ts` 实抄；契约变更必须在这里留一行。
+
+## 0.0i v0.18 契约变更一句话清单
+
+| 变更 | 影响 | 兼容性 |
+| --- | --- | --- |
+| **配置未知键 fail-loud**（学习 dsh-ops §2.5） | `apply()` 入口 `rejectUnknownConfigKeys`：未知键抛 `ConfigError`（点名键名 + 全部合法键）⇒ 宿主自隔离该 entry 并在日志可见；`$` 前缀（cordis 内部簿记）跳过 | **行为变严**：此前未知键静默忽略；拼写错误的配置现在会拦住加载（有意——带错误配置跑守护更危险）。合法配置零变化 |
+| **journal 裁剪 → 轮转（TD-5 根治）** | 超过 1000 行：活动文件 `rename` 为 `journal.<epoch>.jsonl`（保留 3 份轮转段，超出删最旧）；读取端（store / rescue / 归档摘要）合并全部段 | **兼容**：`journal.jsonl` 仍是活动文件名；旧读者只看活动文件会「少看最旧段」（恢复判定不依赖 journal 轮转段）；新读者兼容单文件 |
+| **路径指纹 8→16 hex（TD-7 根治）** | 改写名带 64 位 sha256 指纹；读取端 `candidateNames()` 双读（新 16 位 → 旧 8 位）；`legacyFingerprintName` 只读不写 | **兼容**：未改写名不变；v0.17 的 8 位指纹文件双读可达，下次覆盖写迁移 |
+| **`metrics.survival` / `metrics.intervalTrend` 上屏** | 面板指标卡新增两行：生存双模型均值 + Weibull 形状（撞界标「⚠ 边界伪值」）；`survivalMismatchReason` 三级失配（撞界 > CV 偏离 > 方向不可靠）随行披露 | **纯追加**（MetricsSnapshot 字段 v0.13 已存在，本轮接入消费）；跨分区 `metrics:null` 路径不变 |
+| **`PanelSnapshot.unresolved` 上屏** | 生命周期卡新增「恢复残余」块：上次隔离后无法自动解决的 error finding（kind + plugins + message），`role="alert"`；空数组/旧宿主缺席不渲染 | **纯追加**（宿主字段 v0.14 已存在，本轮接入消费） |
+| **图谱详情侧栏新增 `impact` 行** | 聚焦节点显示影响面（上游/下游全子图计数）——`impactedBy`/`reachableFrom` 首个 UI 消费者；props 可选，旧调用方不传不渲染 | **纯追加**；分析口径与相邻列表同为 visibleEdges |
+| **级联刹车 + 崩溃前回滚（T16-12）** | 崩溃循环升级到顶（`crashSeq ≥ confirmRounds + maxAutoDisable`）⇒ 不再新增禁用，决策收敛为「仅头号嫌疑」，`state.rollbackArmed=true`，**下一轮启动自动回滚**：启用除头号外的全部被关插件（恢复崩溃前启动状态），头号嫌疑保持关闭；`journal` 新增 `rollback` kind，`state.lastRecoveryVerdict` 增加 `rollback` 标志，决策 `phase` 增加 `rollback` | **行为变化**：封顶后从「永远停在关 N 个」变为「自动回滚兜底」；回滚失败者如实留在名单（不谎报） |
+
 
 ## 0.0h v0.17 契约变更一句话清单
 
@@ -542,3 +555,9 @@ npx @deepseek-ai/dsh@<ver> plugin --profile <profile> add file:/绝对路径/dsh
 | `versionedBackups` | true | **v0.8**：带版本的时间线备份开关 |
 | `backupRetain` | 5 | **v0.8**：每插件备份份数 |
 | `backupRoot` | '' | **v0.8**：备份自定义目录（环境变量优先） |
+
+**v0.18 fail-loud**：上表八个键是**全部合法键**（单一真相 `CONFIG_KNOWN_KEYS`，
+见 [`config-strict.ts`](../../src/host/core/config-strict.ts)）。写任何其它键
+（例如 `backupDir`）⇒ 插件加载失败并在宿主日志点名：
+`dsh-recency-guard config: unknown key(s) "backupDir"; accepted keys are …`。
+这是有意的：带着拼错的配置静默运行，比不运行更危险。`$` 前缀键（cordis 内部簿记）豁免。

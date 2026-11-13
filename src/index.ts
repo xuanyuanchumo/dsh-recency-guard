@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 // schemastery 是**可选** peer：静态 import 会在缺失时让整个插件 require 崩，
 // 因此改由下方 `loadSchemastery()` 惰性解析 + 纯对象降级（v0.13 安装不崩修复）。
 import { readSelfPackage, readHostVersion, safeJson, safeVersion } from './host/core/self-describe.ts'
+import { rejectUnknownConfigKeys } from './host/core/config-strict.ts'
 // The runtime version is a detail, not a hard dependency: the import is
 // resolved lazily so a missing optional peer can never stop the plugin from
 // loading.
@@ -25,7 +26,7 @@ import { GUARD_PACKAGE_NAME } from './host/guard/guarded-rows.ts'
 import { deriveObservations, deriveRiskInputs } from './host/observe/observations.ts'
 import { installExitSentinel } from './host/guard/sentinel.ts'
 import { abnormalRecoveryVerdict } from './host/guard/abnormal-boot.ts'
-import { restoreDisabledExceptPrime, reenableOne, type RecoveryDeps } from './host/guard/recovery-actions.ts'
+import { restoreDisabledExceptPrime, reenableOne, rollbackToPreCrash, type RecoveryDeps } from './host/guard/recovery-actions.ts'
 import { observeOfficialExperimental } from './host/guard/official-observe.ts'
 import {
   buildCooccurrenceSample,
@@ -231,6 +232,12 @@ interface ConfigEditorLike {
 export const inject = ['tools', 'pluginManager', 'profileContext']
 
 export function apply(ctx: Context, config: Config) {
+  // v0.18 T16-01：入口先做**键集合 fail-loud**（学习 dsh-ops §2.5）。
+  // 未知键 = 用户写错了配置（如 backupDir ↔ backupRoot），带着错误配置继续跑
+  // 守护比「部分配置静默失效」更危险。抛 ConfigError ⇒ 宿主自隔离本 entry
+  // 并在日志里点名键名——用户看得见，宿主不崩。
+  // 放在一切副作用之前：错误配置下的任何初始化都不该发生。
+  rejectUnknownConfigKeys(config)
   // The plugin-manager and config-editor services are declared by the harness
   // through `inject`; the base cordis Context type does not know them.
   const services = ctx as unknown as {
@@ -998,6 +1005,11 @@ class Guard {
         exitCode,
         suspects: targets.map((t) => t.bundle),
       })
+      // 级联刹车（v0.18 T16-12）：升级步数用满 ⇒ 决策只保留头号嫌疑，
+      // 其余交由**下一轮启动**的 boot 编排回滚（崩溃路径只能同步落盘，
+      // 回滚要调插件管理器的异步接口，无法在 exit 处理器里完成）。
+      const headSuspect = decision.targets[0]?.bundle ?? decision.disable[0] ?? null
+      const disableList = verdict.rollback ? (headSuspect !== null ? [headSuspect] : []) : decision.disable
       // 共现采集（v0.13 方向④）：**只采集不改判定**（理由见 decision-views 头注）。
       this.recordCooccurrenceSync(ranked, verdict.act ? targets.map((t) => t.bundle) : [])
       // 两阶段：act=false 只写 prepared（disable 为空 = 全放行）；act=true = quarantined。
@@ -1006,9 +1018,9 @@ class Guard {
       this.store.writeDecisionSync({
         capturedAt: new Date().toISOString(),
         suspects: this.decisionSuspectsFor(ranked, history),
-        disable: decision.disable,
+        disable: disableList,
         reason: 'crash-recovery',
-        phase: verdict.act ? 'quarantined' : 'prepared',
+        phase: verdict.rollback ? 'rollback' : verdict.act ? 'quarantined' : 'prepared',
         crashSeq: seq,
         ...(decision.deterministicEvidence === undefined ? {} : { deterministicEvidence: decision.deterministicEvidence }),
         ...(decision.unresolved.length === 0 ? {} : { unresolved: decision.unresolved }),
@@ -1025,17 +1037,31 @@ class Guard {
       }
       // 指针必须与决策**同时**落地：守护行的表达式在下次启动时只读 profile 目录下的指针。
       writePointer(this.profileDir, this.projectKey, this.store.partitionPath)
+      // v0.18 T16-12：刹车轮把被自动禁用的名单记入 state，回滚动作由
+      // 下一轮 boot 编排消费（崩溃路径无法调插件管理器的异步接口）。
+      // 名单在决策文件里已经是「仅头号嫌疑」，此处 state 与决策保持一致。
       this.store.writeStateSync({
         ...state,
         crashSeq: seq,
         stabilized: false,
-        autoDisabled: targets.map((t) => ({
-          name: t.bundle,
-          version: t.version,
-          disabledAt: new Date().toISOString(),
-          reason: 'auto-recency' as const,
-          crashSeq: seq,
-        })),
+        autoDisabled: verdict.rollback
+          ? headSuspect !== null
+            ? targets.filter((t) => t.bundle === headSuspect).map((t) => ({
+                name: t.bundle,
+                version: t.version,
+                disabledAt: new Date().toISOString(),
+                reason: 'auto-recency' as const,
+                crashSeq: seq,
+              }))
+            : []
+          : targets.map((t) => ({
+              name: t.bundle,
+              version: t.version,
+              disabledAt: new Date().toISOString(),
+              reason: 'auto-recency' as const,
+              crashSeq: seq,
+            })),
+        ...(verdict.rollback ? { rollbackArmed: true } : {}),
       })
       // 崩溃路径是**同步**的：进入/退出由一条闭合区间表达（进程随时会死，
       // 留一条永远闭合不了的区间反而是假数据）。
@@ -1100,7 +1126,36 @@ class Guard {
       observeOfficialExperimental: () => this.observeOfficialExperimental(),
       scheduleAutoRestore: () => this.scheduleAutoRestore(),
       applyAbnormalRecovery: (next) => this.applyAbnormalRecovery(next),
+      executeRollback: () => this.executeRollback(),
     })
+  }
+
+  /**
+   * 级联刹车回滚的执行体（v0.18 T16-12）。
+   *
+   * 由 boot 编排在检测到 `rollbackArmed` 时调用：把被自动禁用的插件
+   * 恢复到崩溃前启动状态，只保留头号嫌疑。投影实现在 recovery-actions.ts
+   * 的 `rollbackToPreCrash`，这里只做依赖绑定与头号嫌疑的确定。
+   *
+   * ## 为什么在启动路径执行而不是崩溃路径
+   *
+   * 回滚要调插件管理器的 `setBundleEnabled`（异步、HMR 事务），崩溃路径
+   * （process exit 处理器）只有同步 IO 预算。崩溃路径能做的只是**置标记 +
+   * 落决策**，真正启用插件只能延后到下一轮启动 —— 与 autoRestore 的
+   * 1.5s 延后同源（HMR 事务不能嵌套）。
+   */
+  private async executeRollback(): Promise<void> {
+    const state = await this.store.readState()
+    // 头号嫌疑：上一轮决策 disable 名单的第一个（崩溃路径已收敛为单元素）。
+    const decision = this.store.readDecisionSync()
+    const head = decision?.disable?.[0] ?? state.autoDisabled[state.autoDisabled.length - 1]?.name ?? null
+    try {
+      const result = await rollbackToPreCrash(this.recoveryDeps(), head)
+      this.endStep('rollback', true, `回滚：重新启用 ${result.reenabled.length} 个，保留 ${result.keptDisabled.length} 个嫌疑`)
+    } catch (error) {
+      this.endStep('rollback', false, describeError(error))
+      throw error
+    }
   }
 
   /**
@@ -1142,6 +1197,20 @@ class Guard {
     )
     this.store.appendSync({ kind: 'note', detail: judged.detail })
     await this.store.updateState((s) => ({ ...s, lastRecoveryVerdict: judged.verdict }))
+    // 级联刹车（v0.18 T16-12）：升级步数用满 ⇒ 不再新增禁用，置回滚标记，
+    // 由下一轮启动的 boot 编排执行回滚。与哨兵通道的 rollbackArmed 同一套
+    // 标记语义 —— 两条通道各写一套「到顶怎么办」迟早漂移，必须共用。
+    if (judged.rollback) {
+      const state = await this.store.readState()
+      if (state.autoDisabled.length === 0) return
+      const headEntry = state.autoDisabled.find((d) => d.name === head) ?? state.autoDisabled[state.autoDisabled.length - 1]
+      await this.store.updateState((s) => ({
+        ...s,
+        autoDisabled: s.autoDisabled.filter((d) => d.name === headEntry?.name),
+        rollbackArmed: true,
+      }))
+      return
+    }
     if (judged.act && head !== null) {
       await this.recover(judged.targets)
     }

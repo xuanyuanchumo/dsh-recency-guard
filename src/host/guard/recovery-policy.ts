@@ -113,25 +113,76 @@ export function shouldRestoreAfterBoot(input: {
  * crashSeq 每轮都被清零 ⇒ 永远停在「关 0 个」。用 abnormalSeq 当依据，
  * 第 confirmRounds 轮关 1 个、再多一轮关 2 个，封顶 maxAutoDisable，
  * 与哨兵通道的逐级扩大保持同一形状。
+ *
+ * ## 级联刹车（v0.18 T16-12，用户场景驱动）
+ *
+ * 旧行为在封顶后**停在 maxAutoDisable 不动**：崩溃循环持续时，插件会
+ * 把能关的都关完，然后永远停在「关 N 个」——用户拿到的是「越关越空
+ * 的 profile」，而不是「问题插件被精准隔离」。当禁用数已经到顶、崩溃
+ * 仍在继续时，继续禁用没有新信息（每轮关的都是同一组的已有对象），
+ * 正确的动作是**回滚到崩溃前的启动状态**：把被误伤的插件放回来，
+ * 只保留头号嫌疑。判定条件 = `abnormalSeq >= required + maxAutoDisable`，
+ * 即「升级步数已经用满一轮」。
  */
+export interface AbnormalExitDecision {
+  act: boolean
+  targets: number
+  rounds: number
+  required: number
+  /** true = 已触发级联刹车：本轮不再新增禁用，改走回滚（v0.18）。 */
+  rollback: boolean
+}
+
 export function abnormalExitDecision(
   abnormalSeq: number,
   confirmRounds: number,
   maxAutoDisable: number,
-): { act: boolean; targets: number; rounds: number; required: number } {
+): AbnormalExitDecision {
   const required = Math.max(1, confirmRounds)
-  if (abnormalSeq < required) return { act: false, targets: 0, rounds: abnormalSeq, required }
+  if (abnormalSeq < required) return { act: false, targets: 0, rounds: abnormalSeq, required, rollback: false }
   const over = abnormalSeq - required
+  const cap = Math.max(1, maxAutoDisable)
+  // 级联刹车：升级步数（over）用满一轮 ⇒ 回滚，不再新增禁用。
+  // 用「>= cap」而不是「> cap」：over 从 1..cap-1 是逐级扩大，over = cap
+  // 意味着「该关的都关过一轮了、还没停」，再关就是重复同样的对象。
+  const rollback = over >= cap
   return {
-    act: true,
-    targets: Math.min(1 + over, Math.max(1, maxAutoDisable)),
+    act: !rollback,
+    targets: rollback ? 0 : Math.min(1 + over, cap),
     rounds: abnormalSeq,
     required,
+    rollback,
   }
 }
 
+/**
+ * 级联刹车判据（v0.18 T16-12，哨兵通道与异常终止通道**共用**）。
+ *
+ * ## 为什么两个通道必须共用同一个判据
+ *
+ * 哨兵通道（`crashSeq`）与异常终止通道（`abnormalSeq`）各自升级：
+ * 第 confirmRounds 轮起逐级扩大禁用数、封顶 maxAutoDisable。封顶之后，
+ * 两条通道各写一套「到顶怎么办」的判断迟早漂移 —— 一条刹车、另一条
+ * 继续关，用户拿到的行为就取决于崩溃碰巧走了哪条通道。判据必须是
+ * **同一个纯函数**，两条通道只是传不同的计数进来。
+ *
+ * ## 判据公式
+ *
+ * `seq >= confirmRounds + maxAutoDisable`：
+ * - `seq = confirmRounds + k`（k = 1..cap-1）是逐级扩大（关 1、2、…、cap）；
+ * - 到达 cap 之后**再崩溃一轮**，升级步数已经用满一轮 ⇒ 刹车回滚。
+ *
+ * 与 `abnormalExitDecision` 的 `over >= cap` 逐位等价（over = seq −
+ * confirmRounds），两处表达式同源，改一处必须同步另一处。
+ */
+export function escalationExhausted(seq: number, confirmRounds: number, maxAutoDisable: number): boolean {
+  const required = Math.max(1, confirmRounds)
+  const cap = Math.max(1, maxAutoDisable)
+  return seq >= required + cap
+}
+
 /** 恢复决策的阶段。 */
-export type DecisionPhase = 'prepared' | 'quarantined' | 'reconciled'
+export type DecisionPhase = 'prepared' | 'quarantined' | 'reconciled' | 'rollback'
 
 /**
  * 声明式冲突证据（T14-03）—— 第三类确定性证据。
@@ -169,6 +220,12 @@ export interface ConfidenceVerdict {
   required: number
   /** 人读判定（面板/工具直接展示）。 */
   label: string
+  /**
+   * v0.18 T16-12：级联刹车 —— true = 升级步数已用满一轮，本轮**不再新增
+   * 禁用**，改走「回滚到崩溃前启动状态」。默认 false（旧 state 兼容：
+   * 字段缺席按「非回滚」处理，不构造假值）。
+   */
+  rollback?: boolean
 }
 
 /** 置信分级所需的崩溃历史（reconcile 与计数都靠它）。 */
@@ -227,6 +284,12 @@ export function assessConfidence(
     confirmRounds?: number
     crashSeq?: number
     hardEscalateAfter?: number
+    /**
+     * 级联刹车的封顶数（v0.18 T16-12）：升级步数用满这一轮（crashSeq ≥
+     * confirmRounds + maxAutoDisable）⇒ 判定 rollback=true，不再新增禁用、
+     * 改走回滚。缺省（旧调用方）= 不刹车，行为逐位不变。
+     */
+    maxAutoDisable?: number
     hazardDirection?: HazardLike
     falsePositiveStats?: FalsePositiveStats
     /**
@@ -241,6 +304,8 @@ export function assessConfidence(
 ): ConfidenceVerdict {
   const confirmRounds = Math.max(1, options.confirmRounds ?? 2)
   const names = currentSuspects.map((s) => s.bundle)
+  /** v0.18：级联刹车（只对概率性证据生效，确定性证据不受限）。 */
+  const rollback = options.maxAutoDisable !== undefined && escalationExhausted(options.crashSeq ?? 0, confirmRounds, options.maxAutoDisable)
   if (names.length === 0) {
     return { act: false, evidence: 'probabilistic', rounds: 0, required: confirmRounds, label: '没有嫌疑插件，无需恢复' }
   }
@@ -297,7 +362,6 @@ export function assessConfidence(
   const calibration =
     options.falsePositiveStats === undefined ? undefined : calibratedConfirmRounds(hazardRounds, options.falsePositiveStats)
   const adjustedRounds = calibration === undefined ? hazardRounds : calibration.required
-  const act = streak >= adjustedRounds || escalated
   // 文案只描述「阈值被调了」，不重复解释成因（起因写在 hazardAdjustedRounds 的头注里）：
   // 命令窗口的空间有限，多一句解释就会挤掉下一行事实。
   // v0.14：误伤校准带**自己的**人话理由（07 §3.3 不做黑盒），所以它需要
@@ -309,16 +373,20 @@ export function assessConfidence(
       ? ''
       : `（误伤反馈使阈值 ${hazardRounds} 调整为 ${calibration.required} 轮）`
   const notes = `${hazardNote}${calibrationNote}`
+  const act = !rollback && (streak >= adjustedRounds || escalated)
   return {
     act,
     evidence: 'probabilistic',
     rounds: streak,
     required: adjustedRounds,
-    label: act
-      ? streak >= adjustedRounds
-        ? `头号嫌疑 ${head} 连续 ${streak} 轮复现（≥ ${adjustedRounds}）：达到行动阈值${notes}`
-        : `连续 ${options.crashSeq} 次崩溃仍未恢复：兜底升级为行动（安全网）`
-      : `头号嫌疑 ${head} 复现 ${streak}/${adjustedRounds} 轮：观察中，本轮只记录不关闭${notes}`,
+    label: rollback
+      ? `头号嫌疑 ${head} 连续 ${streak} 轮复现，禁用升级已到顶（${options.maxAutoDisable}）⇒ 级联刹车，回滚到崩溃前启动状态（仅保留 ${head}）`
+      : act
+        ? streak >= adjustedRounds
+          ? `头号嫌疑 ${head} 连续 ${streak} 轮复现（≥ ${adjustedRounds}）：达到行动阈值${notes}`
+          : `连续 ${options.crashSeq} 次崩溃仍未恢复：兜底升级为行动（安全网）`
+        : `头号嫌疑 ${head} 复现 ${streak}/${adjustedRounds} 轮：观察中，本轮只记录不关闭${notes}`,
+    ...(rollback ? { rollback: true } : {}),
   }
 }
 

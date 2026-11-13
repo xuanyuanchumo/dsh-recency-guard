@@ -69,7 +69,8 @@ export interface ArchiveResult {
 
 /** 产物的分类（决定清单里的 kind 字段）。 */
 function classify(name: string): ArchiveManifest['entries'][number]['kind'] {
-  if (name === 'journal.jsonl') return 'journal'
+  // v0.18 TD-5：轮转文件 journal.<epoch>.jsonl 与活动文件同为 journal 类。
+  if (/^journal(\.\d+)?\.jsonl$/.test(name)) return 'journal'
   if (name === 'state.json') return 'state'
   if (name === 'decision.json') return 'decision'
   if (name === 'backups') return 'backup'
@@ -112,8 +113,18 @@ export function archiveAndReset(
     /* 状态不存在 ⇒ 归档的是一个空守护 */
   }
   try {
-    const raw = readFileSync(join(stateDir, 'journal.jsonl'), 'utf8')
-    journalEvents = raw.split('\n').filter(Boolean).length
+    // v0.18 TD-5：journal 可能已轮转（journal.<epoch>.jsonl）。
+    // 归档摘要统计全部 journal 文件的行数 —— 漏掉轮转段会让
+    // 「事件 N 条」静默失真（正是「先搬后读」同类的口径缺陷）。
+    const journalNames = readdirSync(stateDir).filter((n) => /^journal(\.\d+)?\.jsonl$/.test(n))
+    for (const name of journalNames) {
+      try {
+        const raw = readFileSync(join(stateDir, name), 'utf8')
+        journalEvents += raw.split('\n').filter(Boolean).length
+      } catch {
+        /* 一段读失败不拖垮摘要 */
+      }
+    }
   } catch {
     /* 无日志 */
   }

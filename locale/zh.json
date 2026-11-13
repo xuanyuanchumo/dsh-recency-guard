@@ -94,6 +94,15 @@
     "intervals": "崩溃间隔（中位 / CV）",
     "changePoint": "CUSUM 变点",
     "controlBand": "控制带（休哈特）",
+    "survival": "生存分析（指数 / Weibull 均值）",
+    "intervalTrend": "间隔趋势（近段 / 基准）",
+    "shapeAtBound": "撞界伪值",
+    "directionDenser": "崩溃变密",
+    "directionSparser": "崩溃变稀",
+    "directionSteady": "平稳",
+    "mismatchAtBound": "Weibull 形状撞搜索上界：k 是边界伪值，均值不可信（间隔近乎完全规则）",
+    "mismatchCv": "观测 CV={cv} 偏离指数假设的 1：指数模型失配，λ̂/均值仅供参考",
+    "mismatchDirection": "方向判定样本不足（<9）：危险率方向只是提示不是结论",
     "undefined": "不可判定",
     "valueUndefined": "指标声明为可判定但值为空（结构不完整）",
     "unavailableReason": "跨分区只读视图不提供运行时指标（读不到 ≠ 一切为零）"
@@ -163,6 +172,9 @@
     "watch": "观察中",
     "rounds": "第 {rounds}/{required} 轮"
   },
+  "unresolved": {
+    "title": "上次隔离后仍有 {count} 条无法自动解决的冲突残余（受保护组件导致）"
+  },
   "card": {
     "enlarge": "扩大面板",
     "shrink": "恢复面板"
@@ -221,6 +233,11 @@
     "more": "还有 {count} 个",
     "less": "收起",
     "nodeTitle": "{label} · 入 {in} / 出 {out}"
+  },
+  "graphImpact": {
+    "label": "影响面",
+    "hint": "动它会波及谁：上游 = 反向可达（失去输入方），下游 = 正向可达（输出流向）。与相邻列表的 1 跳不同，这里是全子图",
+    "value": "上游 {up} · 下游 {down}"
   },
   "decisionEvidence": {
     "empty": "尚无嫌疑名单（未发生过崩溃恢复决策）",

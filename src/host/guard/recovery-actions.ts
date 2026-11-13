@@ -162,3 +162,93 @@ export async function reenableOne(deps: RecoveryDeps, bundle: string): Promise<u
   const backup = await deps.store.readBackup(bundle)
   return { bundle, reenabled: applied, hasConfigBackup: backup !== null }
 }
+
+/**
+ * 级联刹车后的**回滚**（v0.18 T16-12）：把被自动禁用的插件恢复到
+ * 崩溃前的启动状态，只保留头号嫌疑关闭。
+ *
+ * ## 为什么需要它（用户场景驱动）
+ *
+ * 崩溃循环里，禁用数逐级扩大封顶 `maxAutoDisable`。封顶后若崩溃仍在继续，
+ * 旧实现**永远停在「关 N 个」**——用户拿到的是「越关越空的 profile」，
+ * 而真正的问题插件被淹没在误伤里，用户只能手动 `restore` 或走
+ * 「清空工作区」的最后一计。本函数在刹车触发时自动执行：
+ * 把 autoDisabled 里**除头号嫌疑**外的全部重新启用（这正是「崩溃前的
+ * 启动状态」——autoDisabled 记录的正是本轮崩溃循环中我们亲手关掉的，
+ * 用户手动禁用的插件不在名单里，不会被误恢复），头号嫌疑保持关闭。
+ *
+ * ## 与 restoreDisabledExceptPrime 的关系
+ *
+ * 两者动作相同（启用除首要外全部），但**触发时机与状态语义不同**：
+ * restore 是「稳定启动后的善后」（stabilized=true），回滚是「升级到顶后的
+ * 刹车」（崩溃仍在进行）。回滚执行后计数清零，若头号嫌疑仍致崩，
+ * 新的一轮循环从干净状态重新升级——不会因为计数残留而立刻再次刹车。
+ *
+ * ## 失败语义与不变式
+ *
+ * 与 reenableOne 同纪律：只有 `application: 'applied'` 才算成功；失败者
+ * 留在 autoDisabled 待下轮重试，绝不谎报「已回滚」。
+ */
+export async function rollbackToPreCrash(deps: RecoveryDeps, headSuspect: string | null): Promise<{
+  reenabled: string[]
+  keptDisabled: string[]
+  failed: string[]
+  note: string
+}> {
+  const state = await deps.store.readState()
+  const auto = state.autoDisabled
+  deps.transition('stabilizing', '级联刹车：回滚到崩溃前的插件启动状态')
+  if (auto.length === 0) {
+    return { reenabled: [], keptDisabled: [], failed: [], note: '没有自动关闭记录，无需回滚。' }
+  }
+  // 头号嫌疑：传入的优先（本轮判定的头号），否则沿用名单里最后关闭的。
+  const head = headSuspect ?? auto[auto.length - 1]?.name ?? null
+  const reenabled: string[] = []
+  const keptDisabled: string[] = []
+  const failed: string[] = []
+
+  for (const d of auto) {
+    if (d.name === head) {
+      keptDisabled.push(d.name)
+      continue
+    }
+    const result = (await reenableOne(deps, d.name)) as { reenabled?: boolean }
+    if (result?.reenabled === true) reenabled.push(d.name)
+    else failed.push(d.name)
+  }
+
+  // 计数清零：回滚回到已知状态，下一轮崩溃从干净起点升级。
+  // crashSeq/abnormalExitSeq 的累计历史在 journal 的 rollback 事件里可查。
+  await deps.store.updateState((s) => ({
+    ...s,
+    autoDisabled: s.autoDisabled.filter((d) => d.name === head || failed.includes(d.name)),
+    stabilized: false,
+    rollbackArmed: undefined,
+  }))
+  await deps.store.append({
+    kind: 'rollback',
+    bundles: [...reenabled],
+    detail: `级联刹车回滚：重新启用 ${reenabled.join(', ') || '无'}${
+      keptDisabled.length > 0 ? `；保留头号嫌疑 ${keptDisabled.join(', ')} 关闭` : ''
+    }${failed.length > 0 ? `；未能恢复（待重试） ${failed.join(', ')}` : ''}`,
+  })
+  deps.transition('recovered', `已回滚到崩溃前启动状态（保留 ${keptDisabled.length} 个嫌疑关闭）`)
+  // 决策文件同步收敛：回滚后只保留头号嫌疑禁用 —— 守护行据此在
+  // **下一次**启动时拦截，而不是把整个名单留在文件里（名单与实际
+  // 启用状态不一致 = 守护行挡错人）。
+  await deps.publishDecision(
+    [...auto].map((d) => ({ bundle: d.name, lastChangeAt: '', lastKind: 'install' as const })),
+    [...keptDisabled, ...failed],
+    keptDisabled.length || failed.length ? 'crash-recovery' : 'none',
+  )
+  const kept = [...keptDisabled, ...failed]
+  return {
+    reenabled,
+    keptDisabled: kept,
+    failed,
+    note:
+      kept.length > 0
+        ? `已回滚到崩溃前的启动状态；仅保留嫌疑插件 ${kept.join(', ')} 关闭。`
+        : '已回滚到崩溃前的启动状态，无保留关闭。',
+  }
+}

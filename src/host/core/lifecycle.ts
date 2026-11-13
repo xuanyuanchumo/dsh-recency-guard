@@ -102,6 +102,7 @@ export type LifecycleStepName =
   | 'boot' // 异步启动流程（状态迁移 + 变更记录 + 自动恢复）
   | 'crash-decision' // 崩溃时的同步决策发布
   | 'restore' // 稳定后的配置恢复
+  | 'rollback' // 级联刹车回滚（升级到顶后的自动兜底，v0.18 T16-12）
   | 'archive' // 归档搬走 + 留档
   | 'rerun' // 以最新项目事实重跑（新循环基线）
   | 'watch-events' // 订阅宿主 plugin-manager/changed（事件驱动加速器）

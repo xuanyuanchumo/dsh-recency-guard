@@ -87,6 +87,8 @@ import {
   type MinimapCanvas,
 } from './minimap-model.ts'
 import { EdgeDetails, GraphDetails, GraphMinimap, GraphToolbar, GraphTooltip } from './GraphParts.tsx'
+// v0.18 T16-05：影响面分析（impactedBy/reachableFrom 首次接入 UI 消费链）。
+import { impactedBy, reachableFrom } from './graph-analysis.ts'
 import type { GraphData, GraphNode } from '../../shared/graph-contract.ts'
 
 /**
@@ -844,6 +846,20 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
     () => (focusId === null ? { upstream: [], downstream: [] } : neighborsOf(focusId, visibleEdges, nodeById)),
     [focusId, visibleEdges, nodeById],
   )
+  // v0.18 T16-05：影响面投影（impactedBy/reachableFrom 的首个 UI 消费者）。
+  // 与相邻列表（1-hop）不同：影响面是**全子图** —— 上游 = 谁会因本节点
+  // 失效而失去输入（反向可达），下游 = 本节点的输出流向谁（正向可达）。
+  // 只在聚焦时计算，O(V+E) 一次，不做 memo 之外的缓存（图规模 ≤ 百级）。
+  const focusImpact = useMemo(() => {
+    if (focusId === null) return null
+    const upstream = impactedBy(focusId, graph.nodes, visibleEdges)
+    const downstream = reachableFrom(focusId, graph.nodes, visibleEdges)
+    if (upstream === null || downstream === null) return null
+    // 排除自身：自环不计入波及面（它不是「别的节点」）。
+    upstream.delete(focusId)
+    downstream.delete(focusId)
+    return { upstreamCount: upstream.size, downstreamCount: downstream.size }
+  }, [focusId, graph.nodes, visibleEdges])
   const labelOf = useCallback(
     (id: string): { label: string; tone: GraphNode['tone']; detail?: string } => {
       const node = nodeById.get(id)
@@ -1250,6 +1266,7 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
             labelOf={labelOf}
             onLocate={locateNode}
             onClose={() => onFocusChange(null)}
+            impact={focusImpact}
           />
         )}
         {/* 无节点聚焦时显示选中的边详情（两者互斥，侧栏不会打架）。 */}

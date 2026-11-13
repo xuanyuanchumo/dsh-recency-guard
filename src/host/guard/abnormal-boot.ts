@@ -90,7 +90,13 @@ export function assessAbnormalExit(input: AbnormalExitInput, previousSeq = 0, no
   }
 }
 
-/** 一次异常终止判定的可观察结果（写进 state.lastRecoveryVerdict）。 */export interface AbnormalRecoveryVerdict {
+/**
+ * 一次异常终止判定的可观察结果（写进 state.lastRecoveryVerdict）。
+ *
+ * `rollback` 是可选字段（v0.18 T16-12）：旧版本 state 没有该字段时读方
+ * 按「非回滚」处理，不构造假值 —— 与既有的「缺省 = 没有记录」纪律一致。
+ */
+export interface AbnormalRecoveryVerdict {
   at: string
   crashSeq: number
   evidence: 'probabilistic'
@@ -99,13 +105,16 @@ export function assessAbnormalExit(input: AbnormalExitInput, previousSeq = 0, no
   act: boolean
   label: string
   headSuspect: string | null
+  /** v0.18：true = 本轮触发级联刹车，应回滚到崩溃前启动状态（不新增禁用）。 */
+  rollback?: boolean
 }
 
 /**
- * 按累计轮数给出「观察还是动手」的判定，并投影成人读标签。
+ * 按累计轮数给出「观察 / 行动 / 回滚」的判定，并投影成人读标签。
  *
  * 与哨兵通道共用 `abnormalExitDecision` 的阈值语义（第 1 轮观察、达
- * confirmRounds 才动手、逐级扩大并封顶），区别只在于证据性质是概率性的。
+ * confirmRounds 才动手、逐级扩大并封顶、封顶后级联刹车回滚），区别只在于
+ * 证据性质是概率性的。
  */
 export function abnormalRecoveryVerdict(
   nextSeq: number,
@@ -113,11 +122,13 @@ export function abnormalRecoveryVerdict(
   maxAutoDisable: number,
   headSuspect: string | null,
   now = Date.now(),
-): { act: boolean; targets: number; verdict: AbnormalRecoveryVerdict; detail: string } {
+): { act: boolean; targets: number; verdict: AbnormalRecoveryVerdict; rollback: boolean; detail: string } {
   const decision = abnormalExitDecision(nextSeq, confirmRounds, maxAutoDisable)
+  const rollback = decision.rollback
   return {
     act: decision.act,
     targets: decision.targets,
+    rollback,
     verdict: {
       at: new Date(now).toISOString(),
       crashSeq: nextSeq,
@@ -125,14 +136,19 @@ export function abnormalRecoveryVerdict(
       rounds: decision.rounds,
       required: decision.required,
       act: decision.act,
-      label: decision.act
-        ? `异常终止累计 ${decision.rounds} 轮 ⇒ 关闭 ${decision.targets} 个`
-        : `异常终止观察中（${decision.rounds}/${decision.required} 轮）`,
+      label: rollback
+        ? `异常终止累计 ${decision.rounds} 轮，禁用已到顶 ⇒ 回滚到崩溃前启动状态（保留头号嫌疑）`
+        : decision.act
+          ? `异常终止累计 ${decision.rounds} 轮 ⇒ 关闭 ${decision.targets} 个`
+          : `异常终止观察中（${decision.rounds}/${decision.required} 轮）`,
       headSuspect,
+      ...(rollback ? { rollback: true } : {}),
     },
-    detail: decision.act
-      ? `异常终止判定：连续 ${decision.rounds}/${decision.required} 轮 ⇒ 行动，本轮关闭 ${decision.targets} 个（头号嫌疑 ${headSuspect ?? '无'}）`
-      : `异常终止判定：观察中 ${decision.rounds}/${decision.required} 轮（残留标记也可能是人为杀进程，不动手）`,
+    detail: rollback
+      ? `异常终止判定：连续 ${decision.rounds}/${decision.required} 轮，已连续 ${maxAutoDisable} 轮禁用未生效 ⇒ 级联刹车，回滚到崩溃前启动状态（仅保留头号嫌疑 ${headSuspect ?? '无'} 关闭）`
+      : decision.act
+        ? `异常终止判定：连续 ${decision.rounds}/${decision.required} 轮 ⇒ 行动，本轮关闭 ${decision.targets} 个（头号嫌疑 ${headSuspect ?? '无'}）`
+        : `异常终止判定：观察中 ${decision.rounds}/${decision.required} 轮（残留标记也可能是人为杀进程，不动手）`,
   }
 }
 

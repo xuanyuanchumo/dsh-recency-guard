@@ -120,6 +120,7 @@ export type FlowAction =
   | 'auto-disable'
   | 'recover'
   | 'restore'
+  | 'rollback'
   | 'backup'
   | 'transition'
   | 'unknown'
@@ -195,6 +196,11 @@ const FLOW_BY_KIND: Record<string, FlowSpec> = {
   recover: { action: 'recover', actionLabel: '执行恢复', from: 'node:decider', to: 'node:runtime', tone: 'success', stage: 'stabilizing' },
   restore: { action: 'restore', actionLabel: '恢复插件', from: 'node:guard', to: 'node:runtime', tone: 'success', stage: 'stabilizing' },
   'config-backup': { action: 'backup', actionLabel: '备份配置', from: 'node:profile', to: 'node:backups', tone: 'neutral', stage: 'stabilizing' },
+  // v0.18 T16-12：级联刹车回滚。语义上是「恢复」的受限形态（只放回误伤、
+  // 保留头号嫌疑），但动作与语气都不同：它是崩溃循环的**兜底自救**，
+  // 用 success 但阶段是 stabilizing（不是 post-crash 的 recovered 语义），
+  // 让事件流能区分「用户触发的恢复」与「升级到顶后自动回滚」。
+  rollback: { action: 'rollback', actionLabel: '级联刹车回滚', from: 'node:guard', to: 'node:runtime', tone: 'success', stage: 'stabilizing' },
 }
 
 /** 未知 kind 的兜底：**不猜**语义，只如实转述 kind。 */

@@ -1,21 +1,28 @@
 {
-  "action": "in-sync",
+  "action": "repaired",
   "installedDir": "D:\\Projects\\TraeProjects\\dsh-recency-guard\\.dsh\\skills\\ai-native-iteration-cycle",
-  "repairedCount": 0,
-  "repaired": [],
+  "repairedCount": 6,
+  "repaired": [
+    "CHANGELOG.md",
+    "references/scripts-reference.md",
+    "scripts/auto-fix-loop.mjs",
+    "scripts/lib/budget.mjs",
+    "scripts/mcp-server.mjs",
+    "SKILL.md"
+  ],
   "verify": {
     "ok": true,
     "reference": "inline",
     "checked": 69,
     "mismatches": [],
     "extras": [],
-    "manifestVersion": "2.6.1",
+    "manifestVersion": "2.6.2",
     "extraDrift": [],
     "manifestStale": false,
     "dualTrack": "in-sync",
-    "liveVersion": "2.6.1",
-    "inlineVersion": "2.6.1"
+    "liveVersion": "2.6.2",
+    "inlineVersion": "2.6.2"
   },
   "inlineDir": "D:\\Projects\\TraeProjects\\dsh-anic\\assets\\skill",
-  "at": "2026-11-08T16:44:31.359Z"
+  "at": "2026-11-12T23:52:29.867Z"
 }

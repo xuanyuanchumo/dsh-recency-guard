@@ -94,6 +94,15 @@
     "intervals": "Crash intervals (median / CV)",
     "changePoint": "CUSUM change point",
     "controlBand": "Control band (Shewhart)",
+    "survival": "Survival (exponential / Weibull mean)",
+    "intervalTrend": "Interval trend (recent / baseline)",
+    "shapeAtBound": "boundary artifact",
+    "directionDenser": "crashes densifying",
+    "directionSparser": "crashes spacing out",
+    "directionSteady": "steady",
+    "mismatchAtBound": "Weibull shape hit the search bound: k is a boundary artifact, the mean is untrustworthy (near-regular intervals)",
+    "mismatchCv": "Observed CV={cv} deviates from the exponential assumption of 1: exponential model mismatched, λ̂/mean are indicative only",
+    "mismatchDirection": "Direction under-sampled (<9): hazard direction is a hint, not a conclusion",
     "undefined": "not determinable",
     "valueUndefined": "Metric is marked defined but its value is empty (incomplete shape)",
     "unavailableReason": "A cross-partition read-only view has no runtime metrics (unavailable ≠ all zero)"
@@ -163,6 +172,9 @@
     "watch": "Watching",
     "rounds": "round {rounds}/{required}"
   },
+  "unresolved": {
+    "title": "{count} conflict finding(s) remained unresolved after the last quarantine (protected components involved)"
+  },
   "card": {
     "enlarge": "Enlarge panel",
     "shrink": "Restore panel"
@@ -221,6 +233,11 @@
     "more": "+{count} more",
     "less": "Show less",
     "nodeTitle": "{label} · in {in} / out {out}"
+  },
+  "graphImpact": {
+    "label": "Impact",
+    "hint": "What breaks if this node changes: upstream = reverse-reachable (who loses input), downstream = forward-reachable (where output flows). Whole subgraph, unlike the 1-hop neighbor list",
+    "value": "upstream {up} · downstream {down}"
   },
   "decisionEvidence": {
     "empty": "No suspect list yet (no crash-recovery decision has been made)",

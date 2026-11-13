@@ -7,7 +7,7 @@
  */
 import type { PanelSnapshot } from '../../src/host/surface/snapshot.ts'
 import { undefinedMetric } from '../../src/host/observe/observability.ts'
-import { dataFlowStages, diagnosticsRows, markovView, metricRows } from '../panel-model-export.ts'
+import { dataFlowStages, diagnosticsRows, markovView, metricRows, survivalMismatchReason } from '../panel-model-export.ts'
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {
   if (cond) console.log(`  PASS  ${name}`)
@@ -141,6 +141,25 @@ const withBand = metricRows(
       meanRecoveryTime: notDetermined('无恢复样本'),
       intervals: notDetermined('间隔 < 2'),
       changePoint: notDetermined('间隔 < 4'),
+      // v0.18 T16-04：生存分析上屏（失配检测标志随行展示）。
+      survival: {
+        defined: true,
+        value: {
+          samples: 5,
+          exponentialRatePerMs: 1 / 60000,
+          exponentialMeanMs: 60000,
+          weibullShape: 1.2,
+          weibullShapeAtBound: false,
+          weibullScaleMs: 55000,
+          weibullMeanMs: 58000,
+          hazardDirection: 'steady',
+          hazardDirectionReliable: false,
+          cvObserved: 0.9,
+        },
+        label: '生存拟合',
+        reason: null,
+      },
+      intervalTrend: notDetermined('间隔 < 2'),
       controlBand: {
         defined: true,
         value: { center: 60000, upper: 120000, lower: 0, breaches: [], label: '过程受控' },
@@ -152,7 +171,43 @@ const withBand = metricRows(
 )
 const bandRow = withBand.find((row) => row.key === 'controlBand')
 check('控制带行存在且可判定', bandRow !== undefined && bandRow.defined, withBand.map((row) => row.key))
-check('其余指标显示不可判定（不冒充 0）', withBand.filter((row) => row.key !== 'controlBand').every((row) => !row.defined))
+check('其余指标显示不可判定（不冒充 0）', withBand.filter((row) => row.key !== 'controlBand' && row.key !== 'survival').every((row) => !row.defined))
+// 生存行：值上屏 + 失配说明（hazardDirectionReliable=false ⇒ 方向样本不足提示）。
+const survivalRow = withBand.find((row) => row.key === 'survival')
+check('生存行存在且可判定', survivalRow !== undefined && survivalRow.defined === true, survivalRow)
+check('生存行值含双模型均值与形状', typeof survivalRow?.value === 'string' && survivalRow.value.includes('60.0 s') && survivalRow.value.includes('58.0 s') && survivalRow.value.includes('k 1.20'), survivalRow?.value)
+check('失配时值带警示标记', typeof survivalRow?.value === 'string' && survivalRow.value.endsWith('⚠'), survivalRow?.value)
+
+console.log('\n== survivalMismatchReason：失配检测优先级（研究 02 §15）==')
+{
+  // 形状撞界最严重 ⇒ 优先于 CV 与方向。
+  const atBound = survivalMismatchReason({
+    defined: true,
+    value: { weibullShapeAtBound: true, hazardDirectionReliable: true, cvObserved: 1.0 },
+  })
+  check('撞界优先且点名 k 不可信', atBound !== null && atBound.includes('撞'), atBound)
+  // CV 偏离 1 超过 0.5 ⇒ 指数失配。
+  const cvOff = survivalMismatchReason({
+    defined: true,
+    value: { weibullShapeAtBound: false, hazardDirectionReliable: true, cvObserved: 1.8 },
+  })
+  check('CV 偏离报指数失配并带读数', cvOff !== null && cvOff.includes('1.80'), cvOff)
+  // 方向不可靠 ⇒ 提示级。
+  const dirOnly = survivalMismatchReason({
+    defined: true,
+    value: { weibullShapeAtBound: false, hazardDirectionReliable: false, cvObserved: 1.1 },
+  })
+  check('方向不可靠报样本不足', dirOnly !== null && dirOnly.includes('样本不足'), dirOnly)
+  // 全健康 ⇒ null（不造假警告）。
+  const healthy = survivalMismatchReason({
+    defined: true,
+    value: { weibullShapeAtBound: false, hazardDirectionReliable: true, cvObserved: 1.05 },
+  })
+  check('全健康返回 null', healthy === null, healthy)
+  // 不可判定 ⇒ 返回宿主原因而不是编造失配。
+  const undefinedMetric = survivalMismatchReason({ defined: false, reason: '间隔 < 3', value: null })
+  check('不可判定透传宿主原因', undefinedMetric === '间隔 < 3', undefinedMetric)
+}
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}\n`)
 process.exit(failures === 0 ? 0 : 1)

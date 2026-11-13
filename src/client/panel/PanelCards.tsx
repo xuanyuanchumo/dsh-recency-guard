@@ -274,6 +274,24 @@ export function LifecycleBody({ snapshot }: { snapshot: PanelSnapshotView }): Re
           </span>
         </p>
       )}
+      {/* 恢复残余（v0.18 T16-04）：上次隔离后仍有 error 级 finding 的残余。
+          此前宿主一直发送该字段而客户端从未渲染 —— 孤岛（cycle-15 判据
+          「有人消费才算闭环」的同款缺口）。有值才渲染：空数组/旧宿主缺席
+          都不造一条假「无残余」。 */}
+      {(snapshot.unresolved?.length ?? 0) > 0 && (
+        <div className="rg-unresolved" role="alert">
+          <p className="rg-unresolved-title">{t('unresolved.title', { count: snapshot.unresolved?.length ?? 0 })}</p>
+          <ul>
+            {snapshot.unresolved?.map((finding, index) => (
+              <li key={`${finding.kind}-${index}`}>
+                <span className="rg-badge rg-badge-warn">{finding.kind}</span>
+                <span className="rg-unresolved-bundle">{finding.plugins.join(' ↔ ')}</span>
+                <span className="rg-unresolved-detail">{finding.message}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <ol className="rg-stage-rail" aria-label={t('state.stages')}>
         {rail.map((cell) => (
           <li key={cell.stage} className={`rg-stage-cell rg-stage-${cell.state}`} aria-current={cell.state === 'current' ? 'step' : undefined}>

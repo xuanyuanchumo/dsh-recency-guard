@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative, sep } from 'node:path'
 import { observationPath } from '../../src/host/observe/cooccurrence-store.ts'
 import { Store } from '../../src/host/data/store.ts'
-import { pathSafeName, staysInside } from '../../src/host/core/path-safe.ts'
+import { candidateNames, legacyFingerprintName, pathSafeName, staysInside } from '../../src/host/core/path-safe.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -48,13 +48,12 @@ async function main(): Promise<void> {
     check('scoped name produces a flat child (no subdirectory)', isFlatChild(root, scoped), relative(root, scoped))
     check('scoped filename carries no forward slash', !basename(scoped).includes('/'), basename(scoped))
     check('scoped filename carries no backslash', !basename(scoped).includes('\\'), basename(scoped))
-    // 防撞名：被改写的名字会追加原始名的 8 位 sha256 指纹
-    // （`@scope/pkg` → `@scope_pkg-<8hex>`），因此这里只断言**可读主干 +
-    // 合法后缀**，不锁死完整文件名 —— 否则实现一变测试就红，而它要守的
-    // 不变式是「扁平 + 可辨认」，不是某个具体哈希。
+    // 防撞名：被改写的名字会追加原始名的 sha256 指纹（v0.18 起 16 位 hex；
+    // v0.17 是 8 位——这里只断言**可读主干 + 合法后缀**，不锁死指纹宽度，
+    // 否则实现一变测试就红，而它要守的不变式是「扁平 + 可辨认」。
     check(
       'scoped filename keeps the readable package name',
-      /^observation-@scope_pkg(-[0-9a-f]{8})?\.json$/.test(basename(scoped)),
+      /^observation-@scope_pkg(-[0-9a-f]{8,16})?\.json$/.test(basename(scoped)),
       basename(scoped),
     )
   }
@@ -75,6 +74,24 @@ async function main(): Promise<void> {
     check('plain name is unchanged (no fingerprint)', pathSafeName('official-experimental') === 'official-experimental', pathSafeName('official-experimental'))
     check('underscore name is unchanged (no fingerprint)', pathSafeName('@scope_pkg') === '@scope_pkg', pathSafeName('@scope_pkg'))
     check('rewritten name differs from an already-flat lookalike', pathSafeName('@scope/pkg') !== pathSafeName('@scope_pkg'))
+  }
+
+  console.log('\n== TD-7 根治：64 位指纹 + 双读迁移（v0.18）==')
+  {
+    // 64 bit 指纹 = 16 hex；v0.17 的 8 位旧名必须仍可经 candidateNames 读到。
+    const modern = pathSafeName('@scope/pkg')
+    const legacy = legacyFingerprintName('@scope/pkg')
+    check('modern fingerprint is 16 hex chars', /@scope_pkg-[0-9a-f]{16}$/.test(modern), modern)
+    check('legacy fingerprint is 8 hex chars', /@scope_pkg-[0-9a-f]{8}$/.test(legacy), legacy)
+    check('modern differs from legacy (migration is real)', modern !== legacy)
+    const candidates = candidateNames('@scope/pkg')
+    check('candidates: modern first, legacy second', candidates.length === 2 && candidates[0] === modern && candidates[1] === legacy, candidates)
+    // 未改写的名字：两种投影相同 ⇒ 候选去重（调用方不会重复 stat）。
+    const flatCandidates = candidateNames('@scope_pkg')
+    check('unmodified name has single candidate (dedup)', flatCandidates.length === 1 && flatCandidates[0] === '@scope_pkg', flatCandidates)
+    // 指纹宽度提升的真实价值：64 bit 生日碰撞 ≤ 5.4e-20（32 bit 是 2.3e-10）。
+    // 这里钉住「两个不同改写名的 16 位指纹仍不同」（抽查，非穷举）。
+    check('two rewritten scoped names keep distinct 16-hex fingerprints', pathSafeName('@a/b') !== pathSafeName('@a_b'))
   }
 
   console.log('\n== 折叠 .. 不引入同名冲突（抽查关键对）==')

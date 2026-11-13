@@ -154,8 +154,17 @@ function main() {
     // 逐级扩大与哨兵通道同形（+1 轮多关 1 个），封顶 maxAutoDisable。
     const d3 = abnormalExitDecision(3, 2, 2)
     check('abnormalExitDecision: 再多一轮关 2 个', d3.act === true && d3.targets === 2, d3)
+    // v0.18 T16-12：升级步数用满（over ≥ cap）⇒ 级联刹车回滚，
+    // 不再新增禁用。seq=9（over=7 ≥ cap=2）必须 rollback=true。
     const d9 = abnormalExitDecision(9, 2, 2)
-    check('abnormalExitDecision: 封顶 maxAutoDisable（不无限扩大隔离面）', d9.targets === 2, d9)
+    check('abnormalExitDecision: 升级到顶触发级联刹车（rollback，不新增禁用）', d9.rollback === true && d9.act === false && d9.targets === 0, d9)
+    // 边界：over 恰好等于 cap-1 时仍在扩大（未到顶），over 达到 cap 才刹车。
+    // seq=3（= required + cap - 1）：over=1 < cap=2 ⇒ 仍扩大不刹车。
+    const dEdge = abnormalExitDecision(3, 2, 2)
+    check('abnormalExitDecision: 边界 seq=required+cap-1 仍扩大不刹车', dEdge.rollback === false && dEdge.act === true && dEdge.targets === 2, dEdge)
+    // seq=4（= required + cap）：over=2 ≥ cap ⇒ 刹车。
+    const dEdgeBrake = abnormalExitDecision(4, 2, 2)
+    check('abnormalExitDecision: 边界 seq=required+cap 触发刹车', dEdgeBrake.rollback === true && dEdgeBrake.act === false, dEdgeBrake)
     const dZero = abnormalExitDecision(0, 2, 2)
     check('abnormalExitDecision: 计数 0 不动手', dZero.act === false && dZero.rounds === 0, dZero)
     // confirmRounds=1 的极端配置必须「一轮即行动」，而不是永不行动。

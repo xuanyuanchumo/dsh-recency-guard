@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSy
 import { isAbsolute, join, resolve } from 'node:path'
 import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
 import { writeFileAtomicSync } from '../core/atomic-sync.ts'
-import { parseJournalLines, trimJournalFile } from './journal-io.ts'
+import { readMergedJournal, readMergedJournalSync, trimJournalFile } from './journal-io.ts'
 import { SCHEMA_VERSION, parseDecisionText, parseStateText, unsupportedVersionDetail } from './schema-version.ts'
 
 // 再导出：历史 import 站点（tests、index）保持稳定；本文件自己也用这两个常量。
@@ -15,7 +15,7 @@ import type { DecisionSuspect } from '../guard/decision.ts'
 import type { ConflictFinding } from '../guard/conflict-metadata.ts'
 import { readCooccurrenceSync, writeCooccurrenceSync, readObservation, readObservationSync, writeObservation } from '../observe/cooccurrence-store.ts'
 import { cleanStaleLocks, isLockTimeout } from './lock-hygiene.ts'
-import { legacyUnsafeName, pathSafeName } from '../core/path-safe.ts'
+import { candidateNames, legacyUnsafeName, pathSafeName } from '../core/path-safe.ts'
 
 /**
  * Journal / state store for dsh-recency-guard.
@@ -44,6 +44,7 @@ export type JournalKind =
   | 'auto-disable'
   | 'recover'
   | 'restore'
+  | 'rollback'
   | 'config-backup'
   | 'official-observe'
   | 'note'
@@ -104,6 +105,15 @@ export interface GuardState {
   stabilized: boolean
   /** Bundles re-enabled after stabilization. */
   restored: string[]
+  /**
+   * 级联刹车回滚待执行标记（v0.18 T16-12）。
+   *
+   * 崩溃路径（exit 处理器）上只能同步落盘，而回滚需要插件管理器的异步
+   * 调用。所以崩溃时置 true，**下一轮启动**由 boot 编排消费执行 ——
+   * 与 autoRestore 的「延后执行」同一时序纪律（HMR 事务不能嵌套）。
+   * 执行成功后清零。缺省（旧 state）按 false 处理，不构造假值。
+   */
+  rollbackArmed?: boolean
   /** Exit code of the last run, when it ended badly. */
   lastExitCode?: number
   /** True when the previous run ended with a non-zero exit code. */
@@ -190,7 +200,7 @@ export interface PrebootDecision {
    * 两阶段标记（v0.9.0）：prepared = 已记录待执行；quarantined = 已生效。
    * 守护行只认 disable 名单，phase 供 reconcile 与面板对账。
    */
-  phase?: 'prepared' | 'quarantined' | 'reconciled'
+  phase?: 'prepared' | 'quarantined' | 'reconciled' | 'rollback'
   /**
    * 声明式冲突证据（T14-03）：本决策为什么是确定性的。
    *
@@ -369,8 +379,9 @@ export class Store {
    * 而裁剪要读全文件再原子替换。崩溃路径改用纯追加，把上限交给这里。
    */
   private async trimJournalIfNeeded(): Promise<void> {
-    // 实现见 journal-io.ts：可注入读（默认真实 fs）只为让失败分支可测。
-    await trimJournalFile(this.journalPath, this.readText)
+    // 实现见 journal-io.ts：v0.18 起是**轮转**（rename，无读改写窗口）。
+    // 可注入读（默认真实 fs）只为让失败分支可测。
+    await trimJournalFile(this.dir, this.readText)
   }
 
   /**
@@ -395,8 +406,9 @@ export class Store {
   }
 
   async readJournal(limit = 100): Promise<JournalRecord[]> {
-    if (!existsSync(this.journalPath)) return []
-    return parseJournalLines(await readFile(this.journalPath, 'utf8'), limit)
+    // v0.18 TD-5：轮转后 journal 分散在活动文件 + journal.<epoch>.jsonl。
+    // 合并读取让「轮转」对消费者透明 —— 所有调用方仍拿到完整时间线。
+    return readMergedJournal(this.dir, limit)
   }
 
   // ---------- snapshot (version tracking) ----------
@@ -461,11 +473,10 @@ export class Store {
     }
   }
 
-  /** Read the journal synchronously. */
+  /** Read the journal synchronously.（轮转透明：活动 + 轮转文件合并） */
   readJournalSync(limit = 100): JournalRecord[] {
     try {
-      if (!existsSync(this.journalPath)) return []
-      return parseJournalLines(readFileSync(this.journalPath, 'utf8'), limit)
+      return readMergedJournalSync(this.dir, limit)
     } catch {
       return []
     }
@@ -801,9 +812,10 @@ export class Store {
   }
 
   async readBackup(bundle: string): Promise<{ bundle: string; savedAt: string; config: unknown } | null> {
-    // 新命名优先；再回退到旧版（不安全）投影写出的位置 —— 只读兼容，
-    // 让升级后仍能取回作用域包名的存量备份。
-    const candidates = [join(this.backupsDir, `${pathSafeName(bundle)}.json`), join(this.backupsDir, `${legacyUnsafeName(bundle)}.json`)]
+    // 三级候选（TD-7 迁移）：64 位指纹新名 → 8 位指纹旧名 → 前指纹时代
+    // 的不安全投影位置。每一级只读，让升级后各时期的存量备份都能取回。
+    const candidates = candidateNames(bundle).flatMap((n) => [join(this.backupsDir, `${n}.json`)])
+    candidates.push(join(this.backupsDir, `${legacyUnsafeName(bundle)}.json`))
     for (const file of candidates) {
       if (!existsSync(file)) continue
       try {

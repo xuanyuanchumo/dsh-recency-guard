@@ -13,12 +13,12 @@
  * 读失败 ⇒ **不抛、journal 内容一行不少**（「best effort」与「静默丢证据」
  * 的分界就在这里）；正常读 ⇒ 仍会裁剪到上限。
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { JOURNAL_MAX_LINES, Store } from '../../src/host/data/store.ts'
-import { trimJournalFile } from '../../src/host/data/journal-io.ts'
+import { readMergedJournalSync, trimJournalFile } from '../../src/host/data/journal-io.ts'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -30,7 +30,10 @@ function check(name: string, cond: boolean, detail?: unknown) {
 }
 
 function journalLineCount(store: Store): number {
-  return readFileSync(join(store.partitionPath, 'journal.jsonl'), 'utf8').split('\n').filter(Boolean).length
+  // 轮转后活动文件可能不存在（全部轮走且尚未有新写入）⇒ 视为 0 行。
+  const active = join(store.partitionPath, 'journal.jsonl')
+  if (!existsSync(active)) return 0
+  return readFileSync(active, 'utf8').split('\n').filter(Boolean).length
 }
 
 async function main(): Promise<void> {
@@ -67,18 +70,25 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log('\n== 正常读 ⇒ 仍按上限裁剪（默认行为未被注入点改变）==')
+  console.log('\n== 正常读 ⇒ 轮转生效且**零丢行**（v0.18 TD-5 结构根治）==')
   {
     const profile = mkdtempSync(join(tmpdir(), 'rg-trim-ok-'))
     try {
       const store = new Store(profile, 'part-a')
       await store.init()
-      for (let i = 0; i < JOURNAL_MAX_LINES + 5; i += 1) store.appendSync({ kind: 'note', detail: `sync-${i}` })
+      const total = JOURNAL_MAX_LINES + 5
+      for (let i = 0; i < total; i += 1) store.appendSync({ kind: 'note', detail: `sync-${i}` })
       await store.append({ kind: 'note', detail: 'trigger-trim' })
-      const lines = journalLineCount(store)
-      check('normal path trims down to the cap', lines <= JOURNAL_MAX_LINES, lines)
-      const records = store.readJournalSync(JOURNAL_MAX_LINES)
-      check('newest event survives the trim', records.some((r) => r.detail === 'trigger-trim'), records.slice(-2).map((r) => r.detail))
+      // 轮转后的不变式**不是「活动文件 ≤ 上限」**（那是裁剪的形状），
+      // 而是「合并读取能拿回全部事件」——轮转把最旧段搬进
+      // journal.<epoch>.jsonl，证据一行不少。
+      const records = store.readJournalSync(total + 10)
+      check('rotation keeps every event readable', records.length === total + 1, records.length)
+      check('oldest event survives rotation', records.some((r) => r.detail === 'sync-0'))
+      check('newest event survives rotation', records[records.length - 1]?.detail === 'trigger-trim', records.slice(-2).map((r) => r.detail))
+      // 活动文件确实变小了（否则轮转没有发生，测试就成了假绿）。
+      const activeLines = journalLineCount(store)
+      check('active file rotated (shrank below total)', activeLines < total, activeLines)
     } finally {
       rmSync(profile, { recursive: true, force: true })
     }
@@ -90,18 +100,46 @@ async function main(): Promise<void> {
     try {
       const store = new Store(profile, 'part-a')
       await store.init()
+      const dir = join(store.partitionPath)
       for (let i = 0; i < JOURNAL_MAX_LINES + 3; i += 1) store.appendSync({ kind: 'note', detail: `sync-${i}` })
-      await trimJournalFile(join(store.partitionPath, 'journal.jsonl'), (path) => readFile(path, 'utf8'))
-      check('explicit real-fs read trims normally', journalLineCount(store) <= JOURNAL_MAX_LINES, journalLineCount(store))
+      await trimJournalFile(dir, (path) => readFile(path, 'utf8'))
+      // 轮转语义：活动文件变小、轮转文件出现、合并读取拿回全部。
+      const rotatedNames = existsSync(dir) ? readdirSync(dir).filter((n) => /^journal\.\d+\.jsonl$/.test(n)) : []
+      check('rotation produced a rotated file', rotatedNames.length >= 1, rotatedNames)
+      const merged = readMergedJournalSync(dir, JOURNAL_MAX_LINES + 10)
+      check('merged read recovers all events after direct rotation', merged.length === JOURNAL_MAX_LINES + 3, merged.length)
       let threw: unknown = null
       try {
-        await trimJournalFile(join(store.partitionPath, 'journal.jsonl'), async () => {
+        await trimJournalFile(dir, async () => {
           throw new Error('x')
         })
       } catch (error) {
         threw = error
       }
       check('trimJournalFile never throws on read failure', threw === null, String(threw))
+    } finally {
+      rmSync(profile, { recursive: true, force: true })
+    }
+  }
+
+  console.log('\n== 交错不丢行（TD-5 原残余窗口的结构性消灭）==')
+  {
+    // 旧实现的风险：裁剪「读最新→写回」窗口里的一次同步追加被覆盖。
+    // 轮转实现里 rename 不读不写内容 ⇒ 崩溃路径 appendSync 与轮转的
+    // 任何交错都只有两种落点（轮走 / 落新文件），合并读取都在。
+    const profile = mkdtempSync(join(tmpdir(), 'rg-trim-race-'))
+    try {
+      const store = new Store(profile, 'part-a')
+      await store.init()
+      const total = JOURNAL_MAX_LINES + 2
+      for (let i = 0; i < total; i += 1) store.appendSync({ kind: 'note', detail: `sync-${i}` })
+      // 模拟「崩溃事件恰好在轮转决策后到达」：直接在超限文件上先追加一条
+      // 同步事件，再触发轮转。
+      store.appendSync({ kind: 'crash-detected', detail: 'race-crash' })
+      await store.append({ kind: 'note', detail: 'trigger-rotation' })
+      const merged = store.readJournalSync(total + 20)
+      check('sync crash event survives rotation interleaving', merged.some((r) => r.kind === 'crash-detected' && r.detail === 'race-crash'), merged.filter((r) => r.kind === 'crash-detected').length)
+      check('every appended line survives', merged.length === total + 2, { expected: total + 2, got: merged.length })
     } finally {
       rmSync(profile, { recursive: true, force: true })
     }

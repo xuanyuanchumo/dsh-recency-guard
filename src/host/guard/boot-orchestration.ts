@@ -48,6 +48,13 @@ export interface BootOrchestrationDeps {
   /** 异常终止累计到阈值后的恢复（复用 recover 通道）。 */
   applyAbnormalRecovery: (abnormalSeqNext: number) => Promise<void>
   /**
+   * 级联刹车回滚（v0.18 T16-12）：消费 state.rollbackArmed 标记，把被
+   * 自动禁用的插件恢复到崩溃前状态（仅保留头号嫌疑）。由崩溃路径置位、
+   * 启动路径执行 —— 崩溃路径只有同步 IO 预算，回滚要调插件管理器的
+   * 异步接口，只能延后到下一轮启动。
+   */
+  executeRollback: () => Promise<void>
+  /**
    * 分区索引的加锁提交（默认就是 `writePartitionIndexLocked`）。
    *
    * 为什么留一个可选注入点：它是启动路径上**唯一的 IO 失败兜底**分支
@@ -129,6 +136,19 @@ export async function runBootOrchestration(deps: BootOrchestrationDeps): Promise
 
   // 崩溃恢复已在崩溃那一轮发布过决策并记录了被关的插件。
   const recovering = state.autoDisabled.length > 0
+
+  // ---------- 级联刹车回滚（v0.18 T16-12） ----------
+  // 崩溃路径置了 rollbackArmed ⇒ 本轮启动先把被误伤的插件放回来，
+  // 只保留头号嫌疑。**必须在恢复分支之前执行**：否则下面
+  // shouldRestoreAfterBoot / recovering 的分支会把「待回滚」误读为
+  // 「正常恢复中」，跳过回滚动作。
+  if (state.rollbackArmed) {
+    deps.store.appendSync({
+      kind: 'note',
+      detail: `[recency-guard] 启动检测到级联刹车回滚标记（上一轮升级到顶）⇒ 执行回滚到崩溃前启动状态`,
+    })
+    await deps.executeRollback()
+  }
 
   // 状态机迁移（白盒透明：每次迁移都带原因与时刻）。
   if (crashedLastRun) {

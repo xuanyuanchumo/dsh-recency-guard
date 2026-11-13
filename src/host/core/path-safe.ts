@@ -42,11 +42,46 @@ const DOT_RUNS = /\.{2,}/g
  *
  * 输出恒为「扁平文件名」：调用方可以安全地 `join(parent, pathSafeName(x))`，
  * 不需要 `mkdir` 子目录，也不会越出 `parent`。
+ *
+ * ## 指纹宽度（v0.18，TD-7 根治）
+ *
+ * 8 位 hex（32 bit）指纹的生日碰撞 ≈2.3×10⁻¹⁰，几十条目量级「可忽略」——
+ * 但后果是**静默覆盖**，而本项目的纪律是「不静默」。v0.18 升到 16 位 hex
+ * （64 bit），生日碰撞 ≤ 5.4×10⁻²⁰：即使全宇宙的插件条目也撞不上。
+ *
+ * ## 存量迁移（为什么还有 `legacyFingerprintName`）
+ *
+ * 改指纹宽度 = 改文件名 ⇒ v0.17 写出的带 8 位指纹文件「凭空消失」。
+ * 读取端走 `candidateNames()` 双读：先试 64 位新名，再试 8 位旧名；
+ * 写入端只写新名（下一次覆盖写即完成迁移，无需批量重命名工具）。
  */
 export function pathSafeName(name: string): string {
   const flat = name.replace(SEPARATORS, '_').replace(DOT_RUNS, '_').replace(SAFE_CHARS, '_')
   if (flat === name) return flat
-  return `${flat}-${createHash('sha256').update(name).digest('hex').slice(0, 8)}`
+  return `${flat}-${fingerprint(name, 16)}`
+}
+
+/** v0.17 时代的 8 位指纹投影 —— 只用于**读取存量文件**，写入路径不得使用。 */
+export function legacyFingerprintName(name: string): string {
+  const flat = name.replace(SEPARATORS, '_').replace(DOT_RUNS, '_').replace(SAFE_CHARS, '_')
+  if (flat === name) return flat
+  return `${flat}-${fingerprint(name, 8)}`
+}
+
+/**
+ * 读取候选名（新 → 旧）：调用方按序尝试，第一个存在的文件即命中。
+ *
+ * 未改写的名称两种投影相同 ⇒ 候选自动去重，调用方不会重复 stat。
+ */
+export function candidateNames(name: string): [string, ...string[]] {
+  const modern = pathSafeName(name)
+  const legacy = legacyFingerprintName(name)
+  return modern === legacy ? [modern] : [modern, legacy]
+}
+
+/** 原始名称的十六进制指纹（`width` 个字符 = `width×4` bit）。 */
+function fingerprint(name: string, width: number): string {
+  return createHash('sha256').update(name).digest('hex').slice(0, width)
 }
 
 /**

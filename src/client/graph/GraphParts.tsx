@@ -355,6 +355,13 @@ export interface GraphDetailsProps {
   labelOf: (id: string) => { label: string; tone: GraphNode['tone']; detail?: string }
   onLocate: (id: string) => void
   onClose: () => void
+  /**
+   * v0.18 T16-05：影响面投影（此前 `impactedBy` 是孤岛 —— 分析函数 +
+   * 测试齐全，UI 零消费）。形状是**预计算的纯投影**而非让组件拿原始
+   * 边表自己算：组件保持「只渲染不推导」，推导留在可单测的纯函数层。
+   * null = 宿主未提供（旧调用方），侧栏不渲染该区块（不造假空态）。
+   */
+  impact?: { upstreamCount: number; downstreamCount: number } | null
 }
 
 export function GraphDetails(props: GraphDetailsProps): ReactElement {
@@ -385,6 +392,14 @@ export function GraphDetails(props: GraphDetailsProps): ReactElement {
         <dd className="rg-mono">{node.ref ?? '—'}</dd>
         <dt>{t('graph.degreeLabel')}</dt>
         <dd>{t('graph.degreeValue', { in: props.degree.in, out: props.degree.out })}</dd>
+        {props.impact !== undefined && props.impact !== null && (
+          <>
+            <dt title={t('graphImpact.hint')}>{t('graphImpact.label')}</dt>
+            <dd>
+              {t('graphImpact.value', { up: props.impact.upstreamCount, down: props.impact.downstreamCount })}
+            </dd>
+          </>
+        )}
       </dl>
       {labelText.truncated || (detailText?.truncated ?? false) ? (
         <details className="rg-graph-longtext">

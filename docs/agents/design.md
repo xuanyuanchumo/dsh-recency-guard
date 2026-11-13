@@ -1,4 +1,4 @@
-# 架构与设计（dsh-recency-guard v0.17.0）
+# 架构与设计（dsh-recency-guard v0.18.0）
 
 > 版本说明：§0 记 v0.13 的三条设计纪律；§1–§15 是 0.7–0.12.1 的决策链与实测记录，
 > **原文保留**（标题里的历史版本号是事件编号，不是当前版本）。v0.14 / v0.15 的变更以
@@ -1000,5 +1000,51 @@ boot 是异步的，其 `updateState` 可能在崩溃之后才拿到执行权；
   （CJK 对齐、截断格式）仍靠各自纪律，不声称「两份实现全等价」。
 - **无直接测试仍余 2 个模块**：`event-watch.ts` 与 `tool-registration.ts`（事件订阅 / 组合根接线，
   需要集成夹具而不是纯函数测试）—— 不把「14→2」写成「已清零」。
-- **TD-5 / TD-6**（journal 裁剪窗口、分区索引同步首写窗口）是**部分关闭**：
-  常见丢证据路径已结构性消灭，但窗口本身仍在，见 [tech-debt.md](./tech-debt.md)。
+- **TD-5**（journal 裁剪窗口）**v0.18 已关闭**：裁剪改**轮转**（rename，
+  无读改写窗口）；TD-6（分区索引同步首写窗口）仍是**部分关闭**，见
+  [tech-debt.md](./tech-debt.md)。
+
+---
+
+## 19. v0.18.0：级联刹车与崩溃前回滚（cycle-16 T16-12，用户场景驱动）
+
+### 19.1 场景与缺陷
+
+**场景（用户原话提炼）**：DSH + 桌面版下载插件后无法启动，安全模式、禁用插件、
+救援工具都试过，还是崩溃。本插件的自动禁用在崩溃循环里**逐轮加深**：第
+`confirmRounds` 轮关 1 个、+1 轮关 2 个、封顶 `maxAutoDisable`。封顶之后，
+旧实现**永远停在「关 N 个」**——崩溃仍在继续，但插件不再有新的行动：
+
+- 用户拿到的是「越关越空的 profile」，真正的问题插件被淹没在被误伤的插件里；
+- 唯一的逃生是手动 `restore` 或走「清空本地工作区」的最后一计（风险提示：
+  会清空会话记录、插件配置、登录状态、API Key）——**代价极高**。
+
+用户要求：出现该场景后，重新使用本插件时要**自动启用崩溃前的插件启动状态，
+有问题进行禁用**；本插件要**减少崩溃和崩溃后禁用重启的兜底**。
+
+### 19.2 设计：级联刹车 + 崩溃前回滚
+
+**判据（单源，两条通道共用）**：`escalationExhausted(seq, confirmRounds, maxAutoDisable)`
+= `seq >= confirmRounds + maxAutoDisable`。升级步数（`over = seq - confirmRounds`）
+用满一轮 ⇒ 刹车。哨兵通道（`assessConfidence`）与异常终止通道
+（`abnormalExitDecision`）**共用同一判据**——两通道各写一套「到顶怎么办」
+迟早漂移，用户拿到的行为取决于崩溃碰巧走了哪条通道。
+
+**刹车后的决策**：不再新增禁用，决策 `disable` 名单收敛为「仅头号嫌疑」，
+`phase: 'rollback'`，`state.lastRecoveryVerdict.rollback = true`，
+`state.rollbackArmed = true`。**确定性证据不回滚**：唯一嫌疑 / 声明命中时
+第 1 轮即行动（证据确凿的精准隔离不受「越关越空」问题影响）。
+
+**回滚动作（`rollbackToPreCrash`）**：由**下一轮启动**的 boot 编排消费
+`rollbackArmed` 执行 —— 崩溃路径（process exit 处理器）只有同步 IO 预算，
+回滚要调插件管理器的 `setBundleEnabled`（异步、HMR 事务），与 autoRestore
+的 1.5s 延后同源。回滚把 `autoDisabled` 里**除头号嫌疑**外的全部重新启用
+（恢复崩溃前启动状态），头号嫌疑保持关闭；管理器拒绝的插件**如实留在
+名单待重试**（不谎报回滚成功）。
+
+**诚实边界**：
+- 回滚后若头号嫌疑仍致崩，新一轮循环从干净状态重新升级 —— 不会因计数残留
+  而立刻再次刹车；
+- 回滚失败者留在 `autoDisabled`，下轮启动重试，绝不「假装回滚成功」；
+- journal 新增 `rollback` kind（跨层词汇表四处同步：store / observations /
+  FLOW_BY_KIND / LifecycleStepName）。

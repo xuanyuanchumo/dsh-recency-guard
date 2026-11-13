@@ -76,6 +76,8 @@ export interface RecoveryVerdictPatch {
   label: string
   headSuspect: string | null
   deterministic?: { findings: ConflictFinding[]; targets: string[] }
+  /** v0.18 T16-12：级联刹车标志（确定性证据轮不回滚）。 */
+  rollback?: boolean
 }
 
 /**
@@ -102,6 +104,9 @@ export function verdictPatch(
     label: verdict.label,
     headSuspect: targets[0]?.bundle ?? null,
     ...(deterministicEvidence === undefined ? {} : { deterministic: deterministicEvidence }),
+    // 级联刹车标志随判定一起落盘（v0.18 T16-12）：面板/工具要能看见
+    // 「这一轮为什么不再禁用」。缺省 = 未刹车，与旧 state 兼容。
+    ...(verdict.rollback === true ? { rollback: true } : {}),
   }
 }
 
@@ -121,6 +126,8 @@ export function composeCrashDecision(input: CrashDecisionInput): CrashDecisionRe
     crashSeq: input.seq,
     hazardDirection: input.hazardDirection,
     deterministicEvidence,
+    // v0.18 T16-12：级联刹车判据需要封顶数（升级步数用满 ⇒ rollback）。
+    maxAutoDisable: input.maxAutoDisable,
   })
   const planned = plan.quarantine
     .map((name) => input.ranked.find((entry) => entry.bundle === name))

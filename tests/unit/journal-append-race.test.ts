@@ -18,7 +18,7 @@
  *    唯一标记都必须出现在最终 journal 里；
  * 2. **崩溃证据优先**：模拟「异步写先发起、崩溃证据后写」，两者都必须存活。
  */
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Store, JOURNAL_MAX_LINES } from '../../src/host/data/store.ts'
@@ -88,26 +88,32 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log('\n== 行数上限仍在安全时机被裁剪 ==')
+  console.log('\n== 行数上限仍在安全时机被轮转（v0.18 TD-5）==')
   {
     const profile = mkdtempSync(join(tmpdir(), 'rg-journal-cap-'))
     try {
       const store = new Store(profile, 'part-a')
-      // 崩溃路径只追加（不 trim）：先压到超上限。
+      // 崩溃路径只追加（不轮转）：先压到超上限。
       for (let i = 0; i < JOURNAL_MAX_LINES + 25; i += 1) {
         store.appendSync({ kind: 'note', detail: `sync-${i}` })
       }
-      // 断言崩溃路径没有偷偷裁剪（否则「超过上限就丢最旧证据」会静默发生）。
-      const syncLines = readFileSync(join(store.partitionPath, 'journal.jsonl'), 'utf8').split('\n').filter(Boolean)
-      check('sync path never trims (only appends)', syncLines.length === JOURNAL_MAX_LINES + 25, syncLines.length)
+      // 断言崩溃路径没有偷偷轮转（否则「超过上限就搬走活动文件」会在
+      // 崩溃路径上做 rename，而它只有同步 IO 预算做追加）。
+      const activeFile = join(store.partitionPath, 'journal.jsonl')
+      const syncLines = readFileSync(activeFile, 'utf8').split('\n').filter(Boolean)
+      check('sync path never rotates (only appends)', syncLines.length === JOURNAL_MAX_LINES + 25, syncLines.length)
 
-      // 异步路径负责裁剪：一条 append 触发 trim。
+      // 异步路径负责轮转：一条 append 触发 trim（现为 rename 轮转）。
       await store.append({ kind: 'note', detail: 'trigger-trim' })
-      const lines = readFileSync(join(store.partitionPath, 'journal.jsonl'), 'utf8').split('\n').filter(Boolean)
-      check('async path trims down to the cap', lines.length <= JOURNAL_MAX_LINES, lines.length)
-      const records = store.readJournalSync(JOURNAL_MAX_LINES)
-      check('newest event survives the trim', records.some((r) => r.detail === 'trigger-trim'), records.slice(-3).map((r) => r.detail))
-      check('oldest events are the ones dropped', !records.some((r) => r.detail === 'sync-0'), records.slice(0, 2).map((r) => r.detail))
+      // 轮转的不变式：活动文件回到上限内（rename 走后若尚无新写入则
+      // 文件暂不存在 ⇒ 计 0 行），而**合并读取拿回全部事件** ——
+      // 轮转不丢行，与裁剪的「丢最旧」不同。
+      const lines = existsSync(activeFile) ? readFileSync(activeFile, 'utf8').split('\n').filter(Boolean) : []
+      check('async path rotates active file back under the cap', lines.length <= JOURNAL_MAX_LINES, lines.length)
+      const records = store.readJournalSync(JOURNAL_MAX_LINES + 40)
+      check('newest event survives the rotation', records.some((r) => r.detail === 'trigger-trim'), records.slice(-3).map((r) => r.detail))
+      check('oldest events are kept (rotation drops nothing)', records.some((r) => r.detail === 'sync-0'), records.slice(0, 2).map((r) => r.detail))
+      check('merged read returns every event', records.length === JOURNAL_MAX_LINES + 26, records.length)
     } finally {
       rmSync(profile, { recursive: true, force: true })
     }

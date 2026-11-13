@@ -1579,6 +1579,47 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* ---------- v0.18 恢复残余（unresolved）+ 失配检测警示 ---------- */
+
+/* 残余冲突块：alert 语义（role="alert"）但视觉克制 —— 是「需要知道」
+   不是「灾难」；列表行用徽标 + 插件对 + 人读事实三段。 */
+.rg-unresolved {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm, 8px);
+  background: var(--dsw-alias-bg-layer-2);
+}
+.rg-unresolved-title {
+  margin: 0 0 6px;
+  font-size: var(--dsw-font-xs-13, 13px);
+  font-weight: var(--dsw-font-s-strong-14, 600);
+}
+.rg-unresolved ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rg-unresolved li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--dsw-font-xs-13, 13px);
+}
+.rg-unresolved-bundle {
+  font-family: var(--dsw-font-mono, monospace);
+  font-size: 12px;
+}
+.rg-unresolved-detail {
+  color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---------- v0.10 洞察卡：马尔可夫 / 数据流 / 系统诊断 ---------- */
 
 /* 卡片顶部的一行摘要（样本数、收敛性等白盒元信息）。 */
