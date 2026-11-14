@@ -54,11 +54,11 @@ dsh plugin --profile <profile名> add dsh-recency-guard
 dsh plugin --profile <profile名> add dsh-recency-guard@0.20.0
 ```
 
-> 版本对应：本 README 描述 **0.20.0**；npm `latest` 已发布为 **0.19.0**
-> （2026-11-13，shasum `ef564eb0b786150c24427a44f837b15f929480d4`，registry 实况），
-> 0.20.0 发布后以 registry 回读为准（shasum/日期这类「发布后才存在的事实」
-> 一律以 [registry](https://registry.npmjs.org/dsh-recency-guard/latest) 为源，
-> 不手抄——v0.19.0 曾因手抄本地 pack 的临时 shasum 造成 README 漂移，已修）。
+> 版本对应：本 README 描述 **0.20.0**；npm `latest` 已发布为 **0.20.0**
+> （2026-11-14，shasum `88deda1c795112ff1228f1ec18e161edd25ac69a`，registry 实况回读），
+> 可直接安装。shasum/日期这类「发布后才存在的事实」一律以
+> [registry](https://registry.npmjs.org/dsh-recency-guard/latest) 为源，
+> 不手抄——v0.19.0 曾因手抄本地 pack 的临时 shasum 造成 README 漂移，已修。
 > 版本纪律见 [`docs/agents/conventions.md`](docs/agents/conventions.md) §6。
 
 ### 插件市场
