@@ -560,7 +560,12 @@ export function dataFlowStages(snapshot: PanelSnapshotView): DataFlowStage[] {
     {
       key: 'journal',
       label: t('dataflow.journal'),
-      detail: t('dataflow.journalDetail'),
+      // v0.20.0：seq 地板可见化 —— journal 环节的计数说明「地板之前还有多少条」。
+      // null（旧宿主没报）与 0（从头开始）是两态，不能混。
+      detail:
+        typeof snapshot.recentEventsFloor === 'number' && snapshot.recentEventsFloor > 0
+          ? t('dataflow.journalFloor', { n: snapshot.recentEventsFloor })
+          : t('dataflow.journalDetail'),
       count: null,
     },
     {
@@ -653,6 +658,18 @@ export function diagnosticsRows(snapshot: PanelSnapshotView): DiagnosticsRow[] {
         href: null,
       })
     }
+  }
+  // journal 坏行计数（v0.20.0，degraded 白盒）：三态与产物新鲜度同构 ——
+  // `null`（旧宿主没报）= 未知，绝不显示成「完整」；`0` = 本次读取确认完整；
+  // `>0` = 有行读不出（行保留在盘上，轮转时自然愈合）。
+  const malformed = d.journalMalformed
+  if (typeof malformed === 'number' && Number.isFinite(malformed) && malformed >= 0) {
+    rows.push({
+      key: 'journalMalformed',
+      label: t('diagnostics.journalMalformed'),
+      value: malformed === 0 ? t('diagnostics.journalClean') : t('diagnostics.journalTorn', { n: malformed }),
+      href: null,
+    })
   }
   return rows
 }

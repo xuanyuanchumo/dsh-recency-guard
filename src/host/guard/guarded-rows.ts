@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { readPatchRows, readPatchRowsFromText, guardedRowText, validatePatchText, ensurePatchBackup } from '../profile/patch.ts'
+import { readPatchRows, readPatchRowsFromText, guardedRowText, validatePatchText, ensurePatchBackup } from '../adapters/patch/patch.ts'
 import { guardExpression } from './decision.ts'
 import { isOfficial, isExperimentalName } from '../risk/recency.ts'
 import { readDeclaredDependencies } from '../observe/observations.ts'

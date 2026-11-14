@@ -26,7 +26,7 @@
  */
 import { copyFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { plainScalarProblem, validatePatchText, yamlScalar } from '../src/host/profile/patch.ts'
+import { plainScalarProblem, validatePatchText, yamlScalar } from '../src/host/adapters/patch.ts'
 
 const PATCH_FILE_NAME = 'cordis.patch.yml'
 

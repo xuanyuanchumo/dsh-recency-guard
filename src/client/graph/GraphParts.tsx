@@ -3,9 +3,11 @@ import { useRef } from 'react'
 import { t } from '../i18n/i18n.ts'
 import type { GraphEdge, GraphNode } from '../../shared/graph-contract.ts'
 import {
+  DOMAIN_ORDER,
   EDGE_KIND_ORDER,
   KIND_ORDER,
   TONE_ORDER,
+  domainKey,
   edgeKindKey,
   kindKey,
   legendColorOf,
@@ -72,6 +74,10 @@ export interface GraphToolbarProps {
   toneCounts: Record<string, number>
   hiddenTones: ReadonlySet<string>
   onToggleTone: (tone: GraphNode['tone']) => void
+  /** 功能域图例（v0.20.0）：回答「属于哪个职责面」，与类型/tone 正交。 */
+  domainCounts: Record<string, number>
+  hiddenDomains: ReadonlySet<string>
+  onToggleDomain: (domain: string) => void
   onlyConnected: boolean
   onToggleConnected: () => void
   connectedAvailable: boolean
@@ -304,6 +310,26 @@ export function GraphToolbar(props: GraphToolbarProps): ReactElement {
               <span className={`rg-dot rg-dot-${tone}`} aria-hidden />
               {t(toneKey(tone))}
               <span className="rg-legend-count">{props.toneCounts[tone] ?? 0}</span>
+            </button>
+          ))}
+        </span>
+        {/* 功能域图例（v0.20.0）：第四个正交维度 —— 回答「属于哪个职责面」。
+            与类型/tone 同构：chip 即开关，计数取原始图，空档不渲染。 */}
+        <span className="rg-legend-group" role="group" aria-label={t('graph.domainLegend')}>
+          {DOMAIN_ORDER.filter((domain) => (props.domainCounts[domain] ?? 0) > 0).map((domain) => (
+            <button
+              key={domain}
+              type="button"
+              className={`rg-legend-chip${props.hiddenDomains.has(domain) ? ' rg-legend-chip-off' : ''}`}
+              onClick={() => props.onToggleDomain(domain)}
+              aria-pressed={!props.hiddenDomains.has(domain)}
+              title={t('graph.domainLegendToggle', { domain: t(domainKey(domain)) })}
+            >
+              <span className="rg-legend-domain" aria-hidden>
+                {t(domainKey(domain)).slice(0, 1)}
+              </span>
+              {t(domainKey(domain))}
+              <span className="rg-legend-count">{props.domainCounts[domain] ?? 0}</span>
             </button>
           ))}
         </span>

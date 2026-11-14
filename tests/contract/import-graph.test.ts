@@ -4,8 +4,10 @@
  * ## 为什么要自己算一遍（而不是信 npm 侧或评审器的判断）
  *
  * eval 的 Q5（架构约束）报「1 circular dependency: `src/host/profile/patch.ts`」。
- * 人工核对：`patch.ts → patch-yaml.ts → patch-scalar.ts`，**没有回边** ——
- * 那条其实是按 basename 前缀匹配产生的误报（`patch` 是 `patch-yaml` 的前缀）。
+ * 人工核对（cycle-18 实锤）：不是 basename 前缀匹配，而是 **patch.ts 注释里的
+ * 同形文本**——「`` `from './patch.ts'` ``」这几个字被 importGraph 的正则当成
+ * 了 import 边，自己指向自己构成自环。注释措辞改写后假阳性消失（本测试钉住
+ * 「值图无环」这一真相，防止将来注释里再写出 import 句式时无门可挡）。
  *
  * 但这不能只靠「我说没有」。评审器是启发式，我的话也是主张；真正能定论的是
  * **在仓库里跑一遍图算法**。本测试就是那个可复核的判据：它枚举全部相对 import，

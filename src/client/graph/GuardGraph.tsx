@@ -50,6 +50,7 @@ import {
   degreeOf,
   shapePath,
   toneCounts,
+  domainCounts,
   withLayout,
   zoomLabel,
   type ColorMode,
@@ -169,6 +170,7 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
   /** 图例的另外两个维度（v0.16）：边语义类型与节点语义色。与类型图例正交。 */
   const [hiddenEdgeKinds, setHiddenEdgeKinds] = useState<ReadonlySet<string>>(new Set())
   const [hiddenTones, setHiddenTones] = useState<ReadonlySet<GraphNode['tone']>>(new Set())
+  const [hiddenDomains, setHiddenDomains] = useState<ReadonlySet<string>>(new Set())
   const [size, setSize] = useState<Size>({ width: 0, height })
   const [query, setQuery] = useState('')
   // 搜索遍历游标（v0.11）：回车在匹配列表里循环前进；查询变化时归零。
@@ -230,6 +232,7 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
   // 变成「其他类也变少了」的假读数。
   const edgeCounts = useMemo(() => edgeKindCounts(graph.edges), [graph.edges])
   const toneCountsBy = useMemo(() => toneCounts(graph.nodes), [graph.nodes])
+  const domainCountsBy = useMemo(() => domainCounts(graph.nodes), [graph.nodes])
 
   // 布局投影（分层 = 宿主坐标经一阶重心重排；环形 = 客户端闭式坐标）。
   // 重心排序需要边集，但它是**确定性纯函数**：同数据两次渲染位置一致。
@@ -252,10 +255,11 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
         hidden,
         hiddenTones,
         hiddenEdgeKinds,
+        hiddenDomains,
         onlyConnectedWith: onlyConnected ? focusId : null,
         maxHops: linkRangeHops(linkRange),
       }),
-    [positionedNodes, graph.edges, hidden, hiddenTones, hiddenEdgeKinds, onlyConnected, focusId, linkRange],
+    [positionedNodes, graph.edges, hidden, hiddenTones, hiddenEdgeKinds, hiddenDomains, onlyConnected, focusId, linkRange],
   )
   const visibleNodes = view.nodes
   const visibleEdges = view.edges
@@ -935,7 +939,8 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
           hasAnyOffset(offsetMemory) ||
           hidden.size > 0 ||
           hiddenEdgeKinds.size > 0 ||
-          hiddenTones.size > 0
+          hiddenTones.size > 0 ||
+          hiddenDomains.size > 0
         }
         query={query}
         onQuery={setQuery}
@@ -958,6 +963,9 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
         toneCounts={toneCountsBy}
         hiddenTones={hiddenTones}
         onToggleTone={(tone) => setHiddenTones((current) => toggleSetMember(current, tone))}
+        domainCounts={domainCountsBy}
+        hiddenDomains={hiddenDomains}
+        onToggleDomain={(domain) => setHiddenDomains((current) => toggleSetMember(current, domain))}
         onlyConnected={onlyConnected}
         onToggleConnected={() => setOnlyConnected((current) => !current)}
         connectedAvailable={focusId !== null}
@@ -1238,7 +1246,7 @@ export function GuardGraph({ graph, height = VIEWPORT_HEIGHT_WIDE, focusId, onFo
           )}
           {/* 过滤把图滤空了：必须说出来，而不是留一块干净的空白 ——
               「干净空白」与「什么都没显示出来」在观感上完全一样（假绿）。 */}
-          {visibleNodes.length === 0 && (hidden.size > 0 || hiddenEdgeKinds.size > 0 || hiddenTones.size > 0 || onlyConnected) && (
+          {visibleNodes.length === 0 && (hidden.size > 0 || hiddenEdgeKinds.size > 0 || hiddenTones.size > 0 || hiddenDomains.size > 0 || onlyConnected) && (
             <div className="rg-graph-filtered-empty" role="status">
               {t('graph.filteredEmpty')}
               <button

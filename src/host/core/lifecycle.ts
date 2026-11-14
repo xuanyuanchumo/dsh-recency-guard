@@ -106,6 +106,7 @@ export type LifecycleStepName =
   | 'rollback' // 级联刹车回滚（升级到顶后的自动兜底，v0.18 T16-12）
   | 'archive' // 归档搬走 + 留档
   | 'rerun' // 以最新项目事实重跑（新循环基线）
+  | 'reload-self' // 请求宿主热重载本插件（v0.20.0；scheduled/refused 都留痕）
   | 'watch-events' // 订阅宿主 plugin-manager/changed（事件驱动加速器）
   | 'shutdown' // 退出清理
 

@@ -78,6 +78,7 @@ async function main() {
     reenable: async (bundle: string) => ({ ok: true, bundle }),
     restore: async () => ({ reenabled: [] }),
     recover: async () => ({ disabled: [] }),
+    reload: (force: boolean, reason: string) => ({ action: 'unavailable', reason, handshake: false, stale: false, fromRevision: null }),
     isolation: async () => ({ current: null, others: [] }),
     lifecycle: async () => ({ stage: 'monitoring' }),
     // v0.12 乐观并发基准：桩里固定一枚 revision，冲突分支用带错值的请求打。
@@ -91,8 +92,9 @@ async function main() {
   }
   registerRoutes(ctx, webServer)
   const byPath = new Map(registered.map((r) => [r.path, r.handler]))
-  check('9 条路由全部注册（v0.11 +restore）', registered.length === 9, registered.map((r) => r.path))
+  check('10 条路由全部注册（v0.20 +reload）', registered.length === 10, registered.map((r) => r.path))
   check('restore 路由已注册', byPath.has(ROUTE_PATHS.restore))
+  check('reload 路由已注册', byPath.has(ROUTE_PATHS.reload))
 
   console.log('\n== 动作路由方法守卫（P0）==')
   {

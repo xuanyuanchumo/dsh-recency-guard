@@ -42,25 +42,43 @@ export function serializeJournal(lines: readonly string[]): string {
 }
 
 /**
- * 解析 journal 行，容忍崩溃时写坏的尾部半行。
+ * 解析 journal 行，容忍崩溃时写坏的尾部半行（v0.20.0：坏行不再静默消失）。
  *
  * 为什么要容忍而不是报错：崩溃路径上的写可能被进程死亡截断，让一行残缺的
  * JSON 使整份 journal 不可读，等于把守护者自己的证据链也弄丢了。
  * `limit <= 0` 返回空数组（「读 0 行」就是一行都不读；旧实现里
  * `slice(-0)` 会返回全部行，是个静默的语义反转）。
+ *
+ * v0.20.0（取经 dsh-ops fold.js）：坏行**计数**而不是静默跳过 ——
+ * 「journal 里有 3 行读不出来」与「journal 完好」在面板上必须是两种状态
+ * （degraded 白盒）。返回值升级为 `{ records, malformed }`；直接要数组的
+ * 旧调用方走 `parseJournalRecords`（薄包装，行为逐位不变）。
  */
-export function parseJournalLines(raw: string, limit: number): JournalRecord[] {
+export interface ParsedJournal {
+  records: JournalRecord[]
+  /** 解析失败的行数（坏行保留在盘上，只丢解释不丢证据）。 */
+  malformed: number
+}
+
+export function parseJournalLinesDetailed(raw: string, limit: number): ParsedJournal {
   const lines = journalLines(raw)
   const take = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), lines.length) : 0
   const out: JournalRecord[] = []
+  let malformed = 0
   for (const line of lines.slice(lines.length - take)) {
     try {
       out.push(JSON.parse(line))
     } catch {
-      /* skip a torn tail line from a crash mid-write */
+      /* skip a torn tail line from a crash mid-write —— 但要计数 */
+      malformed += 1
     }
   }
-  return out
+  return { records: out, malformed }
+}
+
+/** 旧签名兼容：只要记录、不要坏行计数（行为逐位不变）。 */
+export function parseJournalLines(raw: string, limit: number): JournalRecord[] {
+  return parseJournalLinesDetailed(raw, limit).records
 }
 
 /** 列出分区目录里的轮转文件（按 epoch 升序 = 时间从旧到新）。 */
@@ -188,13 +206,37 @@ export async function readMergedJournal(dir: string, limit: number): Promise<Jou
 }
 
 /**
+ * 详细版合并读取（v0.20.0）：坏行计数透出（degraded 白盒）——
+ * 一个文件读不出不拖垮其余，但「证据链缺了几行」必须可被面板看见。
+ */
+export async function readMergedJournalDetailed(dir: string, limit: number): Promise<ParsedJournal> {
+  const files = [...rotatedJournalPaths(dir), activeJournalPath(dir)]
+  const existing = files.filter((f) => existsSync(f))
+  if (existing.length === 0) return { records: [], malformed: 0 }
+  const parts: string[] = []
+  for (const file of existing) {
+    try {
+      parts.push(await readFile(file, 'utf8'))
+    } catch {
+      /* 一个文件读失败不拖垮其余：跳过，证据链少一段好过全空 */
+    }
+  }
+  return parseJournalLinesDetailed(parts.join('\n'), limit)
+}
+
+/**
  * 同步版合并读取（崩溃路径/守卫流程同风格）。
  * 顶部 `readTextFileSync` 与 readMergedJournal 的 await readFile 同语义。
  */
 export function readMergedJournalSync(dir: string, limit: number): JournalRecord[] {
+  return readMergedJournalSyncDetailed(dir, limit).records
+}
+
+/** 同步详细版：坏行计数透出（面板 degraded 卡消费）。 */
+export function readMergedJournalSyncDetailed(dir: string, limit: number): ParsedJournal {
   const files = [...rotatedJournalPaths(dir), activeJournalPath(dir)]
   const existing = files.filter((f) => existsSync(f))
-  if (existing.length === 0) return []
+  if (existing.length === 0) return { records: [], malformed: 0 }
   const parts: string[] = []
   for (const file of existing) {
     try {
@@ -203,5 +245,5 @@ export function readMergedJournalSync(dir: string, limit: number): JournalRecord
       /* 同上：一段缺失好过全空 */
     }
   }
-  return parseJournalLines(parts.join('\n'), limit)
+  return parseJournalLinesDetailed(parts.join('\n'), limit)
 }

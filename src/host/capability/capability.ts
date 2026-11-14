@@ -253,7 +253,7 @@ export const TOOL_SURFACE = {
    * 工具的 action 枚举。顺序即模型看到的选择顺序（status 在前：最常用）。
    * `as const` 保留字面量类型，注册处展开成数组喂给 schema。
    */
-  actions: ['status', 'history', 'recover', 'restore', 'reenable', 'backups', 'archive', 'archives'],
+  actions: ['status', 'history', 'recover', 'restore', 'reenable', 'backups', 'archive', 'archives', 'reload'],
 } as const
 
 /** 工具 action 的字面量类型。 */

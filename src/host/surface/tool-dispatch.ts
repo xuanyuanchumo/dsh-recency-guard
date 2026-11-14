@@ -1,4 +1,4 @@
-import { renderOutcome, formatStatus, formatHistory, formatRecover, formatRestore, formatReenable, formatBackups, formatArchive, formatArchives, type ToolOutcome } from './tool-render.ts'
+import { renderOutcome, formatStatus, formatHistory, formatRecover, formatRestore, formatReenable, formatBackups, formatArchive, formatArchives, formatReload, type ToolOutcome } from './tool-render.ts'
 import type { Store, JournalEvent } from '../data/store.ts'
 import { auditEnvelope } from '../core/change-guard.ts'
 
@@ -26,11 +26,13 @@ export interface ToolDispatchDeps {
   reenable(bundle: string): Promise<unknown>
   archiveReset(reason: string): Promise<unknown>
   archives(): Promise<unknown>
+  /** 请求宿主热重载本插件（v0.20.0；同步编排，返回三态结果）。 */
+  reloadSelf(force: boolean, reason: string): unknown
   store: Pick<Store, 'readJournal' | 'listBackups' | 'listVersionedBackupBundles' | 'append'>
 }
 
 /** handler 统一签名：args 已由调用方按 action 收窄。 */
-type Handler = (deps: ToolDispatchDeps, args: { bundle?: string; limit?: number; reason?: string }) => Promise<ToolOutcome>
+type Handler = (deps: ToolDispatchDeps, args: { bundle?: string; limit?: number; reason?: string; force?: boolean }) => Promise<ToolOutcome>
 
 /** 会改变宿主状态的 action（v0.12 审计面）。
  *
@@ -39,11 +41,34 @@ type Handler = (deps: ToolDispatchDeps, args: { bundle?: string; limit?: number;
  * 也记进去会淹没信号（面板每 5s 轮询一次 = 频繁写日志），
  * 而真正的崩溃因果链反而被冲掉。
  */
-const MUTATING_ACTIONS = new Set(['recover', 'restore', 'reenable', 'archive'])
+const MUTATING_ACTIONS = new Set(['recover', 'restore', 'reenable', 'archive', 'reload'])
 
 /** 只读 action（不写 journal）。 */
 export function isMutatingAction(action: string): boolean {
   return MUTATING_ACTIONS.has(action)
+}
+
+/**
+ * 调用类错误的**机器可读词表**（v0.20.0，取经 dsh-ops bash-runtime-failure）：
+ * code + remedy。code 供模型/脚本按枚举分支；remedy 是「下一步怎么办」——
+ * 一条只有文案没有补救的错误让人无从行动（「报错 ≠ 可行动」）。
+ * 这些是**调用契约**错误（usage error），不是业务失败：宿主把它们当异常上抛。
+ */
+const TOOL_USAGE_ERRORS = {
+  unknownAction: {
+    code: 'RG_UNKNOWN_ACTION',
+    remedy: '查看工具描述的 action 枚举，改用受支持的 action 重试。',
+  },
+  missingBundle: {
+    code: 'RG_MISSING_BUNDLE',
+    remedy: '带上目标插件的包名（bundle 参数）重试；包名可在 status 输出的 suspectRanking 里查。',
+  },
+} as const
+
+/** 拼一条「[code] 文案 —— 补救：remedy」形态的错误（code 保持在最前，可被前缀匹配）。 */
+function usageError(kind: keyof typeof TOOL_USAGE_ERRORS, detail: string): Error {
+  const spec = TOOL_USAGE_ERRORS[kind]
+  return new Error(`[${spec.code}] ${detail} 补救：${spec.remedy}`)
 }
 
 /**
@@ -56,7 +81,7 @@ export function isMutatingAction(action: string): boolean {
  * 消费链路上；审计语义靠 detail 前缀 + 结构化 `audit` 字段表达。
  * 真要独立成 kind，应当作为一次完整的词汇表演进单独做。
  */
-function auditJournalEvent(action: string, args: { bundle?: string; reason?: string }): JournalEvent {
+function auditJournalEvent(action: string, args: { bundle?: string; reason?: string; force?: boolean }): JournalEvent {
   const envelope = auditEnvelope('tool', action, args.reason ?? args.bundle)
   return {
     kind: 'note',
@@ -73,7 +98,7 @@ export const TOOL_ACTIONS: Record<string, Handler> = {
   recover: async (deps) => formatRecover((await deps.recoverNow()) as { disabled: string[]; note: string }),
   restore: async (deps) => formatRestore((await deps.restore()) as { reenabled: string[]; keptDisabled: string[]; note: string }),
   reenable: async (deps, args) => {
-    if (!args.bundle) throw new Error('reenable 需要 bundle 参数（插件包名）。')
+    if (!args.bundle) throw usageError('missingBundle', 'reenable 需要 bundle 参数（插件包名）。')
     return formatReenable((await deps.reenable(args.bundle)) as {
       bundle: string
       reenabled: boolean
@@ -83,6 +108,7 @@ export const TOOL_ACTIONS: Record<string, Handler> = {
   backups: async (deps) => formatBackups(await deps.store.listBackups(), await deps.store.listVersionedBackupBundles()),
   archive: async (deps, args) => formatArchive((await deps.archiveReset(args.reason?.trim() || '工具触发归档重置')) as never),
   archives: async (deps) => formatArchives((await deps.archives()) as never),
+  reload: async (deps, args) => formatReload(deps.reloadSelf(args.force === true, args.reason?.trim() || '工具请求热重载') as never),
 }
 
 /**
@@ -97,10 +123,10 @@ export const TOOL_ACTIONS: Record<string, Handler> = {
 export async function dispatchToolAction(
   deps: ToolDispatchDeps,
   action: string,
-  args: { bundle?: string; limit?: number; reason?: string },
+  args: { bundle?: string; limit?: number; reason?: string; force?: boolean },
 ): Promise<ToolOutcome> {
   const handler = TOOL_ACTIONS[action]
-  if (handler === undefined) throw new Error(`未知操作：${String(action)}`)
+  if (handler === undefined) throw usageError('unknownAction', `未知操作：${String(action)}`)
   if (isMutatingAction(action)) {
     // 审计行写失败**不阻塞**动作：它是可观测性设施，不该有否决守护动作的权力
     // （CLAUDE.md：观测设施不拖垮守护流程）。

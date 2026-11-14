@@ -74,6 +74,8 @@ function makeInput(overrides: Partial<SnapshotInput> = {}): SnapshotInput {
       decisionDisable: [],
       journalTail: '',
     },
+    // v0.20.0：seq 地板是快照的必填输出字段，输入侧必填（旧夹具缺省会 tsc 报错）。
+    recentEventsFloor: 0,
     ...overrides,
   }
 }

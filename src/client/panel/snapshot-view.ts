@@ -89,5 +89,15 @@ export type PanelSnapshotView = Omit<
    */
   diagnostics: PanelSnapshot['diagnostics'] & {
     buildFreshness?: PanelSnapshot['diagnostics']['buildFreshness'] | null
+    /**
+     * journal 坏行计数（v0.20.0）：旧宿主快照没有这个字段 ⇒
+     * `undefined` = 未知，面板不显示这一行（未知 ≠ 完整，不假绿）。
+     */
+    journalMalformed?: number | null
   }
+  /**
+   * recentEvents 的 seq 地板（v0.20.0）：旧宿主快照没有 ⇒ undefined，
+   * 投影退回原 detail 文案（不显示地板数）。
+   */
+  recentEventsFloor?: number
 }

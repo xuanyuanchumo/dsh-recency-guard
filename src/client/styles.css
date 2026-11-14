@@ -272,6 +272,23 @@
   outline-offset: 1px;
 }
 
+/* 功能域 chip 的首字徽标（v0.20.0）：方形 + 主题色，与 tone 圆点形状区分
+   （颜色不是唯一通道的同族纪律：形状不同才不会把「观察」误读成某色调）。 */
+.rg-legend-domain {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 2px;
+  border-radius: var(--dsw-radius-xs, 4px);
+  background: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-bg-layer-1, #fff);
+  font-size: 10px;
+  font-weight: var(--dsw-font-xxs-strong-12, 600);
+  line-height: 1;
+}
+
 /* ---------- 提示条 ---------- */
 
 .rg-notice {

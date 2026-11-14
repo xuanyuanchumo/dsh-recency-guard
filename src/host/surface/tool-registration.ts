@@ -106,7 +106,8 @@ export function registerGuardTool(tools: ToolRegistrar, deps: ToolDispatchDeps):
       },
       bundle: { type: 'string', description: 'reenable 的目标插件名（包名）。' },
       limit: { type: 'number', description: 'history 返回的事件条数，默认 40。' },
-      reason: { type: 'string', description: 'archive 的归档原因（可选）。' },
+      reason: { type: 'string', description: 'archive/reload 的原因（可选；reload 留账用）。' },
+      force: { type: 'boolean', description: 'reload 跳过「产物已过期/实例已最新」两类拒绝（测试/演示用，生产不要传）。' },
     },
     // 规范输出：模型消费结构化事实；人读文本由 output.render 投影
     // （会话里的命令窗口显示的就是它，而不是满屏转义的 JSON）。

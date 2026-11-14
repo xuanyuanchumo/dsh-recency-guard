@@ -220,6 +220,13 @@ export interface PanelSnapshot {
    */
   recentEvents: Array<{ t: string; kind: string; bundle?: string; detail?: string }>
   /**
+   * recentEvents 的 **seq 地板**（v0.20.0，取经 dsh-context floor 契约）：
+   * 被裁掉的事件数 —— 客户端由此知道「快照里第一条事件之前还有多少条」。
+   * 0 = 从头开始；>0 = 顶部被裁（不是「事件只有这么多」）。
+   * 与「省略计数」互补：计数说「少了多少」，地板说「从哪开始」。
+   */
+  recentEventsFloor: number
+  /**
    * 事件流 / 状态流转的时序契约（升序，最近 `EVENT_FLOW_LIMIT` 条）。
    *
    * 「可视化流动」的全部数据基础：时间点 `at`、阶段 `stage`、动作
@@ -277,6 +284,14 @@ export interface PanelSnapshot {
       builtVersion: string | null
       reason: string | null
     }
+    /**
+     * journal 坏行计数（v0.20.0，degraded 白盒）。
+     *
+     * `null` = 调用方没报（旧调用方）—— **未知 ≠ 完整**：不能替旧宿主
+     * 说「没有坏行」。`0` = 本次读取确认完整；`>0` = 有行读不出
+     * （行保留在盘上，轮转时自然愈合）。
+     */
+    journalMalformed?: number | null
   }
 }
 
@@ -413,6 +428,13 @@ export interface SnapshotInput {
       builtVersion: string | null
       reason: string | null
     }
+    /**
+     * journal 坏行计数（v0.20.0，degraded 白盒）。
+     *
+     * `null`/省略 = 调用方没报（旧调用方）—— **未知 ≠ 完整**；
+     * `0` = 本次读取确认完整；`>0` = 有行读不出（行保留在盘上，轮转时自然愈合）。
+     */
+    journalMalformed?: number | null
   }
   /**
    * revision 派生所需的写状态事实（v0.12）。
@@ -547,6 +569,11 @@ export function buildPanelSnapshot(input: SnapshotInput, now = Date.now()): Pane
     // Guard.revisionFactsFrom（见 SnapshotInput 注释）—— 本函数只投影不拼字段。
     revision: computeRevision(input.revisionFacts),
     recentEvents: input.recentEvents.slice(-24).map((e) => ({ ...e })),
+    // v0.20.0：seq 地板（取经 dsh-context floor 契约）—— 客户端能如实表达
+    // 「数据从这里开始」。0 = 从 journal 头开始（nothing dropped）；
+    // N = 第 N 条之前的事件**确实存在但被裁掉**（不是「只有 N 条」）。
+    // 与「省略计数」互补：计数说「少了多少」，地板说「从哪开始」。
+    recentEventsFloor: Math.max(0, input.recentEvents.length - input.recentEvents.slice(-24).length),
     eventFlow: deriveEventFlow(input.recentEvents, input.transitions, EVENT_FLOW_LIMIT),
     markov: markovAnalysis(input.transitions),
     diagnostics: {
@@ -555,6 +582,10 @@ export function buildPanelSnapshot(input: SnapshotInput, now = Date.now()): Pane
       repositoryUrl: input.diagnostics.repositoryUrl,
       issuesUrl: input.diagnostics.issuesUrl,
       buildFreshness: { ...input.diagnostics.buildFreshness },
+      // v0.20.0：journal 坏行计数（degraded 白盒）。0 = 时间线完整；
+      // >0 = 有行读不出（行保留在盘上，轮转时自然愈合）。缺省（旧调用方）=
+      // null = 未知（不是「完整」—— 旧宿主没报这个数，不能替它说「没有」）。
+      journalMalformed: input.diagnostics.journalMalformed ?? null,
       platform: process.platform,
       nodeVersion: process.version,
       dataPlane: true,

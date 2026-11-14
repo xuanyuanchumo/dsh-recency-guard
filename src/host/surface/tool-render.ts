@@ -720,3 +720,40 @@ export function formatArchives(r: {
     { ...r },
   )
 }
+
+/**
+ * reload：热重载请求（v0.20.0）。
+ *
+ * 三态是这条投影的全部语义（诚实降级，不假装成功）：
+ * - `scheduled` —— 请求已受理并调度（in-flight 已落盘），重载本身异步；
+ * - `refused`   —— 判据拒绝（产物过期 / 实例已最新 / 史账不可写），reason 点名下一步；
+ * - `unavailable` —— 宿主无 hmr 服务（headless/SDK），零写入零动作。
+ *
+ * 文案纪律：reason 直接转述编排层的话，不在此处编近义词 ——
+ * 「断言的锚点必须与实现文案同源」。
+ */
+export function formatReload(
+  r: { action?: string; reason?: string; fromRevision?: string | null; stale?: boolean; handshake?: boolean; scheduledAt?: string; verdict?: string; history?: { ok?: boolean; dropped?: number } },
+): ToolOutcome {
+  const action = typeof r.action === 'string' ? r.action : 'unknown'
+  const reason = typeof r.reason === 'string' && r.reason.length > 0 ? r.reason : '编排层未返回原因'
+  const facts: Array<[string, string]> = [['结果', reason]]
+  if (typeof r.fromRevision === 'string' && r.fromRevision.length > 0) facts.push(['实例 revision', r.fromRevision])
+  if (typeof r.verdict === 'string' && r.verdict.length > 0) facts.push(['产物新鲜度', r.verdict])
+  if (r.handshake === true) facts.push(['跨实例握手', 'in-flight 已落盘，重载后由新实例补记完成'])
+  if (r.history && typeof r.history.dropped === 'number' && r.history.dropped > 0) {
+    facts.push(['史账', `已写入（FIFO 淘汰 ${r.history.dropped} 条旧记录）`])
+  }
+  const summary =
+    action === 'scheduled'
+      ? '热重载已受理，宿主正在重载本插件'
+      : action === 'refused'
+        ? '热重载被拒（见事实行，按原因处置后重试）'
+        : '当前宿主没有热重载服务（hmr 缺席），请改用人工重启'
+  return ok(
+    'reload',
+    summary,
+    { facts },
+    { ...r, action },
+  )
+}

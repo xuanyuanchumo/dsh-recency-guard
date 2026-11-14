@@ -53,6 +53,8 @@ export interface RouteContext {
   restore: () => Promise<unknown>
   /** 手动触发一次恢复。 */
   recover: () => Promise<unknown>
+  /** 请求宿主热重载本插件（v0.20.0；同步编排，返回三态结果）。 */
+  reload: (force: boolean, reason: string) => unknown
   /** 项目隔离视图（分区列表 + 当前分区）。 */
   isolation: () => Promise<unknown>
   /** 生命周期步骤与迁移（进入/退出/耗时/失败原因）。 */
@@ -109,6 +111,7 @@ export const ROUTE_PATHS = {
   reenable: '/recency-guard/api/action/reenable',
   restore: '/recency-guard/api/action/restore',
   recover: '/recency-guard/api/action/recover',
+  reload: '/recency-guard/api/action/reload',
 } as const
 
 /** 路由名（`ROUTE_PATHS` 的键）。 */
@@ -147,6 +150,7 @@ export const ROUTE_SURFACE: readonly RouteSurfaceEntry[] = [
   { capability: 'guard.recover.reenable', name: 'reenable', exposedName: 'recency-guard.reenable', path: ROUTE_PATHS.reenable, method: 'POST' },
   { capability: 'guard.recover.restore', name: 'restore', exposedName: 'recency-guard.restore', path: ROUTE_PATHS.restore, method: 'POST' },
   { capability: 'guard.recover.manual', name: 'recover', exposedName: 'recency-guard.recover', path: ROUTE_PATHS.recover, method: 'POST' },
+  { capability: 'guard.govern.reload', name: 'reload', exposedName: 'recency-guard.reload', path: ROUTE_PATHS.reload, method: 'POST' },
 ] as const
 
 /**
@@ -369,6 +373,20 @@ function handlerTable(ctx: RouteContext): Record<RouteName, RouteHandler> {
         const body = await readBody(req)
         if (await rejectStaleRevision(ctx, res, body)) return
         sendJson(res, await ctx.recover())
+      } catch (error) {
+        sendJson(res, { ok: false, reason: describe(error) }, 500)
+      }
+    },
+    reload: async (req, res) => {
+      if (rejectWrongMethod(req, res)) return
+      try {
+        const body = await readBody(req)
+        // reload 不做乐观并发核对：它的对象是「插件自己」而非分区状态，
+        // 并发窗口（两次 reload 竞争）由编排层的史账 FIFO + hmr runExclusive
+        // 串行化兜底 —— 409 在这里只会误伤「刚 build 完就请求重载」的正常流程。
+        const reason = typeof body?.reason === 'string' && body.reason.trim() !== '' ? body.reason : 'HTTP 路由请求热重载'
+        const force = body?.force === true
+        sendJson(res, ctx.reload(force, reason))
       } catch (error) {
         sendJson(res, { ok: false, reason: describe(error) }, 500)
       }

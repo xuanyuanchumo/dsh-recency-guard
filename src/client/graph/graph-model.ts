@@ -44,6 +44,7 @@ export const DRAG_THRESHOLD = 3
 // 展示词汇（颜色 / 标签 / 图例计数）在 graph-palette.ts；布局投影在
 // graph-layout.ts。两个模块都只依赖 shared 与视口类型 —— 单向依赖，无值环。
 export {
+  DOMAIN_ORDER,
   EDGE_KIND_ORDER,
   KIND_COLOR,
   KIND_ORDER,
@@ -51,6 +52,8 @@ export {
   TONE_COLOR,
   TONE_ORDER,
   colorOf,
+  domainCounts,
+  domainKey,
   edgeColor,
   edgeKindCounts,
   edgeKindKey,
@@ -158,6 +161,12 @@ export interface GraphFilter {
    * 同一份数据可以按任一维度收窄；两者同时生效取交集。
    */
   hiddenTones?: ReadonlySet<GraphNode['tone']>
+  /**
+   * 图例按**功能域**隐藏节点（v0.20.0：observe / decide / recover / present /
+   * govern / tool）。域回答「这块能力属于哪个职责面」，与类型/tone 都正交；
+   * 三者同时生效取交集。非能力节点（域缺省）不受此开关影响。
+   */
+  hiddenDomains?: ReadonlySet<string>
 }
 
 export function filterGraph(
@@ -169,16 +178,23 @@ export function filterGraph(
   // 否则「只看关联」会在用户切换图例时改变含义（同一个开关两种语义）。
   // 档位缺省（省略 = undefined）走**闭包**，与新增该字段前的行为逐字节一致。
   const hops = filter.maxHops ?? null
+  // onlyConnectedWith 类型上是必填的 `string | null`，但**运行时**可能收到
+  // undefined（JS 调用方 / 旧快照回放不受类型约束）。undefined 走严格判等会
+  // 绕过 null 分支，把 undefined 当中心点取闭包 ⇒ linked 只含 undefined ⇒
+  // 整张图被静默滤空（真机表现为「图突然全空」，无法归因）。缺省语义是
+  // 「不过滤」，与 null 同类 —— 这里把两者并起来，防御性归一。
+  const focus = filter.onlyConnectedWith ?? null
   const linked =
-    filter.onlyConnectedWith === null
+    focus === null
       ? null
       : hops === null
-        ? traceFrom(filter.onlyConnectedWith, edges, 'both')
-        : kHopNeighborhood(filter.onlyConnectedWith, edges, hops)
+        ? traceFrom(focus, edges, 'both')
+        : kHopNeighborhood(focus, edges, hops)
   const keptNodes = nodes.filter(
     (node) =>
       !filter.hidden.has(node.kind) &&
       !(filter.hiddenTones?.has(node.tone) ?? false) &&
+      !(filter.hiddenDomains?.has(node.domain ?? '') ?? false) &&
       (linked === null || linked.has(node.id)),
   )
   const keptIndex = buildNodeIndex(keptNodes)

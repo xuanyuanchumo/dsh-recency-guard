@@ -13,7 +13,7 @@ import {
   isLoaderRowId,
   scanPatchLines,
   validatePatchText,
-} from '../../src/host/profile/patch-yaml.js'
+} from '../../src/host/adapters/patch/patch-yaml.js'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {

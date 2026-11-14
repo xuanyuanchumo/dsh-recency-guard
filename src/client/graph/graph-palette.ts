@@ -127,7 +127,27 @@ export function toneCounts(nodes: readonly GraphNode[]): Record<string, number> 
   return counts
 }
 
-/** 各语义类型的边数（边图例的计数来源；同样取原始图，不取过滤后的视图）。 */
+/**
+ * 功能域的固定顺序（图例位置是肌肉记忆，与 KIND_ORDER 同理）。
+ * 借读英文域段 + 中文标签：observe=观察 decide=决策 recover=恢复
+ * present=展示 govern=治理 tool=工具。
+ */
+export const DOMAIN_ORDER: readonly string[] = ['observe', 'decide', 'recover', 'present', 'govern', 'tool']
+
+/** 域段 → i18n 键（图例按钮的可读标签）。 */
+export function domainKey(domain: string): string {
+  return `graph.domain.${domain}`
+}
+
+/** 各域的节点数（取原始图；域缺省的节点不算进任何一档）。 */
+export function domainCounts(nodes: readonly GraphNode[]): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const node of nodes) {
+    if (node.domain === undefined) continue
+    counts[node.domain] = (counts[node.domain] ?? 0) + 1
+  }
+  return counts
+}
 export function edgeKindCounts(edges: readonly GraphEdge[]): Record<string, number> {
   const counts: Record<string, number> = {}
   for (const edge of edges) counts[edge.kind] = (counts[edge.kind] ?? 0) + 1

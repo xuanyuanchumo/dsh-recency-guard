@@ -139,9 +139,10 @@ export function ensurePatchBackup(patchPath: string, current: string): void {
 /* ------------------------------------------------------------------------ *
  * Re-exports — the YAML layer stays reachable from its historical import site.
  *
- * 为什么保留再导出：`repair-patch.mjs`、契约/单元测试与外部消费者都是
- * `from './patch.ts'` 引入这些符号的。拆分是**实现细节**，不该成为
- * 破坏性接口变更。
+ * 为什么保留再导出：repair-patch.mjs、契约/单元测试与外部消费者都经由
+ * ./patch.ts 引入这些符号（刻意写成「经由」而非 import 关键字句式——
+ * 注释里的同形文本会被基于正则的 import 图工具误判成真边，Q5 曾因此
+ * 报出自环假阳性，cycle-18 实测）。拆分是实现细节，不该成为破坏性接口变更。
  * ------------------------------------------------------------------------ */
 export {
   yamlScalar,

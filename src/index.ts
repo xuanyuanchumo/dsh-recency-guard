@@ -3,6 +3,16 @@ import type { Context } from '@deepseek-ai/cordis'
 // 因此改由下方 `loadSchemastery()` 惰性解析 + 纯对象降级（v0.13 安装不崩修复）。
 import { readSelfPackage, readHostVersion, safeJson, safeVersion } from './host/core/self-describe.ts'
 import { computeBuildFreshness, type BuildFreshness } from './host/core/build-freshness.ts'
+import {
+  finalizeInFlight,
+  markRunningRevision,
+  probeHmr,
+  reloadSelf,
+  reloadSummary,
+  selfPluginRoot,
+  writeRunningRevision,
+  type ReloadResult,
+} from './host/core/reload-self.ts'
 import { rejectUnknownConfigKeys } from './host/core/config-strict.ts'
 // The runtime version is a detail, not a hard dependency: the import is
 // resolved lazily so a missing optional peer can never stop the plugin from
@@ -284,6 +294,30 @@ export function apply(ctx: Context, config: Config) {
   )
   guard.beginStep('loader')
 
+  // v0.20.0 重载闭环①：apply 时标记「本实例跑的是哪个 dist revision」。
+  // 没有这个标记，reloadSelf 的判据（实例 revision ⇄ 当前 dist revision）
+  // 就只能对 dist 重复确认，永远回答不了「运行中的代码是不是旧的」。
+  // 内存标记 + 分区旁路文件双写：路由子 fiber 是另一个模块实例，只靠
+  // 内存它读到的恒为 null（anic cycle-81 真机实测）。
+  {
+    const selfRoot = selfPluginRoot()
+    const revision = selfRoot === null ? null : computeBuildFreshness(selfRoot).revision
+    markRunningRevision(revision)
+    if (revision !== null) writeRunningRevision(store.partitionPath, revision)
+  }
+
+  // v0.20.0 重载闭环②：本实例若是「被重载出来的新实例」，启动时把上一实例
+  // 落下的 in-flight 握手补成 reloaded（幂等：最后一条不是 in-flight 就零写入）。
+  {
+    const finalized = finalizeInFlight(store.partitionPath, selfPluginRoot() === null ? null : computeBuildFreshness(selfPluginRoot()!).revision)
+    if (finalized !== null) {
+      store.appendSync({
+        kind: 'note',
+        detail: `热重载握手完成：上一实例请求的重载已生效（dist revision ${finalized.toRevision ?? '未知'}）`,
+      })
+    }
+  }
+
   // configEditor 走**选择性注入**：缺席时只有这个子 fiber 是 pending，
   // 主插件照常工作（备份降级为「无备份」，不是「插件不加载」）。
   attachOptionalService(ctx, 'configEditor', (source) => guard.attachConfigEditor(source))
@@ -330,6 +364,7 @@ export function apply(ctx: Context, config: Config) {
         reenable: (bundle) => guard.reenable(bundle),
         restore: () => guard.restore(),
         recover: () => guard.recoverNow(),
+        reload: (force, reason) => guard.reloadSelfNow(reason, 'recency-guard.reload', force),
         isolation: async () => guard.isolationView(),
         lifecycle: async () => guard.lifecycleView(),
         // 动作路由的乐观并发基准（v0.12）：只算那枚哈希，不重跑快照投影。
@@ -416,6 +451,7 @@ export function apply(ctx: Context, config: Config) {
     reenable: (bundle) => guard.reenable(bundle),
     archiveReset: (reason) => guard.archiveReset(reason),
     archives: () => guard.archives(),
+    reloadSelf: (force, reason) => guard.reloadSelfNow(reason, 'recency_guard.reload', force),
     store,
   })
 
@@ -1732,6 +1768,9 @@ class Guard {
         // 产物新鲜度（v0.19）：「我跑的到底是哪份代码」的白盒事实。
         // 缺了它，「改了没生效」会被误判成代码问题，而真相是产物是旧的。
         buildFreshness: this.buildFreshness(),
+        // journal 坏行计数（v0.20.0）：面板据此显示 degraded 卡（0=完整）。
+        // recentEvents 已在上文消费同一份 journal 读盘结果，这里直接取计数。
+        journalMalformed: this.store.journalMalformed,
       },
     })
   }
@@ -1924,6 +1963,36 @@ class Guard {
         ...a,
         summary: readArchiveManifest(a.dir)?.summary,
       })),
+    }
+  }
+
+  /**
+   * 请求本插件热重载（v0.20.0；工具 action `reload` 与路由 `/action/reload` 共用）。
+   *
+   * 编排与判据全在 reload-self.ts（单一实现纪律：两套语义迟早漂移）；
+   * 这里只做「取数 → 编排 → 留痕」，并顺带把 probeHmr 一并回给调用方 ——
+   * unavailable 时 action 已说明原因，探测结果让「为什么不可用」可被直接
+   * 引用而不是猜。
+   */
+  reloadSelfNow(reason: string, actor: string, force = false): ReloadResult {
+    const result = reloadSelf(this.ctx, {
+      dir: this.store.partitionPath,
+      pluginRoot: selfPluginRoot() ?? undefined,
+      reason,
+      actor,
+      force,
+    })
+    // 重载请求本身也是一次可复核的执行动作：无论 scheduled/refused 都落一条
+    // 生命周期步骤（v0.18 教训：recover() 漏留痕 = 面板少一次执行事实）。
+    this.recordStep('reload-self', result.action === 'scheduled', `${result.action}：${result.reason}`)
+    return result
+  }
+
+  /** 重载面只读摘要（工具/面板共用；不写盘、不触发）。 */
+  reloadView(): unknown {
+    return {
+      ...reloadSummary(this.store.partitionPath, selfPluginRoot() ?? undefined),
+      hmr: probeHmr(this.ctx),
     }
   }
 

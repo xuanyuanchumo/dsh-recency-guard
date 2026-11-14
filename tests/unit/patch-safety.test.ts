@@ -36,7 +36,7 @@ import {
   readPatchRowsFromText,
   parseScalar,
   patchBackupPath,
-} from '../../src/host/profile/patch.ts'
+} from '../../src/host/adapters/patch/patch.ts'
 import { appendPatchText } from '../../src/host/guard/guarded-rows.ts'
 import { guardExpression } from '../../src/host/guard/decision.ts'
 

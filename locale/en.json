@@ -134,6 +134,7 @@
     "hint": "From host facts to panel pixels (white box)",
     "journal": "Journal records",
     "journalDetail": "Facts appended line-by-line by the host (synchronous IO on the crash path — survives the crash)",
+    "journalFloor": "Facts appended line-by-line by the host ({n} earlier events not included in this snapshot)",
     "events": "Event projection",
     "eventsDetail": "Journal tail (up to 40 entries) enters the snapshot",
     "flow": "Semantic flow",
@@ -161,7 +162,10 @@
     "buildStaleMinutes": "Artifact is stale (source is {n} min newer) — rebuild",
     "buildFresh": "Artifact matches source",
     "buildUnknown": "Build freshness undetermined",
-    "buildRevision": "Build revision"
+    "buildRevision": "Build revision",
+    "journalMalformed": "Journal integrity",
+    "journalClean": "Complete (no torn lines in this read)",
+    "journalTorn": "{n} lines unreadable (kept on disk; heal on rotation)"
   },
   "trend": {
     "worsening": "worsening",
@@ -380,6 +384,16 @@
       "bundle": "Bundle",
       "gap": "Gap"
     },
+    "domain": {
+      "observe": "Observe",
+      "decide": "Decide",
+      "recover": "Recover",
+      "present": "Present",
+      "govern": "Govern",
+      "tool": "Tool"
+    },
+    "domainLegend": "Domain",
+    "domainLegendToggle": "Show or hide \"{domain}\" domain nodes",
     "matchIndex": "Match {index}/{total}",
     "omittedChars": "{count} characters omitted",
     "edgeDetails": "Edge details",

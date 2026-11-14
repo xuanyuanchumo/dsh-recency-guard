@@ -20,7 +20,7 @@
  * 并把「读到空/半截」的采样次数显式打印出来（0 才是预期）。
  */
 import { mkdtemp, rm } from 'node:fs/promises'
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { writeFileAtomicSync } from '../../src/host/core/atomic-sync.ts'
@@ -141,6 +141,45 @@ async function main() {
       writeFileSync(join(profile, '.recency-guard', 'partitions.json'), '[[[', 'utf8')
       const broken = readPartitionIndex(profile)
       check('损坏索引 ⇒ 空索引（不抛）', broken.partitions.length === 0, broken)
+    }
+
+    // ── 5. fsync 版新增断言（cycle-18，取经 compat-guardian）──
+    console.log('\n== fsync 版：' + "'wx' 独占 + 大 payload 循环写 + 无残留 ==")
+    {
+      const dir = join(root, 'fsync-probe')
+      // (a) 大 payload：writeSync 单次调用可能部分写入，循环推进必须写满。
+      //     1.5 MB 跨过多数运行时的单次写上限，专打「只写一半」类变异体。
+      const big = '{"crashSeq":1,"note":"断电窗口载荷","pad":"' + 'y'.repeat(1_500_000) + '"}'
+      writeFileAtomicSync(join(dir, 'big.json'), big)
+      const bigBack = readFileSync(join(dir, 'big.json'), 'utf8')
+      check('大 payload 完整落盘（长度守恒）', bigBack.length === big.length, { expect: big.length, got: bigBack.length })
+      check('大 payload 内容守恒（首尾抽样）', bigBack.startsWith('{"crashSeq":1') && bigBack.endsWith('"}'), { head: bigBack.slice(0, 16), tail: bigBack.slice(-8) })
+
+      // (b) 失败路径不留临时文件残留：目标是**已存在的目录**时 rename 必败
+      //     （Windows EPERM / POSIX EISDIR），.tmp 必须被清理干净。
+      const blockedDir = join(dir, 'blocked')
+      mkdirSync(join(blockedDir, 'as-file'), { recursive: true }) // 目标路径本身是个目录
+      let threw = false
+      try {
+        writeFileAtomicSync(join(blockedDir, 'as-file'), 'content') // rename 到目录 ⇒ 必败
+      } catch {
+        threw = true
+      }
+      check('rename 到目录路径确实抛出（夹具自证）', threw)
+      // 夹具自建的目录 'as-file' 不算残留；残留 = 目录里多出来的 .tmp 文件。
+      const leftovers = existsSync(blockedDir) ? readdirSync(join(blockedDir, 'as-file')) : []
+      check('失败路径零 .tmp 残留', leftovers.length === 0, leftovers)
+
+      // (c) 成功路径同样零残留：临时文件要么已 rename 要么已清理。
+      writeFileAtomicSync(join(dir, 'ok.json'), '{}')
+      const dirAfterOk = readdirSync(dir)
+      check('成功路径零 .tmp 残留', dirAfterOk.every((f) => !f.endsWith('.tmp')), dirAfterOk)
+
+      // (d) 连续多次写同一目标：每次都成功且最终内容是最后一次的。
+      for (let i = 0; i < 5; i++) writeFileAtomicSync(join(dir, 'seq.json'), `round-${i}`)
+      check('连续写最终内容为最后一次', readFileSync(join(dir, 'seq.json'), 'utf8') === 'round-4')
+      const dirAfterSeq = readdirSync(dir)
+      check('连续写零 .tmp 残留', dirAfterSeq.every((f) => !f.endsWith('.tmp')), dirAfterSeq)
     }
   } finally {
     await rm(root, { recursive: true, force: true })

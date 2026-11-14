@@ -107,6 +107,7 @@ export function buildGraphData(
       column: 0,
       weight: record.exposed ? 1 : 0,
       ref: record.id,
+      domain,
     })
   }
   nodes.push(...extras)

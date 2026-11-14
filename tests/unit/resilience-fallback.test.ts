@@ -22,7 +22,7 @@ import { join } from 'node:path'
 // 注意：一律用 `.js` 后缀（项目 ESM 惯例）。早期写成 `.ts` 会让
 // scripts/mutation.mjs 的「直接 import 映射」漏掉本文件 —— 变异体的
 // 测试归属判定按 `${module}.js` 匹配，`.ts` 写法让它成了「无直接测试」。
-import { readPatchRows } from '../../src/host/profile/patch.ts'
+import { readPatchRows } from '../../src/host/adapters/patch/patch.ts'
 import { readSentinel, SENTINEL_NAME } from '../../src/host/guard/sentinel.ts'
 import { listArchives } from '../../src/host/data/archive.ts'
 import { readDecision } from '../../src/host/guard/decision.ts'

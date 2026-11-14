@@ -52,7 +52,7 @@ import { buildGraphData, connectedComponents, computeBounds, buildAdjacency } fr
 // 「无直接测试」根本没人跑它们的故障路径，存活体只能靠猜归因。
 import { writeFileAtomicSync } from '../../src/host/core/atomic-sync.ts'
 import { writeDecision } from '../../src/host/guard/decision.ts'
-import { ensurePatchBackup } from '../../src/host/profile/patch.ts'
+import { ensurePatchBackup } from '../../src/host/adapters/patch/patch.ts'
 import { logBeta } from '../../src/host/risk/risk-bayes.ts'
 import { falsePositiveSamples } from '../../src/host/risk/risk-calibration.ts'
 import { codePointWidth, clipWidth, displayWidth, padWidth, sanitizeText, wrapWidth } from '../../src/host/surface/tool-text.ts'
@@ -101,6 +101,11 @@ async function main() {
       //     把「写盘失败」换成「清理失败」会让真正的故障原因丢失
       //     （模块头注释：抛出原始原因更有诊断价值）。
       //     本进程此前只调用过一次原子写 ⇒ 这次临时名确定为 `...2.tmp`。
+      //     cycle-18 行为变更（旧断言钉的是旧故障点）：fsync 升级把写入从
+      //     `writeFileSync`（对目录写 ⇒ EISDIR）换成 `openSync('wx')`
+      //     （对已存在路径独占创建 ⇒ EEXIST）。不变式本身不变 ——
+      //     抛出的必须是**原始错误码**（EEXIST），而不是清理错误
+      //     （Windows 上 rmSync 非空目录是 ERR_FS_EISDIR/ENOTEMPTY 族）。
       const blocked2 = join(root, 'blocked-target-2')
       mkdirSync(blocked2)
       const temp2 = `${blocked2}.${process.pid}.2.tmp`
@@ -112,10 +117,11 @@ async function main() {
       } catch (error) {
         cleanupError = error
       }
+      const cleanupCode = (cleanupError as { code?: string } | undefined)?.code
       check(
-        '清理失败时抛出的是原始写错误（EISDIR），不是清理错误（ERR_FS_EISDIR）',
-        (cleanupError as { code?: string } | undefined)?.code === 'EISDIR',
-        (cleanupError as { code?: string } | undefined)?.code,
+        '清理失败时抛出的是原始错误（EEXIST），不是清理错误（ERR_FS_EISDIR/ENOTEMPTY 族）',
+        cleanupCode === 'EEXIST',
+        cleanupCode,
       )
     } finally {
       await rm(root, { recursive: true, force: true })

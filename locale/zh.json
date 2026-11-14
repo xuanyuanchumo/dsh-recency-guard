@@ -134,6 +134,7 @@
     "hint": "从宿主事实到面板像素的链路（白盒）",
     "journal": "journal 原文",
     "journalDetail": "宿主按行落盘的事实（崩溃路径同步 IO，崩溃也不丢）",
+    "journalFloor": "宿主按行落盘的事实（另有 {n} 条更早的事件未随快照下发）",
     "events": "事件投影",
     "eventsDetail": "journal 尾部截取（最多 40 条）进入快照",
     "flow": "语义流动",
@@ -161,7 +162,10 @@
     "buildStaleMinutes": "产物已过期（源码比产物新 {n} 分钟），请重新构建",
     "buildFresh": "产物与源码一致",
     "buildUnknown": "无法判定产物新鲜度",
-    "buildRevision": "构建指纹"
+    "buildRevision": "构建指纹",
+    "journalMalformed": "事件日志完整性",
+    "journalClean": "完整（本次读取无坏行）",
+    "journalTorn": "{n} 行读不出（已保留在盘上，轮转时自然愈合）"
   },
   "trend": {
     "worsening": "恶化中",
@@ -380,6 +384,16 @@
       "bundle": "插件",
       "gap": "缺口"
     },
+    "domain": {
+      "observe": "观察",
+      "decide": "决策",
+      "recover": "恢复",
+      "present": "展示",
+      "govern": "治理",
+      "tool": "工具"
+    },
+    "domainLegend": "功能域",
+    "domainLegendToggle": "显示或隐藏「{domain}」域节点",
     "matchIndex": "第 {index}/{total} 个",
     "omittedChars": "已省略 {count} 个字符",
     "edgeDetails": "边详情",

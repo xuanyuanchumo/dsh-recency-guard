@@ -82,6 +82,19 @@ function main() {
       linked.nodes.some((n) => n.id === 'cap.a') && linked.nodes.some((n) => n.id === 'cap.b'),
       linked.nodes.map((n) => n.id),
     )
+
+    // v0.20.0：域过滤 —— 与类型/tone 正交的第三开关。
+    // 断言锚点：非能力节点（域缺省）不受域开关影响；域开关只滤对应域。
+    const domainNodes = [
+      node('cap.obs', 'capability', 0, 0, { domain: 'observe' }),
+      node('cap.gov', 'capability', 260, 0, { domain: 'govern' }),
+      node('gap.y', 'gap', 520, 0, {}), // 域缺省 = 非能力节点
+    ]
+    const hiddenDomain = filterGraph(domainNodes, [], { hidden: new Set(), hiddenDomains: new Set(['observe']) })
+    check('域开关滤掉对应域', hiddenDomain.nodes.every((n) => n.domain !== 'observe'), hiddenDomain.nodes.map((n) => n.id))
+    check('域开关保留其他域与非能力节点', hiddenDomain.nodes.some((n) => n.id === 'cap.gov') && hiddenDomain.nodes.some((n) => n.id === 'gap.y'))
+    const keepAll = filterGraph(domainNodes, [], { hidden: new Set(), hiddenDomains: new Set() })
+    check('空域开关 = 全显示', keepAll.nodes.length === 3)
   }
 
   console.log('\n== 布局确定性 ==')

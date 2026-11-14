@@ -202,6 +202,14 @@ console.log('\n== tool-dispatch：审计先落盘、失败不阻塞动作 ==')
     unknownThrew = error
   }
   check('未知 action 抛错（调用错误不是业务失败）', unknownThrew instanceof Error && String(unknownThrew.message).includes('未知操作'), unknownThrew)
+  // v0.20.0：错误带机器可读码 + 补救（锚点抄 TOOL_USAGE_ERRORS 的真实词，不凭印象）。
+  check(
+    '未知 action 的错误带 RG_UNKNOWN_ACTION 码与补救指引',
+    unknownThrew instanceof Error &&
+      String(unknownThrew.message).includes('[RG_UNKNOWN_ACTION]') &&
+      String(unknownThrew.message).includes('补救：'),
+    unknownThrew instanceof Error ? unknownThrew.message : unknownThrew,
+  )
   let bundleThrew: unknown
   try {
     await dispatchToolAction(deps, 'reenable', {})

@@ -145,7 +145,7 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
     produces: 'metric',
     carrier: 'remote',
     consumes: [],
-    consumedBy: ['guard.present.panel'],
+    consumedBy: ['guard.present.panel', 'guard.govern.reload'],
     stage: 'monitoring',
     exposed: false,
   },
@@ -306,6 +306,30 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
     hostServices: ['webServer', 'profileContext'],
   },
   {
+    /**
+     * v0.20.0：热重载本插件。
+     *
+     * 为什么是一条独立能力：它的**判据与消费方都独立** —— 判据回答
+     * 「运行实例 ⇄ 当前 dist」（guard.observe.freshness 只回答产物侧），
+     * 消费方是「宿主 hmr 服务」（probeHmr 可选探测，绝不硬 inject）。
+     * 三态语义（scheduled/refused/unavailable）是诚实降级的全部形态；
+     * headless 下 unavailable + 零写入，绝不假装重载成功。
+     */
+    id: 'guard.govern.reload',
+    title: '热重载本插件',
+    summary: '请求宿主重载本插件以加载新构建（in-flight 先落盘 + hmr 可选探测）',
+    produces: 'state',
+    carrier: 'tool',
+    consumes: ['guard.observe.freshness', 'guard.govern.revision'],
+    consumedBy: [],
+    stage: 'recovered',
+    exposed: true,
+    exposedAs: 'recency_guard',
+    exposedAlsoAs: ['recency-guard.reload'],
+    exposedActions: ['reload'],
+    hostServices: ['tools', 'webServer'],
+  },
+  {
     id: 'guard.govern.revision',
     title: '乐观并发凭证',
     summary: '从写状态派生 revision；动作携带过期凭证时被 409 拦下，不执行',
@@ -323,6 +347,10 @@ export const CAPABILITY_SPECS: readonly CapabilityRecord[] = [
       'guard.recover.reenable',
       'guard.recover.manual',
       'guard.govern.reset',
+      // v0.20.0：reload 是**运维动作**，不核对分区快照的 revision（它的对象
+      // 是插件自身而非分区状态），但它**读** revision 判据（实例 ⇄ dist），
+      // 因此在数据流上消费本能力 —— 消费 ≠ 要带凭证，方向声明如实写。
+      'guard.govern.reload',
     ],
     stage: 'monitoring',
     exposed: false,

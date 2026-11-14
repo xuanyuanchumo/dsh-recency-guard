@@ -75,6 +75,7 @@ const ACTION_TITLE: Record<string, string> = {
   backups: '配置备份清单',
   archive: '归档重置',
   archives: '历史归档清单',
+  reload: '热重载本插件',
 }
 
 /** 工具展示的固定前缀：命令窗口里一眼能认出是哪个插件在说话。 */
@@ -104,11 +105,12 @@ export function titleForAction(action: string): string {
 export function describeCallArgs(args: unknown): string {
   const action = actionOf(args)
   if (typeof args !== 'object' || args === null) return action
-  const a = args as { bundle?: unknown; limit?: unknown; reason?: unknown }
+  const a = args as { bundle?: unknown; limit?: unknown; reason?: unknown; force?: unknown }
   const parts: string[] = [action]
   if (typeof a.bundle === 'string' && a.bundle.length > 0) parts.push(`插件 ${a.bundle}`)
   if (typeof a.limit === 'number' && Number.isFinite(a.limit)) parts.push(`最多 ${a.limit} 条`)
   if (typeof a.reason === 'string' && a.reason.trim().length > 0) parts.push(`原因 ${a.reason.trim()}`)
+  if (a.force === true) parts.push('（强制）')
   return parts.join(' · ')
 }
 

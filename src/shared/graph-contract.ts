@@ -96,6 +96,16 @@ export interface GraphNode {
   weight?: number
   /** 该节点代表的真实对象（能力 id / 插件名 / 阶段名）。 */
   ref?: string
+  /**
+   * 功能域（v0.20.0，仅能力节点有值）：`guard.<域>` 的域段
+   * （observe / decide / recover / present / govern / tool）。
+   *
+   * 为什么要单独一个字段而不是让 client 从 `ref` 前缀现场解析：
+   * 域是**宿主的分类事实**，client 从 id 字符串反推等于复制一份解析规则
+   * —— 两份规则迟早漂移（LAYOUT 各写一份导致小地图偏移的同族教训）。
+   * 缺省 = 非能力节点（阶段/指标/插件/缺口），不参与域过滤。
+   */
+  domain?: string
 }
 
 /** 一条图边。 */

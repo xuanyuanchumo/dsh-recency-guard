@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSy
 import { isAbsolute, join, resolve } from 'node:path'
 import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
 import { writeFileAtomicSync } from '../core/atomic-sync.ts'
-import { readMergedJournal, readMergedJournalSync, trimJournalFile } from './journal-io.ts'
+import { readMergedJournalDetailed, readMergedJournalSyncDetailed, trimJournalFile } from './journal-io.ts'
 import { SCHEMA_VERSION, parseDecisionText, parseStateText, unsupportedVersionDetail } from './schema-version.ts'
 
 // 再导出：历史 import 站点（tests、index）保持稳定；本文件自己也用这两个常量。
@@ -269,6 +269,15 @@ export class Store {
   readonly corruption = { state: false, decision: false }
   /** 已知损坏的文件路径（面板/工具展示用，去重）。 */
   private readonly corruptionPaths = new Set<string>()
+  /**
+   * journal 坏行计数（v0.20.0，degraded 白盒）。
+   *
+   * 为什么是「最近一次读」而不是累计值：累计值会把「曾经坏过但已轮转走」的
+   * 行也计入，与「当前 journal 是否可读」无关；快照要回答的是
+   * 「我现在读到的这份时间线缺了几行」。0 = 完整；>0 = degraded（行保留在盘上，
+   * 只丢解释不丢证据）。坏行会在下次轮转时随文件一起搬走 —— 那是自然愈合。
+   */
+  journalMalformed = 0
   /** 已写过 journal 的版本组合：避免每次读盘都追加同一条 note（快照每 5s 读一次）。 */
   private readonly reportedCorruption = new Set<string>()
 
@@ -408,7 +417,10 @@ export class Store {
   async readJournal(limit = 100): Promise<JournalRecord[]> {
     // v0.18 TD-5：轮转后 journal 分散在活动文件 + journal.<epoch>.jsonl。
     // 合并读取让「轮转」对消费者透明 —— 所有调用方仍拿到完整时间线。
-    return readMergedJournal(this.dir, limit)
+    // v0.20.0：坏行计数随读更新（degraded 白盒，见字段注释）。
+    const parsed = await readMergedJournalDetailed(this.dir, limit)
+    this.journalMalformed = parsed.malformed
+    return parsed.records
   }
 
   // ---------- snapshot (version tracking) ----------
@@ -476,7 +488,9 @@ export class Store {
   /** Read the journal synchronously.（轮转透明：活动 + 轮转文件合并） */
   readJournalSync(limit = 100): JournalRecord[] {
     try {
-      return readMergedJournalSync(this.dir, limit)
+      const parsed = readMergedJournalSyncDetailed(this.dir, limit)
+      this.journalMalformed = parsed.malformed
+      return parsed.records
     } catch {
       return []
     }

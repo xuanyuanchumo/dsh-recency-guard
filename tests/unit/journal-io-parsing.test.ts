@@ -10,7 +10,7 @@
  * 判据来自模块头注释：「让一行残缺 JSON 使整份 journal 不可读，等于把守护者
  * 自己的证据链也弄丢了」。
  */
-import { journalLines, parseJournalLines, serializeJournal } from '../../src/host/data/journal-io.js'
+import { journalLines, parseJournalLines, parseJournalLinesDetailed, serializeJournal } from '../../src/host/data/journal-io.js'
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -72,6 +72,26 @@ console.log('\n== journalLines / serializeJournal：分词与封顶 ==')
 {
   check('journalLines 过滤空行', journalLines('a\n\nb\n').length === 2)
   check('serializeJournal 末尾带换行（追加语义的前提）', serializeJournal(['a', 'b']).endsWith('\n'))
+}
+
+console.log('\n== v0.20.0：坏行计数（degraded 白盒） ==')
+{
+  // 坏行不是「消失」，是「计数」：面板要能区分「时间线完整」与「缺了几行」。
+  const good = (kind: string): string => JSON.stringify({ kind, t: '2026-11-14T00:00:00.000Z' })
+  const raw = [good('a'), '{torn', good('b'), '{another-torn', good('c')].join('\n')
+  const detailed = parseJournalLinesDetailed(raw, 10)
+  check('详细版返回 3 条好记录', detailed.records.length === 3, detailed.records.length)
+  check('详细版数出 2 条坏行', detailed.malformed === 2, detailed.malformed)
+  check('好记录内容不受坏行影响', (detailed.records[0] as { kind?: string }).kind === 'a')
+  // 旧签名包装：行为逐位不变（只有记录）。
+  const legacy = parseJournalLines(raw, 10)
+  check('旧签名仍返回纯记录数组', legacy.length === 3 && Array.isArray(legacy))
+  // 全好文件 malformed=0（「0=完整」与「未知」在面板上是两态）。
+  const clean = parseJournalLinesDetailed([good('x'), good('y')].join('\n'), 10)
+  check('全好文件 malformed=0', clean.malformed === 0 && clean.records.length === 2)
+  // limit 截尾后坏行计数只对读到的窗口生效。
+  const windowed = parseJournalLinesDetailed(`${'{torn-head'}\n${good('a')}`, 1)
+  check('limit 窗口外的坏行不计入', windowed.malformed === 0 && windowed.records.length === 1)
 }
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}\n`)
