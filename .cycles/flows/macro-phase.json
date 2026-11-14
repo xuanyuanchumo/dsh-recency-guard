@@ -97,8 +97,14 @@
       "from": "plan",
       "to": "design",
       "at": "2026-11-10T12:23:30.174Z"
+    },
+    {
+      "trigger": "advance",
+      "from": "plan",
+      "to": "design",
+      "at": "2026-11-14T02:49:53.208Z"
     }
   ],
-  "updatedAt": "2026-11-10T12:23:30.174Z",
+  "updatedAt": "2026-11-14T02:49:53.208Z",
   "ledgerHead": null
 }

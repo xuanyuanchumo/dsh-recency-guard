@@ -283,8 +283,26 @@
       "from": "RUNNING",
       "to": "DONE",
       "at": "2026-11-13T10:43:08.423Z"
+    },
+    {
+      "trigger": "reset",
+      "from": "DONE",
+      "to": "IDLE",
+      "at": "2026-11-14T02:49:47.277Z"
+    },
+    {
+      "trigger": "run",
+      "from": "IDLE",
+      "to": "RUNNING",
+      "at": "2026-11-14T02:49:47.288Z"
+    },
+    {
+      "trigger": "success",
+      "from": "RUNNING",
+      "to": "DONE",
+      "at": "2026-11-14T02:49:47.288Z"
     }
   ],
-  "updatedAt": "2026-11-13T10:43:08.423Z",
+  "updatedAt": "2026-11-14T02:49:47.288Z",
   "ledgerHead": null
 }
