@@ -4,6 +4,19 @@
 > `src/host/surface/tool-registration.ts`、`src/host/capability/capability.ts`
 > 与 `src/index.ts` 实抄；契约变更必须在这里留一行。
 
+## 0.0k v0.20 契约变更一句话清单
+
+| 变更 | 影响 | 兼容性 |
+| --- | --- | --- |
+| **热重载闭环（guard.govern.reload，能力 24→25）** | 工具 action 8→9（新增 `reload`，参数 `reason`/`force`）；路由 9→10（`POST /recency-guard/api/action/reload`，**不**做 409 核对——对象是插件自身而非分区状态，串行化交给 hmr `runExclusive`）。三态 `scheduled / refused / unavailable`；编排单一实现（`host/core/reload-self.ts`），工具与路由共用 | **纯新增**。判据是「运行实例 revision ⇄ 当前 dist revision」；refused 落账（史账），unavailable（headless 无 hmr）**零写入** |
+| **重载史账 `reload-history.json`** | 分区目录新文件：跨实例握手状态机（`in-flight → reloaded/failed`，`refused` 也落账）；FIFO 50（dropped 计数随结果透出）；损坏先备份 `.corrupt` 再重建；`finalizeInFlight` 幂等（最后一条非 in-flight ⇒ 零写入）。apply 时写旁路标记 `running-revision.json`（内存 + 分区文件双载体，TTL 24h） | **纯新增**（新文件；旧消费方不读它）。史账与崩溃决策同族的本机事实，分区隔离天然不串项目 |
+| **`writeFileAtomicSync` 断电幸存三件** | `'wx'` 独占创建 + 循环写满 + `fsyncSync` + 0600。**行为变更**：故障点从 `writeFileSync`（EISDIR）挪到 `openSync('wx')`（EEXIST）——抛出的仍是原始错误码（不变式不变）；跨进程临时名撞名从「互覆」变「后写者 EEXIST 失败」 | **兼容**（成功路径产物逐字节同；失败路径错误码变化已在 atomic-write.test 更新） |
+| **journal 坏行计数（degraded 白盒）** | `parseJournalLinesDetailed` / `readMergedJournalDetailed(Sync)` 返回 `{records, malformed}`；旧签名薄包装行为逐位不变。`PanelSnapshot.diagnostics.journalMalformed`（可选，`null`=旧宿主未报=未知 ≠ 完整）；面板诊断卡新增「事件日志完整性」行（`{n} 行读不出（已保留在盘上，轮转时自然愈合）`） | **纯追加**（坏行保留在盘上，只丢解释不丢证据；轮转时自然愈合） |
+| **seq 地板 `recentEventsFloor`** | `PanelSnapshot` 新增：被裁掉的事件数。与省略计数互补——计数说「少了多少」，地板说「从哪开始」。`0`=从头；`>0`=顶部被裁（不是「事件只有这么多」）。数据流卡 journal 环节显示地板数（旧宿主缺字段 ⇒ undefined ⇒ 显示原 detail 文案） | **纯追加**（`SnapshotInput.recentEventsFloor` 必填 ⇒ 测试夹具需补；快照 JSON 消费方旧值容忍） |
+| **错误码 + 补救词表** | 工具调用类错误升级：`[RG_UNKNOWN_ACTION] 未知操作：… 补救：…` / `[RG_MISSING_BUNDLE] … 补救：…`。code 供模型/脚本按枚举分支；remedy 指名下一步 | **文案变更**：既有按「未知操作」子串匹配的断言仍通过；新增按 code 前缀分支的调用方可用 |
+| **图谱功能域维度** | `GraphNode.domain`（shared 契约，仅能力节点有值）；`filterGraph` 新增 `hiddenDomains`（可选，缺省=不过滤）；图例新增第四开关「功能域」（DOMAIN_ORDER 固定序 + 首字徽标 + 计数取原始图）。**防御修复**：`onlyConnectedWith` 收到运行时 `undefined`（JS 调用方不受类型约束）按 null 归一，不再把 undefined 当中心点取闭包导致整图静默滤空 | **纯追加 + 防御修复**（`GraphFilter` 全部新字段可选，旧调用方零改动） |
+| **生命周期步骤 `reload-self`** | `LifecycleStepName` 新增；scheduled 与 refused 都留痕（v0.18 教训：执行动作必须留痕） | **纯追加**（步骤名是新枚举值；面板渲染原始名，无需映射表） |
+
 ## 0.0j v0.19 契约变更一句话清单
 
 | 变更 | 影响 | 兼容性 |
@@ -213,7 +226,7 @@ v0.4 起 `execute` 返回**规范 JSON 对象**（不再是字符串）：
 
 | 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `action` | string | 是 | enum：`status` / `history` / `recover` / `restore` / `reenable` / `backups` / `archive` / `archives`（来自 `TOOL_SURFACE.actions`） |
+| `action` | string | 是 | enum：`status` / `history` / `recover` / `restore` / `reenable` / `backups` / `archive` / `archives` / `reload`（来自 `TOOL_SURFACE.actions`） |
 | `bundle` | string | 否 | `reenable` 的目标插件名（包名） |
 | `limit` | number | 否 | `history` 返回的事件条数，默认 40 |
 | `reason` | string | 否 | `archive` 的归档原因（可选） |
@@ -233,6 +246,7 @@ v0.4 起 `execute` 返回**规范 JSON 对象**（不再是字符串）：
 | `backups` | — | 配置备份清单 |
 | `archive` | `reason?` | **v0.4 新增**：归档产物并重置（按最新事实重新自举）；**v0.12**：写动作先落审计行 |
 | `archives` | — | **v0.4 新增**：历史归档清单；**v0.6**：每份归档带 `summary`（crashSeq/autoDisabled/journalEvents，取自 manifest —— 举他对照的事实基线） |
+| `reload` | `reason?`、`force?` | **v0.20 新增**：请求宿主热重载本插件。判据「运行实例 revision ⇄ 当前 dist revision」；三态 `scheduled`（in-flight 已落盘）/ `refused`（产物过期→先 build；实例已最新→无需重载；史账不可写→无审计不重载）/ `unavailable`（无 hmr，零写入）。`force=true` 跳过前两类拒绝（测试/演示用）。**拒绝也落史账**（可复核的执行事实） |
 
 ### 1.1 v0.12 命令窗口显示契约（最容易被漏掉的一层）
 
@@ -280,13 +294,15 @@ v0.4 起 `execute` 返回**规范 JSON 对象**（不再是字符串）：
 | `/action/reenable` | POST | `{bundle, expectedRevision?}` → 重新启用；缺 bundle 400；**v0.12**：400 优先于 409 |
 | `/action/restore` | POST | **v0.11 新增**：恢复非嫌疑插件（面板按钮）；**v0.12**：`{expectedRevision?}` 过期 409 |
 | `/action/recover` | POST | 手动恢复；**v0.11**：非 POST 一律 405；**v0.12**：`{expectedRevision?}` 过期 409 |
+| `/action/reload` | POST | **v0.20 新增**：`{reason?, force?}` → 热重载本插件（三态 scheduled/refused/unavailable，见工具 `reload` 行）。**刻意不做 409 核对**——对象是插件自身而非分区状态，并发窗口由史账 FIFO + hmr `runExclusive` 串行化兜底；409 在这里只会误伤「刚 build 完就请求重载」的正常流程 |
 
 缺席即诚实：数据不可用时返回 `{available:false, reason}`，不返回空数组假装没问题。
 
 宿主侧接线签名（实抄自 [`routes.ts`](../../src/host/surface/routes.ts) 的 `RouteContext`）：
 `profileDir` / `workspace` / `profileName` / `projectKey` 四个事实字段，
 以及 `snapshot()` / `snapshotPartition(key)` / `graph()` / `isolation()` / `lifecycle()` /
-`archives()` / `archive(reason)` / `reenable(bundle)` / `restore()` / `recover()` 十个回调；
+`archives()` / `archive(reason)` / `reenable(bundle)` / `restore()` / `recover()` /
+`reload(force, reason)` 十一个回调；
 可选 `currentRevision?()`（缺席 ⇒ 跳过 409 核对）、`onRegister?(exposedName)`（注册成功回执）、
 `logError?(message)`（桥接宿主 logger，缺席回落 console）。
 

@@ -23,21 +23,27 @@ src/
 ├── host/                        # 只在宿主进程运行（可用 node:fs / 进程 / 路由 / IO）
 │   ├── core/                    #   基础原语：生命周期状态机、revision、分区键、自描述、同步原子写、路径安全投影
 │   │                            #     + 产物新鲜度（build-freshness，v0.19）
+│   │                            #     + 热重载闭环（reload-self + reload-history，v0.20：
+│   │                            #       三铁律取经 anic；史账=跨实例握手状态机）
 │   ├── data/                    #   持久化与归档：Store、archive、锁卫生（lock-hygiene）、
-│   │                            #     journal 文本层（journal-io）、schema 版本判据（schema-version）
+│   │                            #     journal 文本层（journal-io，v0.20：坏行计数 degraded 白盒）、
+│   │                            #     schema 版本判据（schema-version）
+│   ├── adapters/                #   外部格式适配器（v0.20 归位）：patch/ = YAML↔patch-row 三件套
+│   │                            #     （patch / patch-yaml / patch-scalar，自 host/profile/ 迁入——
+│   │                            #       它们就是外部格式适配器，adapter 层是语义归位）
 │   ├── guard/                   #   崩溃守护主线：决策、恢复、信号、异常终止、守护行安装
 │   │                            #   + 确定性冲突（conflict-*）、贪心隔离（quarantine-plan）、
 │   │                            #     决策组装（crash-decision）、启动编排（boot-orchestration）、
 │   │                            #     状态对账（state-reconcile）
-│   ├── profile/                 #   profile patch 读写与标量改写
 │   ├── observe/                 #   观测与数学模型：指标、生存分析、控制带、预防性预警、转移矩阵、共现
 │   ├── risk/                    #   风险与归因：新近性、贝叶斯并行读数、误伤校准
-│   ├── capability/              #   能力模型与图谱（产出方）
+│   ├── capability/              #   能力模型与图谱（产出方；v0.20：节点带 domain 域段）
 │   └── surface/                 #   对外面：工具注册/分派/渲染、路由、状态投影、面板快照、预防性投影
 ├── client/                      # 只在浏览器运行（禁止 node:*，禁止 import host）
 │   ├── panel/                   #   面板：容器、卡片、洞察、投影、可空视图、错误边界、自适应轮询
 │   │                            #     + 在途世代守卫（epoch-guard，v0.19）
 │   ├── graph/                   #   图谱：渲染、模型、分析、小地图、视口、交互/布局/调色
+│   │                            #     （v0.20：功能域第四过滤维度 hiddenDomains + 域图例）
 │   ├── toolview/                #   命令窗口终端卡（v0.19）：tool.call.toolview 席位注册
 │   │                            #     + 卡片渲染 + 零 React 依赖的抽取层
 │   ├── api/                     #   客户端取数的唯一出口
@@ -197,17 +203,17 @@ observability → control-band  → observability
 该测试还带反向自检（合成 A→B→A 必须被判出、单向链不得误判、类型回边不算值环），
 防止 DFS 写错后「永远 0 环」的假绿。
 
-### 5.3 关于 eval Q5 的结论
+### 5.3 关于 eval Q5 的结论（v0.20 已闭环）
 
-Q5 目前仍报 FAIL，两条依据逐一核对：
+Q5 两条 FAIL 依据在 v0.20 分别闭环（cycle-18 实测）：
 
-| Q5 的说法 | 实测 | 结论 |
+| Q5 的说法 | v0.20 处置 | 结论 |
 |---|---|---|
-| 「1 circular dependency: `host/profile/patch.ts`」 | `patch.ts → patch-yaml.ts → patch-scalar.ts` 无回边；`import-graph.test.ts` 证明**值图无环** | **误报**（按 basename 前缀匹配：`patch` 是 `patch-yaml` 的前缀） |
-| 「No adapter layer found for external service isolation」 | 本插件不调用任何外部服务（无网络/LLM/API），没有可隔离的外部依赖 | **不适用**（本项目只有一个运行时就地读写 profile 目录） |
+| 「1 circular dependency: `host/profile/patch.ts`」 | **实锤为评估器假阳性**：`patch.ts:143` 注释里的同形文本 `` `from './patch.ts'` `` 被 importGraph 正则当成 import 边构成**自环**（不是此前的「basename 前缀匹配」猜测——归因必须来自实测）。注释措辞改写后假阳性消失（复跑 0 环）；契约测试注释同步修正 | **已修复**（改注释不改判据；判据仍是 anic 上游的，注释同形文本教训已登记 tech-debt 待上游修复） |
+| 「No adapter layer found」 | patch 三件套归位 `src/host/adapters/patch/` —— 它们本来就是 YAML↔patch-row 的**外部格式适配器**，adapter 层是语义归位，不是迎合评估器 | **已修复**（真结构归位；引用面 6 文件同步更新，96/96 全绿） |
 
-按 R07（不条件通过）**没有把它改成 PASS**。正确做法是留下可复核的反证，
-而不是把判据调松 —— 这也是本节写下完整推理链的原因。
+按 R07（不条件通过）**没有把判据调松**。两条修复都是把真实结构做对，
+评估器自然转绿 —— 这也是本节保留完整推理链的原因。
 
 ## 6. 验证方式
 

@@ -40,5 +40,19 @@
     "restartReason": null,
     "error": null,
     "finalizedAt": "2026-11-07T08:07:25.938Z"
+  },
+  {
+    "at": "2026-11-14T02:27:35.165Z",
+    "actor": "anic_reload_self",
+    "reason": "cycle-18 完成，desktop 需要重载以消费 dsh-recency-guard 0.20.0 新 dist（8f1a1cf9d3bd4e44）；anick 自身 revision 未变但被守护插件的 dist 变化牵连，显式强制 reconcile profile",
+    "status": "reloaded",
+    "fromRevision": "a341cb3a45f291ae",
+    "toRevision": "a341cb3a45f291ae",
+    "staleAtRequest": false,
+    "warnings": [],
+    "pending": [],
+    "restartReason": null,
+    "error": null,
+    "finalizedAt": "2026-11-14T02:27:37.059Z"
   }
 ]
