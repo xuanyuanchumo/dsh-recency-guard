@@ -1,13 +1,13 @@
 # dsh-recency-guard
 
-**v0.19.0** · [GitHub](https://github.com/xuanyuanchumo/dsh-recency-guard) · [问题反馈](https://github.com/xuanyuanchumo/dsh-recency-guard/issues) · MIT
+**v0.20.0** · [GitHub](https://github.com/xuanyuanchumo/dsh-recency-guard) · [问题反馈](https://github.com/xuanyuanchumo/dsh-recency-guard/issues) · MIT · 收录于 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)（`category: security`）
 
 > DeepSeek Harness 的**插件崩溃恢复守护**：记录第三方 / 实验性插件的安装与更新时序并备份配置；
 > 崩溃后的**下一次启动之前**，把最近更新的嫌疑插件挡在门外；稳定启动后，再把非首要嫌疑放回来。
 >
-> 版本基线（2026-11-13，北京时间）：**0.19.0**。版本四锚点（`package.json` / 本 README /
+> 版本基线（2026-11-14，北京时间）：**0.20.0**。版本四锚点（`package.json` / 本 README /
 > `docs/agents/` / [`dsh-plugin.json`](dsh-plugin.json)）一致。
-> 测试分四层，当前 **95/95 全绿**（Core 46 / Host 10 / Client 29 / Contract 10）。
+> 测试分四层，当前 **96/96 全绿**（Core 47 / Host 10 / Client 29 / Contract 10）。
 
 ---
 
@@ -51,19 +51,23 @@ dsh plugin --profile <profile名> add dsh-recency-guard
 锁定版本：
 
 ```bash
-dsh plugin --profile <profile名> add dsh-recency-guard@0.19.0
+dsh plugin --profile <profile名> add dsh-recency-guard@0.20.0
 ```
 
-> 版本对应：本 README 描述 **0.19.0**；npm `latest` 已发布为 **0.19.0**
-> （2026-11-11，shasum `b667bd20b6ea82d294dbc28e4eab1290b07dd963`），可直接安装。
+> 版本对应：本 README 描述 **0.20.0**；npm `latest` 已发布为 **0.19.0**
+> （2026-11-13，shasum `ef564eb0b786150c24427a44f837b15f929480d4`，registry 实况），
+> 0.20.0 发布后以 registry 回读为准（shasum/日期这类「发布后才存在的事实」
+> 一律以 [registry](https://registry.npmjs.org/dsh-recency-guard/latest) 为源，
+> 不手抄——v0.19.0 曾因手抄本地 pack 的临时 shasum 造成 README 漂移，已修）。
 > 版本纪律见 [`docs/agents/conventions.md`](docs/agents/conventions.md) §6。
 
 ### 插件市场
 
 投稿材料已按 [awesome-dsh-plugin contributing.md](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md)
 备好（[`docs/market-submission.md`](docs/market-submission.md)）：一个条目文件、`category: security`。
-**当前状态：条目已收录并合并（PR #14245，merged 2026-11-11）；v0.19.0 描述更新已提交
-[PR #14917](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/14917)（级联回滚 / 影响面分析 / 执行操作记录）。**
+**当前状态：条目已收录并合并（PR #14245，merged 2026-11-11）；v0.18.1 描述更新已合并
+[PR #14917](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/14917)（merged 2026-11-13）。
+v0.20.0 新特性（热重载闭环 / fsync 原子写 / 域图例）的条目描述更新随 0.20.0 发布提交。**
 可在 dsh 的 **Plugins → Discover** 或 dsh-market 中搜索 `recency-guard` 安装。
 
 ### 手动 / 本地源码（开发）

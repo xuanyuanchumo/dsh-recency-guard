@@ -1,4 +1,4 @@
-# awesome-dsh-plugin 投稿材料（v0.19.0）
+# awesome-dsh-plugin 投稿材料（v0.20.0）
 
 > 依据 <https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md>
 > （2026-11-13 复核该文件当前内容）。

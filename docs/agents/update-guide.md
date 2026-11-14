@@ -83,7 +83,7 @@ dsh plugin --profile desktop add dsh-recency-guard
 dsh plugin --profile desktop update dsh-recency-guard
 
 # 锁定版本（推荐，避免 latest 落后/超前于文档）：
-dsh plugin --profile desktop add dsh-recency-guard@0.19.0
+dsh plugin --profile desktop add dsh-recency-guard@0.20.0
 ```
 
 ### 路径 B：本地直装（开发验证形态）
